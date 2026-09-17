@@ -296,8 +296,12 @@ let trajAge = 0;
 function predictShot(s: Snapshot): Vec3[] | null {
   if (!scene.showTrajectory) return null;
   if (s.robot.flywheel.rpm < 200 && brain.state.targetRpm <= 0) return null;
+  // EVERY OTHER FRAME, not every fourth. The aim moves while you drive, and a curve four
+  // frames stale lags the turret visibly -- it was still pointing where the robot used to be
+  // aiming. The integrator is the expensive part, so this is as cheap as it can be made
+  // without the curve reading as laggy; the live trail beside it is free.
   if (trajAge-- > 0 && trajCache) return trajCache;
-  trajAge = 4;
+  trajAge = 1;
   const mz = world.robot.muzzle();
   // THE SHOT THE AIM IS SOLVING FOR, not the one the wheel could take this instant.
   //
@@ -670,7 +674,7 @@ const DECK: Record<Mode, Action[]> = {
     { label: 'Fire', title: 'Latch. Spins up and feeds at the cycle time until pressed again.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
     { label: 'Auto-fill hopper', title: 'Keeps the hopper topped up from the floor so a test run does not stop for ammunition.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
     { label: 'Drop a POLLEN in the CELL', title: 'Places one POLLEN into your up CELL by hand. The quickest way to watch the HIVE tip: it takes 12.', run: () => dropBall() },
-    { label: 'Shot arc', title: 'Draw the trajectory the ball would fly if it were fired this instant, using the same integrator the shot itself uses.', run: () => (scene.showTrajectory = !scene.showTrajectory), on: () => scene.showTrajectory },
+    { label: 'Shot arc', title: 'Two curves. YELLOW is the prediction: what the solver says the shot the aim is lining up will do, drawn with the same integrator the shot table is built from. BLUE is the trail the last ball actually flew. When they lie on top of each other the model is right; where they part company is the thing worth chasing.', run: () => (scene.showTrajectory = !scene.showTrajectory), on: () => scene.showTrajectory },
     { label: 'Colliders', title: 'Show the convex shapes the solver actually collides with, instead of the CAD skin drawn over them.', run: () => (scene.showColliders = !scene.showColliders), on: () => scene.showColliders },
     { label: 'Joystick', title: 'On-screen sticks: left translates, right turns. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
     { label: 'Shot zone', title: 'Green where a perfectly aimed shot clears the land-probability gate, red where it does not, using the hood and rpm the table commands at that range and the CELL mouth as seen from that spot. A MODEL map (tools/shotzone.ts), not a record of what this robot has hit.', run: () => (scene.showShotZone = !scene.showShotZone), on: () => scene.showShotZone },

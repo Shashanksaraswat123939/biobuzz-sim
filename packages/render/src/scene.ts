@@ -168,6 +168,18 @@ export class Scene {
   private flywheelMesh!: THREE.Mesh;
   private spin = { wheel: 0, intake: 0, fly: 0 };
   private trajLine: THREE.Mesh;
+  /**
+   * WHERE THE BALL ACTUALLY WENT, sampled from the live flight rather than integrated.
+   *
+   * The yellow curve is a PREDICTION -- what the solver says this launch should do. A trail
+   * behind the ball in the air is the other half, and having both on screen at once is the
+   * only way to see them disagree. When they lie on top of each other the model is right;
+   * when they part company, the gap is the thing worth chasing (it is how the 14.5 cm the
+   * muzzle-inside-the-chassis was costing showed up).
+   */
+  private ballTrail: THREE.Mesh;
+  private trailPts: THREE.Vector3[] = [];
+  private trailBall = -1;
   /** The convex boxes the physics actually uses. Hidden unless you ask for them. */
   private colliderMeshes: THREE.Object3D[] = [];
   /** Stand-in geometry, shown only until the CAD arrives (or if it never does). */
@@ -247,6 +259,18 @@ export class Scene {
     );
     this.trajLine.renderOrder = 3;
     this.scene.add(this.trajLine);
+
+    // The flown path, in a cooler colour so it cannot be mistaken for the prediction.
+    this.ballTrail = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshStandardMaterial({
+        color: 0x5ad1ff, emissive: 0x2aa8e0, emissiveIntensity: 0.6,
+        roughness: 0.5, transparent: true, opacity: 0.95,
+      }),
+    );
+    this.ballTrail.renderOrder = 4;
+    this.ballTrail.visible = false;
+    this.scene.add(this.ballTrail);
 
     this.aimMarker = new THREE.Mesh(
       new THREE.RingGeometry(0.06, 0.09, 24),
@@ -1077,6 +1101,25 @@ export class Scene {
       this.aimMarker.visible = false;
     }
 
+    // ---- the live trail: follow whichever ball is in flight, and keep the last one drawn
+    // until the next shot, so a miss can be looked at after it has landed.
+    const flying = s.balls.find((b) => b.state === 'flight');
+    if (flying) {
+      if (flying.id !== this.trailBall) { this.trailBall = flying.id; this.trailPts = []; }
+      const p = new THREE.Vector3(flying.p[0], flying.p[1], flying.p[2]);
+      const last = this.trailPts[this.trailPts.length - 1];
+      if (!last || last.distanceTo(p) > 0.02) this.trailPts.push(p);
+    }
+    if (this.showTrajectory && this.trailPts.length > 2) {
+      this.ballTrail.geometry.dispose();
+      this.ballTrail.geometry = new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3(this.trailPts), Math.max(8, this.trailPts.length), 0.009, 8, false,
+      );
+      this.ballTrail.visible = true;
+    } else {
+      this.ballTrail.visible = false;
+    }
+
     if (this.showTrajectory && traj && traj.length > 1) {
       this.trajLine.geometry.dispose();
       // Thin the integrator's output before building the tube: it hands over hundreds of
@@ -1172,7 +1215,8 @@ export class Scene {
       if (!dragging || this.cameraMode !== 'orbit') return;
       const dx = e.clientX - lx;
       const dy = e.clientY - ly;
-      const panning = e.shiftKey || e.buttons === 2 || e.buttons === 4;
+      const panning = e.shiftKey || e.buttons === 2 || e.buttons === 4;
+
       if (panning) {
         // Shift-drag pans: slide the orbit target across the camera's own screen plane, so
         // it follows the mouse whichever way the camera happens to be facing.

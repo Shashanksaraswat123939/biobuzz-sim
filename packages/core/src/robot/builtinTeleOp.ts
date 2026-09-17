@@ -279,6 +279,10 @@ export interface TeleOpState {
   aimOutrun: number;
   /** The exit speed and elevation the motion lead solved for, before the hood clamp. */
   leadSpeed: number; leadElevDeg: number;
+  /** Radial velocity the lead worked from, m/s. Compare against the truth to see it lag. */
+  leadVRadial: number;
+  /** Inches the table lookup was moved to where the ball will actually leave from. */
+  rangeLeadIn: number;
   /** How far the motion lead moved the aim, degrees. */
   leadDeg: number;
   /** The bearing the lead ASKED for, before the turret's travel clamped it. */
@@ -298,7 +302,7 @@ export const newTeleOpState = (): TeleOpState => ({
   turretManualDeg: 0, flywheelOn: false,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
-  lastFeedT: -999, pulsing: false, vRadial: 0, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0,
+  lastFeedT: -999, pulsing: false, vRadial: 0, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0,
 });
 
 const edge = (now: boolean, was: boolean) => now && !was;
@@ -416,8 +420,33 @@ export class BuiltinTeleOp {
     // table's answer for R actually reaches R+8, so asking it for R-8 lands on the mouth --
     // one number, measured from a collected run, that corrects every range at once. This is
     // what a team adjusts between matches instead of regenerating the table.
+    const rawVx = s.localizer.vx * 0.0254;
+    const rawVy = s.localizer.vy * 0.0254;
+    const a = clamp(this.spec.sensors.localizer.velFilterAlpha ?? 1, 0.01, 1);
+    this.velFilt.x += a * (rawVx - this.velFilt.x);
+    this.velFilt.y += a * (rawVy - this.velFilt.y);
+    const velX = this.velFilt.x;
+    const velY = this.velFilt.y;
+
+    // LOOK THE TABLE UP AT THE RANGE THE BALL WILL LEAVE AT, not the one it is committed at.
+    //
+    // The feed takes about four tenths of a second from the gate opening to the ball clearing
+    // the nip, and the wheel is chasing a target that moves the whole time: a robot closing at
+    // 1 m/s covers 40 cm in that window, so the rpm the shot needs at RELEASE is not the rpm
+    // the table was asked for at commit. Measured at 0.7 of stick, the wheel arrived +26 rpm
+    // fast closing (shots 18-24 cm LONG) and 60-80 rpm slow receding and strafing (13-34 cm
+    // SHORT) -- the same wheel, the same gate, the error signed by the direction of travel.
+    //
+    // Predicting the range costs nothing and points the wheel where it needs to be. The
+    // velocity is the filtered one for the same reason the lead uses it: an unfiltered radial
+    // velocity would jitter the table lookup.
     const cal = this.spec.calibration ?? { rangeTrim_in: 0, turretTrim_deg: 0 };
-    const row = this.table.lookup(s.game.upCellRangeIn - cal.rangeTrim_in);
+    const bearingNow = (s.imu.yaw + s.game.upCellAzimuthDeg) * DEG;
+    const vrNow = velX * Math.cos(bearingNow) + velY * Math.sin(bearingNow);
+    const rangeLead = this.spec.flywheel.rangeLead_s ?? 0;
+    const rangeAtRelease = s.game.upCellRangeIn - (vrNow * rangeLead) / 0.0254;
+    st.rangeLeadIn = rangeAtRelease - s.game.upCellRangeIn;
+    const row = this.table.lookup(rangeAtRelease - cal.rangeTrim_in);
     const ticksPerDeg = this.spec.turret.motor.ticksPerDeg ?? 8;
     const hoodDeg = this.spec.hood.enabled
       ? this.spec.hood.angleRange_deg[0] + row.hoodPos * (this.spec.hood.angleRange_deg[1] - this.spec.hood.angleRange_deg[0])
@@ -446,13 +475,6 @@ export class BuiltinTeleOp {
     // acceleration (tenths of a second) and the noise is per loop. alpha = 0.25 at 60 Hz is
     // about 50 ms of lag for roughly a third of the noise, which is the trade a team makes on
     // a real puck.
-    const rawVx = s.localizer.vx * 0.0254;
-    const rawVy = s.localizer.vy * 0.0254;
-    const a = clamp(this.spec.sensors.localizer.velFilterAlpha ?? 1, 0.01, 1);
-    this.velFilt.x += a * (rawVx - this.velFilt.x);
-    this.velFilt.y += a * (rawVy - this.velFilt.y);
-    const velX = this.velFilt.x;
-    const velY = this.velFilt.y;
     const tau = this.spec.transfer.leadLatency_s ?? 0;
     let leadVx = velX;
     let leadVy = velY;
@@ -729,7 +751,13 @@ export class BuiltinTeleOp {
     //
     // 75 deg rather than 90: at 90 the mouth is exactly edge-on and its opening has no area
     // at all, so the last few degrees are shots that cannot geometrically enter.
-    const mouthOpen = s.game.upCellOpenDeg <= 75;
+    // HOW FAR OFF THE OPENING IS STILL A SHOT. The mouth is a slot, so what a ball has to fit
+    // through is the opening seen edge-on: 14 in of depth becomes 14*cos(off-axis), and at
+    // 62 deg that is 6.6 in for a 2.8 in ball. 75 was a geometric guess -- at 90 the aperture
+    // has no area at all, so anything under it "can" enter -- and it is far too generous.
+    // Swept, it costs shots at both ends: see fireOpenCap_deg in config/robot.json.
+    const openCap = this.spec.turret.fireOpenCap_deg ?? 75;
+    const mouthOpen = s.game.upCellOpenDeg <= openCap;
 
     // SPINNING FASTER THAN THE TURRET CAN FOLLOW.
     //
@@ -773,6 +801,9 @@ export class BuiltinTeleOp {
     st.aimOutrun = lead.outrun;
     st.leadSpeed = lead.speed;
     st.leadElevDeg = lead.elevationDeg;
+    // The radial velocity the LEAD actually worked from, after filtering and the
+    // release-time prediction. Not the same as the raw localizer reading.
+    st.leadVRadial = mv.vx * Math.cos(bearingField) + mv.vy * Math.sin(bearingField);
 
     // ACCELERATING OUT OF THE BAND BEFORE THE BALL LEAVES.
     //
@@ -805,7 +836,7 @@ export class BuiltinTeleOp {
 
     st.hold = !wheelOn ? ''
       : s.game.hiveTipping ? 'hive is tipping'
-      : !mouthOpen ? `mouth faces away, ${s.game.upCellOpenDeg.toFixed(0)} deg off its opening - DRIVE ROUND`
+      : !mouthOpen ? `${s.game.upCellOpenDeg.toFixed(0)} deg off the opening, cap ${openCap.toFixed(0)} - DRIVE ROUND`
       : !accelOk ? `accelerating out of the band: ${(st.accelBudget * 100).toFixed(0)}% of it before the ball leaves`
       : !yawOk ? `turning too fast to aim: ${Math.abs(s.localizer.omega).toFixed(0)} deg/s, cap ${yawCap.toFixed(0)}`
       : !leadOk ? `too much of this shot is the robot's own motion: ${Math.abs(st.leadDeg).toFixed(0)} deg of lead, cap ${leadCap.toFixed(0)} - SLOW DOWN`

@@ -48,9 +48,13 @@ export interface Shot {
   /** The lead the brain applied, how far past its stop the aim wanted, and the velocity error. */
   leadDeg: number; pastStop: number; velErr: number; speed: number;
   leadSpeed: number; leadElev: number; hoodNow: number; outrun: number; clampDeg: number;
+  /** Radial velocity the lead used, and the truth, m/s. Positive is closing. */
+  leadVr: number; trueVr: number;
 }
 
-export interface Result { shots: Shot[]; fired: number; landed: number; secs: number; cycle_s: number }
+export interface Result { shots: Shot[]; fired: number; landed: number; secs: number; cycle_s: number;
+  /** Loops spent on each hold reason. WHY IT IS NOT FIRING, which no other column can say. */
+  why: Record<string, number> }
 
 /**
  * THE NUMBER THAT MATTERS: of the shots the robot COULD have taken in the time it spent
@@ -152,10 +156,12 @@ export async function run(opts: {
   for (let f = 0; f < 30; f++) step(hold());
 
   // Per-shot state, sampled at the frame the ball leaves.
+  const why: Record<string, number> = {};
   const at: { rpmErr: number; hoodErr: number; turretErr: number; vr: number; range: number;
     omega: number; muzzleLat: number; aimErr: number; nth: number; inCell: number;
     leadDeg: number; pastStop: number; velErr: number; speed: number;
-    leadSpeed: number; leadElev: number; hoodNow: number; outrun: number; clampDeg: number }[] = [];
+    leadSpeed: number; leadElev: number; hoodNow: number; outrun: number; clampDeg: number;
+    leadVr: number; trueVr: number }[] = [];
   let seen = 0;
   const t0 = world.t;
   const tips0 = hive.tips;
@@ -163,6 +169,10 @@ export async function run(opts: {
     const g = hold();
     g.right_bumper = true;
     step(g);
+    // Collapse the numbers out of the reason so "12 deg of lead" and "19 deg" are one answer.
+    const h = brain.state.hold;
+    const key = !h ? 'clear to fire' : h.replace(/-?[\d.]+/g, 'N');
+    why[key] = (why[key] ?? 0) + 1;
     if (world.robot.shots > seen) {
       seen = world.robot.shots;
       const s = world.sensors();
@@ -204,6 +214,16 @@ export async function run(opts: {
         hoodNow: world.snapshot().robot.hood.angleDeg,
         outrun: brain.state.aimOutrun,
         clampDeg: brain.state.aimClampedDeg,
+        leadVr: brain.state.leadVRadial,
+        // The truth, from the body, resolved on the same bearing the lead used.
+        trueVr: (() => {
+          const v = world.robot.body.linvel();
+          const rp = world.robot.pos;
+          const dx = mouth[0] - rp[0];
+          const dz = mouth[2] - rp[2];
+          const dn = Math.hypot(dx, dz) || 1;
+          return (v.x * dx + v.z * dz) / dn;
+        })(),
       });
     }
     const r = world.robot.pos;
@@ -231,16 +251,18 @@ export async function run(opts: {
       nth: a?.nth ?? NaN, inCell: a?.inCell ?? NaN,
       leadDeg: a?.leadDeg ?? NaN, pastStop: a?.pastStop ?? NaN, velErr: a?.velErr ?? NaN, speed: a?.speed ?? NaN,
       leadSpeed: a?.leadSpeed ?? NaN, leadElev: a?.leadElev ?? NaN, hoodNow: a?.hoodNow ?? NaN, outrun: a?.outrun ?? NaN, clampDeg: a?.clampDeg ?? NaN,
+      leadVr: a?.leadVr ?? NaN, trueVr: a?.trueVr ?? NaN,
     }));
-  return { shots, fired, landed: shots.filter((s) => s.landed).length, secs, cycle_s: spec.transfer.cycleTime_s };
+  return { shots, fired, landed: shots.filter((s) => s.landed).length, secs, cycle_s: spec.transfer.cycleTime_s, why };
 }
 
 /** Pool several seeds of one case. */
 export async function pool(
   name: string, drive: [number, number], wobble: number, range_in: number, seeds: number,
   mutate?: (p: Params, r: RobotSpec) => void, bearing_deg = 0, spin = 0, noGate = false,
-): Promise<{ name: string; shots: Shot[]; secs: number; cycle_s: number }> {
+): Promise<{ name: string; shots: Shot[]; secs: number; cycle_s: number; why: Record<string, number> }> {
   const shots: Shot[] = [];
+  const why: Record<string, number> = {};
   let secs = 0;
   let cycle_s = 1;
   for (let i = 0; i < seeds; i++) {
@@ -248,12 +270,13 @@ export async function pool(
     shots.push(...r.shots);
     secs += r.secs;
     cycle_s = r.cycle_s;
+    for (const [k, v] of Object.entries(r.why)) why[k] = (why[k] ?? 0) + v;
   }
-  return { name, shots, secs, cycle_s };
+  return { name, shots, secs, cycle_s, why };
 }
 
-function report(rows: { name: string; shots: Shot[]; secs: number; cycle_s: number }[]): void {
-  console.log('  case              n   in%   wild  shots/s  landed/s     long cm        lat cm    |yaw|/s');
+function report(rows: { name: string; shots: Shot[]; secs: number; cycle_s: number; why: Record<string, number> }[]): void {
+  console.log('  case              n   in%   wild  shots/s  landed/s     long cm        lat cm   v_r lag');
   for (const r of rows) {
     const s = r.shots;
     if (!s.length) { console.log(`  ${r.name.padEnd(16)} ${String(0).padStart(3)}   (no shots)`); continue; }
@@ -269,8 +292,17 @@ function report(rows: { name: string; shots: Shot[]; secs: number; cycle_s: numb
       `${(s.length / Math.max(0.1, r.secs)).toFixed(2).padStart(7)}  ${(s.filter((x) => x.landed).length / Math.max(0.1, r.secs)).toFixed(2).padStart(8)}   ` +
       `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ` +
       `${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}   ` +
-      `${mean(s.map((x) => Math.abs(x.omega))).toFixed(0).padStart(6)}`,
+      `${mean(s.map((x) => x.leadVr - x.trueVr)).toFixed(3).padStart(7)}`,
     );
+  }
+  // WHY IT IS NOT FIRING. A case that reads "no shots" is not a case that failed -- it is a
+  // robot that refused, and which gate refused it is the whole story.
+  console.log('');
+  console.log('  why it held (top reason per case, % of loops)');
+  for (const r of rows) {
+    const total = Object.values(r.why).reduce((a, b) => a + b, 0) || 1;
+    const top = Object.entries(r.why).sort((a, b) => b[1] - a[1]).slice(0, 2);
+    console.log(`  ${r.name.padEnd(17)} ${top.map(([k, v]) => `${k} ${((100 * v) / total).toFixed(0)}%`).join('   |   ')}`);
   }
 }
 
@@ -298,11 +330,19 @@ export async function main(argv: string[] = []): Promise<void> {
     // ---- AT SPEED. The cases above are a robot pottering; these are one being driven.
     // 0.6 of stick is about 0.8 m/s and 0.9 is near the drivetrain's 1.22 m/s top speed,
     // which is what a match actually looks like.
-    ['FAST closing 0.7', [0, 0.7], 0, 82, 55, 0],
-    ['FAST receding 0.7', [0, -0.7], 0, 34, 55, 0],
-    ['FAST strafing 0.8', [0.8, 0], 0, 50, 30, 0],
-    ['FAST wobble 0.7', [0, 0], 0.7, 50, 30, 0],
-    ['FAST diagonal', [0.6, 0.6], 0, 60, 40, 0],
+    // STOOD WELL OFF THE NORMAL, because at 0.9 m/s a case needs room to run. Square on, the
+    // field gives about 42 in before the wall; these swing round in X where the whole width
+    // is available. Placed square, wobble and receding left the field inside a second and the
+    // harness reported "no shots" for a robot that was reading CLEAR TO FIRE the whole time --
+    // a limit of the rig, not of the robot, and it took the hold-reason column to tell them
+    // apart.
+    // 45 deg off the normal: inside the robot's own facing cap (60) so the shots are ones it
+    // will actually take, and far enough round in X to have room to run at 0.9 m/s.
+    ['FAST closing 0.7', [0, 0.7], 0, 84, 45, 0],
+    ['FAST receding 0.7', [0, -0.7], 0, 36, 45, 0],
+    ['FAST strafing 0.8', [0.8, 0], 0, 56, 45, 0],
+    ['FAST wobble 0.7', [0, 0], 0.7, 56, 45, 0],
+    ['FAST diagonal', [0.6, 0.6], 0, 62, 45, 0],
     // SPINNING ON THE SPOT: the case that drives the bearing through +-180 over and over and
     // makes the turret unwind. Nothing else in this list exercises the wrap.
     //
@@ -312,9 +352,14 @@ export async function main(argv: string[] = []): Promise<void> {
     // lifted, which is where the cap's own number comes from.
     ['spinning 0.25', [0, 0], 0, 50, 30, 0.25],
   ];
+  // --fast runs ONLY the high-speed cases. They cross the band in under two seconds, so each
+  // seed yields one or two balls and a five-seed run is an anecdote; this makes it cheap to
+  // put twenty or thirty seeds behind them instead of paying for the slow cases as well.
+  const fastOnly = argv.includes('--fast');
+  const picked = fastOnly ? cases.filter(([n]) => n.startsWith('FAST')) : cases;
   const rows = [];
   const noGate = argv.includes('--nogate');
-  for (const [name, drive, wobble, range, bear, spin] of cases) rows.push(await pool(name, drive, wobble, range, seeds, undefined, bear, spin, noGate));
+  for (const [name, drive, wobble, range, bear, spin] of picked) rows.push(await pool(name, drive, wobble, range, seeds, undefined, bear, spin, noGate));
   report(rows);
 
   const all = rows.flatMap((r) => r.shots);
@@ -334,6 +379,24 @@ export async function main(argv: string[] = []): Promise<void> {
   // --wild: the shots that were never going in, with everything recorded at the frame they
   // left. A mean that mixes these with the group describes neither, and the useful question
   // is what they SHARE.
+  if (argv.includes('--all')) {
+    console.log('EVERY SHOT: what the aim asked for against what the wheel and hood delivered.');
+    console.log('');
+    console.log('  case               long cm  lat cm   in   leadSpd  exitErr  rpmErr  hoodErr  lead  v_r    range');
+    for (const r of rows) {
+      for (const x of r.shots) {
+        // exitErr: the exit speed the lead ASKED for, against what k*omega*r actually gave.
+        const exitGot = 0.45 * 0.048 * (x.rpmErr + 0) * 0;  // placeholder, see rpmErr
+        void exitGot;
+        console.log(
+          `  ${r.name.padEnd(17)} ${cm(x.long_in).toFixed(0).padStart(6)}  ${cm(x.lat_in).toFixed(0).padStart(6)}  ` +
+          `${(x.landed ? 'Y' : 'n').padStart(3)}  ${x.leadSpeed.toFixed(2).padStart(7)}  ${'-'.padStart(7)}  ` +
+          `${x.rpmErr.toFixed(0).padStart(6)}  ${x.hoodErr.toFixed(2).padStart(7)}  ${x.leadDeg.toFixed(0).padStart(4)}  ${x.trueVr.toFixed(2).padStart(5)}  ${x.range_in.toFixed(0).padStart(5)}`);
+      }
+    }
+    console.log('');
+  }
+
   if (argv.includes('--wild')) {
     console.log('WILD SHOTS (more than 20 cm lateral or 30 cm downrange off the mouth centre)');
     console.log('');
@@ -439,6 +502,53 @@ export async function main(argv: string[] = []): Promise<void> {
       const lat = s.map((x) => cm(x.lat_in)).filter(Number.isFinite);
       const wild = s.filter((x) => Math.abs(x.lat_in) * 2.54 > 20 || Math.abs(x.long_in) * 2.54 > 30).length;
       console.log(`  ${f.toFixed(2).padStart(4)}  ${String(s.length).padStart(3)}  ` +
+        `${((100 * s.filter((x) => x.landed).length) / Math.max(1, s.length)).toFixed(0).padStart(4)}%  ${String(wild).padStart(5)}  ` +
+        `${(s.length / Math.max(0.1, secs)).toFixed(2).padStart(8)}   ` +
+        `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}`);
+    }
+    console.log('');
+  }
+
+  // --rangelead: how far ahead to look the table up, seconds.
+  if (argv.includes('--rangelead')) {
+    console.log('RANGE-LEAD SWEEP, seconds ahead of the commit.');
+    console.log('');
+    console.log('  lead   n   in%   wild   shots/s     long cm       lat cm   rpmErr');
+    for (const L of [0, 0.15, 0.3, 0.4, 0.55]) {
+      const rs = [];
+      for (const [name, drive, wobble, range, bear, spin] of picked) {
+        rs.push(await pool(name, drive, wobble, range, seeds, (_p, r) => { r.flywheel.rangeLead_s = L; }, bear, spin));
+      }
+      const s = rs.flatMap((r) => r.shots);
+      const secs = rs.reduce((a, r) => a + r.secs, 0);
+      const lng = s.map((x) => cm(x.long_in)).filter(Number.isFinite);
+      const lat = s.map((x) => cm(x.lat_in)).filter(Number.isFinite);
+      const wild = s.filter((x) => Math.abs(x.lat_in) * 2.54 > 20 || Math.abs(x.long_in) * 2.54 > 30).length;
+      console.log(`  ${L.toFixed(2).padStart(4)}  ${String(s.length).padStart(3)}  ` +
+        `${((100 * s.filter((x) => x.landed).length) / Math.max(1, s.length)).toFixed(0).padStart(4)}%  ${String(wild).padStart(5)}  ` +
+        `${(s.length / Math.max(0.1, secs)).toFixed(2).padStart(8)}   ` +
+        `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}  ` +
+        `${mean(s.map((x) => x.rpmErr)).toFixed(0).padStart(7)}`);
+    }
+    console.log('');
+  }
+
+  // --open: how far off the mouth's opening is still worth a shot.
+  if (argv.includes('--open')) {
+    console.log('FACING CAP SWEEP, degrees off the mouth normal.');
+    console.log('');
+    console.log('  cap    n   in%   wild   shots/s     long cm       lat cm');
+    for (const c of [30, 40, 50, 60, 75]) {
+      const rs = [];
+      for (const [name, drive, wobble, range, bear, spin] of picked) {
+        rs.push(await pool(name, drive, wobble, range, seeds, (_p, r) => { r.turret.fireOpenCap_deg = c; }, bear, spin));
+      }
+      const s = rs.flatMap((r) => r.shots);
+      const secs = rs.reduce((a, r) => a + r.secs, 0);
+      const lng = s.map((x) => cm(x.long_in)).filter(Number.isFinite);
+      const lat = s.map((x) => cm(x.lat_in)).filter(Number.isFinite);
+      const wild = s.filter((x) => Math.abs(x.lat_in) * 2.54 > 20 || Math.abs(x.long_in) * 2.54 > 30).length;
+      console.log(`  ${String(c).padStart(4)}  ${String(s.length).padStart(3)}  ` +
         `${((100 * s.filter((x) => x.landed).length) / Math.max(1, s.length)).toFixed(0).padStart(4)}%  ${String(wild).padStart(5)}  ` +
         `${(s.length / Math.max(0.1, secs)).toFixed(2).padStart(8)}   ` +
         `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}`);

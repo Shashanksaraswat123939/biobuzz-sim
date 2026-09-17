@@ -73,13 +73,17 @@ export interface RobotSpec {
     /** Hold fire above this chassis yaw rate: the setpoint outruns the axis. deg/s. */
     fireYawCap_dps?: number;
     /** Hold fire when the motion lead exceeds this: the shot is mostly chassis, not launch. */
-    fireLeadCap_deg?: number };
+    fireLeadCap_deg?: number;
+    /** Hold fire this far off the mouth's opening: the aperture closes with the cosine. */
+    fireOpenCap_deg?: number };
   hood: { enabled: boolean; servo: string; angleRange_deg: [number, number]; fixedAngle_deg: number; speed_dps: number;
     /** How close the hood must be to the angle the shot needs before firing, degrees. */
     tolDeg?: number };
   flywheel: { type: 'single' | 'dual'; motor: MotorSpec;
     /** Ticks per WHEEL revolution the brain reads. Defaults to the motor's own encoder. */
     encoderTicksPerRev?: number;
+    /** Seconds ahead to look the shot table up: the range the ball will LEAVE at. */
+    rangeLead_s?: number;
     I_fly_kgm2: number; r_fly_m: number; k: number; lossFactor: number; minRpmFrac: number; readySteps: number;
     /** Do not fire unless P(land) is at least this. Replaces tolRpm as the speed gate. */
     minLandProb?: number;

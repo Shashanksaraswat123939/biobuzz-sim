@@ -818,21 +818,27 @@ That is why `tools/collect.ts --moving` fired 1 shot in 40: the AutoDriver drive
 sweep, accelerating and braking the whole way, so it is over the budget continuously. It was
 never a test of shooting at a steady speed.
 
-`tools/movingfire.ts` holds the stick still instead:
+`tools/movingfire.ts` holds the stick still instead. Four seeds pooled, because the first run
+of this quoted a closing rate off a single landed ball:
 
-| case | shots/s | landed/s | rpm error at fire |
-|---|---|---|---|
-| stopped | 0.63 | 0.33 | 45 rpm |
-| steady STRAFING | 0.37 | **0.30** | 318 rpm |
-| steady CLOSING at 0.24 m/s | 0.17 | 0.17 | **486 rpm** |
+| case | seconds | shots/s | landed/s | landed | rpm error at fire |
+|---|---|---|---|---|---|
+| stopped | 120 | 0.42 | 0.26 +- 0.05 | 31 | 50 rpm |
+| steady CLOSING at 0.23 m/s | 24 | 0.46 | **0.46 +- 0.14** | 11 | 191 rpm |
+| steady STRAFING | 120 | 0.27 | 0.21 +- 0.04 | 25 | 318 rpm |
+| closing with the stick WOBBLING | 24 | 0.62 | **0.00** | 0 | 37 rpm |
 
-**Strafing lands at the stationary rate.** Shooting while crossing the hive's face already
-works, because lateral motion has almost no radial component and the target rpm barely moves.
-Closing is what hurts, and it hurts through the rpm error, exactly as the arithmetic predicts.
+**Steady motion shoots as well as standing still, in either direction.** Closing measures
+higher than stopped and strafing measures lower, and neither gap is more than about one and a
+half standard errors -- they are the same number. The prediction held: velocity is not the
+variable.
 
-So "shoot on the move" is not one capability. Moving across the shot line is available now;
-moving along it needs the acceleration budget widened -- a second flywheel motor (the motor
-count is at 8 of 8, so it costs a mechanism; the turret is the obvious one to hand to a servo),
-a flatter hood, or both, plus a gate that compares against the target at RELEASE instead of
-resetting every time the target shifts.
+The wobble case is the one that fails, and it fails in an informative way. It FIRES MORE than
+any other case, 0.62 shots a second, with the LOWEST rpm error at fire, 37 rpm -- and lands
+nothing at all. So the wheel really is on its target at release; the target is simply wrong by
+then. The lead is computed when the shot is commanded and the ball leaves after the feed
+pulse, so under acceleration it flies with a correction for a velocity the robot no longer has.
+That is a latency fault, not a torque one, and it has a cheap fix: lead on the velocity
+PREDICTED at release (v + a*latency), or refuse the shot while |radial acceleration| is over
+the budget in the table above.
 

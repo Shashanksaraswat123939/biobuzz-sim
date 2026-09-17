@@ -34,7 +34,7 @@ interface Run { name: string; fired: number; radialMps: number; radialAccel: num
  * @param drive  what the stick is held at: [strafe, forward]. Forward is toward the hive.
  * @param wobble stick amplitude of a 0.5 Hz oscillation, to spend the acceleration budget.
  */
-async function run(name: string, drive: [number, number], wobble: number, seconds: number): Promise<Run> {
+async function run(name: string, drive: [number, number], wobble: number, seconds: number, seed = 7): Promise<Run> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
@@ -44,7 +44,7 @@ async function run(name: string, drive: [number, number], wobble: number, second
   // the range any shot clears 90% from, so every case read zero and proved nothing.
   spec.flywheel.minLandProb = 0;
   const staging = Array.from({ length: 80 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
-  const world = new World({ params: p, robot: spec, staging, alliance: 'red', seed: 7 });
+  const world = new World({ params: p, robot: spec, staging, alliance: 'red', seed });
   for (const b of world.balls.balls) world.balls.park(b);
 
   const mouth = world.hives.red.upCellMouthWorld();
@@ -129,18 +129,37 @@ export async function main(argv: string[] = []): Promise<void> {
   console.log('');
   // Shots per second, not shots: a closing run crosses the usable field in a couple of
   // seconds and then has to stop, so raw counts compare a short run against a long one.
-  console.log('  case                     secs   shots/s   landed/s   mean closing   |d(closing)/dt|   rpm err');
+  console.log('  case                     secs   shots/s   landed/s        landed   mean closing   rpm err');
   const cases: [string, [number, number], number][] = [
     ['stopped', [0, 0], 0],
     ['steady closing, slow', [0, 0.18], 0],
     ['steady strafing', [0.6, 0], 0],
     ['closing, stick wobbling', [0, 0.18], 0.30],
   ];
+  // SEEDS, because a closing run crosses the usable field in a few seconds and a single one
+  // landed exactly one ball -- a rate quoted off one ball is not a rate.
+  const seeds = [7, 25, 43, 61];
   for (const [name, drive, wobble] of cases) {
-    const r = await run(name, drive, wobble, seconds);
+    let secs = 0;
+    let fired = 0;
+    let landed = 0;
+    const rpmErrs: number[] = [];
+    const radials: number[] = [];
+    for (const seed of seeds) {
+      const r = await run(name, drive, wobble, seconds, seed);
+      secs += r.secs;
+      fired += r.fired;
+      landed += r.landed;
+      if (r.fired) rpmErrs.push(r.rpmErr);
+      radials.push(r.radialMps);
+    }
+    const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+    const rate = landed / secs;
+    const se = Math.sqrt(Math.max(landed, 1)) / secs;   // Poisson on the count
     console.log(
-      `  ${r.name.padEnd(24)} ${r.secs.toFixed(1).padStart(5)}   ${(r.fired / r.secs).toFixed(2).padStart(7)}   ${(r.landed / r.secs).toFixed(2).padStart(8)}   ` +
-      `${r.radialMps.toFixed(2).padStart(9)} m/s   ${r.radialAccel.toFixed(2).padStart(12)} m/s^2   ${r.rpmErr.toFixed(0).padStart(4)} rpm`,
+      `  ${name.padEnd(24)} ${secs.toFixed(0).padStart(5)}   ${(fired / secs).toFixed(2).padStart(7)}   ` +
+      `${rate.toFixed(2).padStart(5)} +-${se.toFixed(2)}   ${String(landed).padStart(6)}   ` +
+      `${mean(radials).toFixed(2).padStart(9)} m/s   ${mean(rpmErrs).toFixed(0).padStart(4)} rpm`,
     );
   }
   console.log('');

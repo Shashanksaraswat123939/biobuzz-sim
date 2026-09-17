@@ -1,0 +1,199 @@
+/**
+ * Live sliders over every constant the simulator actually runs on.
+ *
+ * The rule this panel exists to enforce: nothing physical is written in code. Each entry
+ * reads and writes a field in `config/params.json` or `config/robot.json`, and the world is
+ * rebuilt from those objects, so what you drag here is the same number the physics uses.
+ * The hint says where the value came from — measured, from the CAD, or a guess — because a
+ * guess with a big effect is the one worth going and measuring.
+ */
+import type { Params, RobotSpec } from '@core/types.js';
+
+export interface Tunable {
+  group: string;
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+  step: number;
+  get: (p: Params, r: RobotSpec) => number;
+  set: (p: Params, r: RobotSpec, v: number) => void;
+  /** True if changing this needs the world rebuilt rather than just written through. */
+  rebuild?: boolean;
+  fmt?: (v: number) => string;
+}
+
+const IN = 39.3700787;
+const f1 = (v: number) => v.toFixed(1);
+const f2 = (v: number) => v.toFixed(2);
+const f3 = (v: number) => v.toFixed(3);
+const f0 = (v: number) => v.toFixed(0);
+
+export const TUNABLES: Tunable[] = [
+  // ---------------------------------------------------------------- shooter
+  { group: 'Shooter', label: 'Flywheel transfer k', fmt: f3,
+    hint: 'Fraction of rim speed the ball leaves with. GUESS. Exit speed is k·ω·r, so this scales every shot — a 5% error here is a 5% range error at every distance.',
+    min: 0.20, max: 0.90, step: 0.005,
+    get: (_p, r) => r.flywheel.k, set: (_p, r, v) => (r.flywheel.k = v) },
+  { group: 'Shooter', label: 'Flywheel inertia (kg·m²)', fmt: (v) => v.toExponential(2),
+    hint: 'Sets how far the wheel dips when a ball goes through, and so how fast you can cycle.',
+    min: 0.0005, max: 0.01, step: 0.0001,
+    get: (_p, r) => r.flywheel.I_fly_kgm2, set: (_p, r, v) => (r.flywheel.I_fly_kgm2 = v) },
+  { group: 'Shooter', label: 'Flywheel radius (in)', fmt: f2,
+    hint: 'Rim radius. Exit speed is linear in it.',
+    min: 1.0, max: 3.0, step: 0.05,
+    get: (_p, r) => r.flywheel.r_fly_m * IN, set: (_p, r, v) => (r.flywheel.r_fly_m = v / IN) },
+  { group: 'Shooter', label: 'Energy loss per shot', fmt: f2,
+    hint: 'How much more than the ball’s kinetic energy the wheel gives up — slip and squash.',
+    min: 1.0, max: 2.5, step: 0.05,
+    get: (_p, r) => r.flywheel.lossFactor, set: (_p, r, v) => (r.flywheel.lossFactor = v) },
+  { group: 'Shooter', label: 'Speed tolerance (rpm)', fmt: f0,
+    hint: 'How close to target the wheel must be before the gate opens. Tighter means fewer bad shots and a slower cycle.',
+    min: 20, max: 400, step: 10,
+    get: (_p, r) => r.flywheel.tolRpm, set: (_p, r, v) => (r.flywheel.tolRpm = v) },
+  { group: 'Shooter', label: 'Launch scatter, elevation (deg)', fmt: f2,
+    hint: 'Shot-to-shot elevation noise. Usually the single largest cause of a wide group.',
+    min: 0, max: 4, step: 0.05,
+    get: (_p, r) => r.flywheel.scatter.angle_deg, set: (_p, r, v) => (r.flywheel.scatter.angle_deg = v) },
+  { group: 'Shooter', label: 'Launch scatter, yaw (deg)', fmt: f2,
+    hint: 'Shot-to-shot left/right noise. Shows up as lateral spread in the Analysis tab.',
+    min: 0, max: 4, step: 0.05,
+    get: (_p, r) => r.flywheel.scatter.yaw_deg, set: (_p, r, v) => (r.flywheel.scatter.yaw_deg = v) },
+  { group: 'Shooter', label: 'Launch scatter, speed (%)', fmt: f2,
+    hint: 'Shot-to-shot speed noise from how the ball is gripped.',
+    min: 0, max: 5, step: 0.05,
+    get: (_p, r) => r.flywheel.scatter.speedFrac * 100, set: (_p, r, v) => (r.flywheel.scatter.speedFrac = v / 100) },
+
+  // ---------------------------------------------------------------- turret
+  { group: 'Turret and hood', label: 'Turret max speed (deg/s)', fmt: f0,
+    hint: 'How fast the axis can slew. Too slow and shots leave before the aim has arrived.',
+    min: 30, max: 720, step: 10,
+    get: (_p, r) => r.turret.speed_dps, set: (_p, r, v) => (r.turret.speed_dps = v) },
+  { group: 'Turret and hood', label: 'Turret acceleration (deg/s²)', fmt: f0,
+    hint: 'Sets how much of a swing is spent accelerating. The profile is trapezoidal.',
+    min: 100, max: 4000, step: 50,
+    get: (_p, r) => r.turret.accel_dps2, set: (_p, r, v) => (r.turret.accel_dps2 = v) },
+  { group: 'Turret and hood', label: 'Muzzle height (in)', fmt: f1, rebuild: true,
+    hint: 'Where the ball leaves the robot. Changes the whole shot table.',
+    min: 6, max: 26, step: 0.25,
+    get: (_p, r) => r.turret.muzzleHeight_m * IN, set: (_p, r, v) => (r.turret.muzzleHeight_m = v / IN) },
+  { group: 'Turret and hood', label: 'Hood minimum (deg)', fmt: f0, rebuild: true,
+    hint: 'Flattest shot the hood can make.',
+    min: 10, max: 60, step: 1,
+    get: (_p, r) => r.hood.angleRange_deg[0], set: (_p, r, v) => (r.hood.angleRange_deg[0] = v) },
+  { group: 'Turret and hood', label: 'Hood maximum (deg)', fmt: f0, rebuild: true,
+    hint: 'Steepest shot. Extending this past 60° is what made long shots land instead of rebounding.',
+    min: 40, max: 88, step: 1,
+    get: (_p, r) => r.hood.angleRange_deg[1], set: (_p, r, v) => (r.hood.angleRange_deg[1] = v) },
+
+  // ---------------------------------------------------------------- ball and air
+  { group: 'Ball and air', label: 'Drag coefficient Cd', fmt: f2,
+    hint: 'GUESS. 0.45 is pickleball-derived and uncited; a 26-hole hollow ball is not a smooth sphere.',
+    min: 0.20, max: 0.90, step: 0.01,
+    get: (p) => p.ball.Cd, set: (p, _r, v) => (p.ball.Cd = v) },
+  { group: 'Ball and air', label: 'Magnus slope Cl', fmt: f2,
+    hint: 'GUESS. Backspin lift per unit spin ratio. Lifts long shots and shortens flat ones.',
+    min: 0, max: 0.50, step: 0.01,
+    get: (p) => p.ball.clSlope, set: (p, _r, v) => (p.ball.clSlope = v) },
+  { group: 'Ball and air', label: 'Air density (kg/m³)', fmt: f3,
+    hint: 'Venue altitude and temperature. 1.225 is sea level at 15 °C.',
+    min: 0.95, max: 1.30, step: 0.005,
+    get: (p) => p.env.rho, set: (p, _r, v) => (p.env.rho = v) },
+  { group: 'Ball and air', label: 'POLLEN mass (g)', fmt: f1, rebuild: true,
+    hint: 'Heavier balls fly flatter and carry less. Measure a real one.',
+    min: 15, max: 60, step: 0.5,
+    get: (p) => p.ball.pollen.m_kg * 1000, set: (p, _r, v) => (p.ball.pollen.m_kg = v / 1000) },
+  { group: 'Ball and air', label: 'Restitution on polycarbonate', fmt: f2,
+    hint: 'GUESS. How hard a ball bounces inside the CELL. High values throw good shots back out.',
+    min: 0.10, max: 0.90, step: 0.01,
+    get: (p) => p.ball.e_poly, set: (p, _r, v) => (p.ball.e_poly = v) },
+
+  // ---------------------------------------------------------------- hive
+  { group: 'Hive', label: 'Rocker mass (kg)', fmt: f2, rebuild: true,
+    hint: 'CAD estimate 2.38, plausible 1.5–3.5. The biggest lever on how many balls tip it.',
+    min: 1.0, max: 4.0, step: 0.05,
+    get: (p) => p.hive.massKg, set: (p, _r, v) => (p.hive.massKg = v) },
+  { group: 'Hive', label: 'CG height above pivot (in)', fmt: f2, rebuild: true,
+    hint: 'CAD 2.11 in. With the mass this sets the restoring torque holding the rocker down.',
+    min: 0.5, max: 5, step: 0.05,
+    get: (p) => p.hive.cgOffset_m[1] * IN, set: (p, _r, v) => (p.hive.cgOffset_m[1] = v / IN) },
+  { group: 'Hive', label: 'Pivot friction (N·m)', fmt: f3, rebuild: true,
+    hint: 'Unknown. Dry friction at the axle; delays the tip and adds hysteresis.',
+    min: 0, max: 0.5, step: 0.005,
+    get: (p) => p.hive.frictionTorque_Nm, set: (p, _r, v) => (p.hive.frictionTorque_Nm = v) },
+  { group: 'Hive', label: 'Damper (N·m·s)', fmt: f2, rebuild: true,
+    hint: 'Blum 970A, no published curve. Slows the slam at each end stop.',
+    min: 0, max: 8, step: 0.1,
+    get: (p) => p.hive.damperC_Nms, set: (p, _r, v) => (p.hive.damperC_Nms = v) },
+
+  // ---------------------------------------------------------------- chassis
+  { group: 'Chassis', label: 'Robot mass (kg)', fmt: f1, rebuild: true,
+    hint: 'Inspection limit is 42 lb / 19.05 kg. Heavier accelerates slower and pushes harder.',
+    min: 8, max: 19, step: 0.25,
+    get: (_p, r) => r.chassis.mass_kg, set: (_p, r, v) => (r.chassis.mass_kg = v) },
+  { group: 'Chassis', label: 'Tile friction µ', fmt: f2,
+    hint: 'Rubber wheel on foam tile. Sets how hard the robot can accelerate before it slips.',
+    min: 0.30, max: 1.40, step: 0.01,
+    get: (p) => p.env.tileMu, set: (p, _r, v) => (p.env.tileMu = v) },
+  { group: 'Chassis', label: 'Drivetrain efficiency', fmt: f2,
+    hint: 'Gearbox and chain losses between the motor and the wheel.',
+    min: 0.50, max: 1.00, step: 0.01,
+    get: (_p, r) => r.drivetrain.eta, set: (_p, r, v) => (r.drivetrain.eta = v) },
+  { group: 'Chassis', label: 'Battery internal R (Ω)', fmt: f3,
+    hint: 'Sets the voltage sag under load, and so the top speed late in a match.',
+    min: 0.01, max: 0.30, step: 0.005,
+    get: (p) => p.battery.Rint_ohm, set: (p, _r, v) => (p.battery.Rint_ohm = v) },
+
+  // ---------------------------------------------------------------- cycle
+  { group: 'Cycle', label: 'Transfer cycle time (s)', fmt: f2,
+    hint: 'Minimum gap between two shots. The floor on how fast you can empty a hopper.',
+    min: 0.2, max: 3.0, step: 0.05,
+    get: (_p, r) => r.transfer.cycleTime_s, set: (_p, r, v) => (r.transfer.cycleTime_s = v) },
+  { group: 'Cycle', label: 'Hopper capacity', fmt: f0, rebuild: true,
+    hint: 'How many game elements the robot can hold. Rules cap this; check the manual.',
+    min: 1, max: 12, step: 1,
+    get: (_p, r) => r.hopper.capacity, set: (_p, r, v) => (r.hopper.capacity = Math.round(v)) },
+];
+
+/**
+ * Build the sliders, grouped. `onChange` fires on every drag with whether that knob needs a
+ * rebuild, so the caller can write cheap values straight through and defer the expensive ones.
+ */
+export function buildTunePanel(
+  host: HTMLElement,
+  params: Params,
+  robot: RobotSpec,
+  onChange: (t: Tunable) => void,
+): void {
+  host.innerHTML = '';
+  let group = '';
+  for (const t of TUNABLES) {
+    if (t.group !== group) {
+      group = t.group;
+      const h = document.createElement('h4');
+      h.textContent = group;
+      host.appendChild(h);
+    }
+    const fmt = t.fmt ?? f3;
+    const wrap = document.createElement('div');
+    wrap.className = 'tune';
+    const value = t.get(params, robot);
+    wrap.innerHTML = `
+      <label><span>${t.label}${t.rebuild ? ' *' : ''}</span><b>${fmt(value)}</b></label>
+      <input type="range" min="${t.min}" max="${t.max}" step="${t.step}" value="${value}" />
+      <small>${t.hint}</small>`;
+    const input = wrap.querySelector('input')!;
+    const out = wrap.querySelector('b')!;
+    input.oninput = () => {
+      const v = Number(input.value);
+      t.set(params, robot, v);
+      out.textContent = fmt(v);
+      onChange(t);
+    };
+    host.appendChild(wrap);
+  }
+  const note = document.createElement('p');
+  note.className = 'cap';
+  note.innerHTML = '* takes effect on <b>Apply &amp; restart</b>. Everything else is live.';
+  host.appendChild(note);
+}

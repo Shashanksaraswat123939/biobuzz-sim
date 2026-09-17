@@ -1,0 +1,68 @@
+{
+  "_about": "The world. SI units (m, kg, s, rad). Every physical key has a _source sibling: measured | cited | derived | guess.",
+
+  "sim": {
+    "dt": 0.0041667,
+    "substepsPerFrame": 4,
+    "solverIterations": 16,
+    "solverIterations_source": "measured with 56 balls + 2 rockers + robot: peak rocker drift 0.102 dps at 4 iterations, 0.053 at 8, 0.004 at 16, 0.003 at 24, costing 1.05/1.57/2.59/4.22 ms per frame. 16 buys a still rocker with ~380 fps of headroom.",
+    "ccdOnBalls": true,
+    "seed": 1,
+    "lockstep": false
+  },
+
+  "env": {
+    "rho": 1.15,              "rho_source": "guess (Dubai hall, ~25C, sea level)",
+    "g": 9.81,                "g_source": "fixed",
+    "tileSize_m": 0.5969,     "tileSize_source": "cad (23.5 in)",
+    "tileThick_m": 0.01496,   "tileThick_source": "cad (0.589 in)",
+    "fieldInside_m": 3.59029, "fieldInside_source": "cad (141.35 in)",
+    "wallGlassTop_m": 0.27851,"wallGlassTop_source": "cad (10.965 in)",
+    "railTop_m": 0.295656,    "railTop_source": "cad (11.64 in)",
+    "tileMu": 0.85,           "tileMu_source": "guess (rubber on foam, typical 0.8-0.9)"
+  },
+
+  "ball": {
+    "pollen": { "d_m": 0.07112, "m_kg": 0.0249, "dVar": 0.0015, "mVar": 0.002,
+                "_source": "andymark am-5851 spec tab (2.80 in / 0.055 lb); variances guessed" },
+    "nectar": { "d_m": 0.091948, "m_kg": 0.0413, "dVar": 0.002, "mVar": 0.003,
+                "_source": "andymark am-5852 spec tab (3.62 in / 0.091 lb); variances guessed" },
+    "Cd": 0.45,        "Cd_source": "guess (pickleball-derived, uncited) - CALIBRATE",
+    "clSlope": 0.20,   "clSlope_source": "guess - CALIBRATE",
+    "clSMax": 1.0,     "clSMax_source": "guess",
+    "spinDecay": 0.6,  "spinDecay_source": "guess",
+    "e_foam": 0.45,    "e_foam_source": "guess - CALIBRATE",
+    "e_poly": 0.45,    "e_poly_source": "guess - CALIBRATE. The single most consequential uncalibrated number for land rate: a hollow 26-hole ball hitting a thin polycarbonate skin loses far more than a solid ball would, and both flex. At the plan's 0.70 every shot that entered the CELL rebounded straight back out. Measure it with a 1 m drop onto a goal skin filmed at 60 fps.",
+    "e_ball": 0.80,    "e_ball_source": "guess",
+    "rollMu": 0.02,    "rollMu_source": "guess - CALIBRATE",
+    "mu": 0.5,         "mu_source": "guess"
+  },
+
+  "hive": {
+    "massKg": 2.38,               "massKg_source": "cad volume x guessed densities (range 1.5-3.5) - SWEEP",
+    "cgOffset_m": [0.0, 0.0535893, 0.0001838],
+    "cgOffset_source": "cad centroid, expressed in the ROCKER BODY frame (theta=0, the over-centre point). The CAD state (theta=-30.04) puts it 1.83 in above and 1.05 in toward the down-CELL; rotated to theta=0 that is 2.11 in straight up, +0.20 deg of residual asymmetry. Densities guessed - SWEEP",
+    "Ipivot_kgm2": 0.3568,        "Ipivot_source": "cad parallel-axis approx - SWEEP",
+    "pivotY_m": 1.11633,          "pivotY_source": "cad (43.95 in)",
+    "redX_m": -0.323596,          "redX_source": "cad (-12.74 in)",
+    "blueX_m": 0.324104,          "blueX_source": "cad (+12.76 in)",
+    "restAngles_deg": [-30, 30],  "restAngles_source": "guess from damper contact geometry - CALIBRATE",
+    "frictionTorque_Nm": 0.05,    "frictionTorque_source": "guess - SWEEP",
+    "damperC_Nms": 2.0,           "damperC_source": "guess (Blum publishes no curve) - SWEEP",
+    "damperEngage_deg": 6,        "damperEngage_source": "guess",
+    "limitRestitution": 0.05,     "limitRestitution_source": "guess",
+    "ballsToTipOverride": null,   "ballsToTipOverride_source": "null = let the physics decide"
+  },
+
+  "battery": {
+    "capacity_Ah": 3.0,  "capacity_source": "cited (12V NiMH 3000 mAh)",
+    "Rint_ohm": 0.08,    "Rint_source": "guess - CALIBRATE",
+    "VocBySoC": [[1.0, 13.0], [0.8, 12.6], [0.5, 12.2], [0.2, 11.6], [0.0, 10.8]],
+    "VocBySoC_source": "guess (typical NiMH curve) - CALIBRATE"
+  },
+
+  "match": {
+    "auto_s": 30, "transition_s": 8, "teleop_s": 120, "flowerUnlock_s": 60,
+    "_source": "competition manual section 10"
+  }
+}

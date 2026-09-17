@@ -1,0 +1,222 @@
+/*
+ * Flat, neutral, no glow.
+ *
+ * One accent colour (orange) and it means exactly one thing: "this control is currently
+ * on". Everything else is grey, and the only other colours on the page are the two
+ * alliance colours, which are not decoration. There are no gradients, no blur, no
+ * translucency over the 3D view, and no element that appears or moves on its own.
+ */
+
+:root {
+  --bar: #23272e;
+  --panel: #2b313a;
+  --panel2: #333a45;
+  --line: #3d4653;
+  --fg: #e6e9ed;
+  --dim: #94a0b0;
+  --accent: #f5821f;
+  --go: #4a9e5c;
+  --red: #d0342c;
+  --blue: #3b7ddd;
+  --warn: #d99a2b;
+  --ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  /* Numbers read as text, not as code: the UI face with fixed-width digits so columns
+     still line up and a changing value does not make the row twitch. */
+  --num: var(--ui);
+  --bar-h: 44px;
+  --act-h: 46px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; height: 100%; background: var(--bar); color: var(--fg);
+  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow: hidden;
+}
+
+#app { position: fixed; inset: 0; }
+#view {
+  position: absolute; left: 0; right: 0; top: var(--bar-h); bottom: var(--act-h);
+  width: 100%; height: 100%; display: block; touch-action: none;
+}
+.mono { font-family: var(--num); font-variant-numeric: tabular-nums; font-size: 11.5px; }
+.grow { flex: 1; }
+
+/* ---------------------------------------------------------------- top bar */
+
+#topbar {
+  position: absolute; top: 0; left: 0; right: 0; height: var(--bar-h);
+  display: flex; align-items: center; gap: 18px; padding: 0 14px;
+  background: var(--bar); border-bottom: 1px solid #000;
+}
+.brand { font-weight: 700; letter-spacing: .06em; font-size: 14px; white-space: nowrap; }
+.brand small { display: block; font-weight: 400; font-size: 9.5px; color: var(--dim); letter-spacing: .1em; }
+
+.seg { display: flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.seg button {
+  padding: 5px 13px; background: #2b313a; color: var(--dim);
+  border: 0; border-right: 1px solid var(--line); font: inherit; font-size: 12px; cursor: pointer;
+}
+.seg button:last-child { border-right: 0; }
+.seg button:hover { color: var(--fg); }
+.seg button.on { background: var(--accent); color: #1b1f25; font-weight: 600; }
+
+.clock { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.clock span { font-size: 10px; letter-spacing: .12em; color: var(--dim); }
+.clock strong { font-size: 18px; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.scores { display: flex; gap: 14px; }
+.scores .s { display: flex; align-items: baseline; gap: 6px; }
+.scores i { font-style: normal; font-size: 10px; letter-spacing: .1em; color: var(--dim); }
+.scores b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.scores .red b { color: var(--red); }
+.scores .blue b { color: var(--blue); }
+
+.field { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim); white-space: nowrap; }
+select {
+  background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 11.5px;
+}
+
+/* ---------------------------------------------------------------- status strip */
+
+#status {
+  position: absolute; top: calc(var(--bar-h) + 10px); left: 10px;
+  display: flex; flex-direction: column; gap: 1px;
+  background: rgba(35, 39, 46, .92); border: 1px solid var(--line); border-radius: 5px;
+  padding: 8px 10px; min-width: 150px;
+}
+.stat { display: flex; justify-content: space-between; gap: 14px; font-size: 11.5px; }
+.stat label { color: var(--dim); }
+.stat b { font-family: var(--num); font-weight: 600; font-variant-numeric: tabular-nums; font-size: 12px; }
+.stat b.on { color: var(--go); }
+.stat b.off { color: var(--warn); }
+
+/* ---------------------------------------------------------------- side panel */
+
+#panel {
+  position: absolute; top: var(--bar-h); right: 0; bottom: var(--act-h);
+  width: var(--panel-w, 380px); min-width: 300px; max-width: 70vw;
+  display: flex; flex-direction: column;
+  background: var(--panel); border-left: 1px solid #000;
+}
+/* Drag the panel wider. A fixed width clipped the longer rows on a small window, and
+   "the numbers are cut off" is not something a user should have to work around. */
+#grip {
+  position: absolute; top: var(--bar-h); bottom: var(--act-h);
+  right: var(--panel-w, 380px); width: 7px; margin-right: -3px;
+  cursor: col-resize; z-index: 5;
+}
+#grip:hover, #grip.dragging { background: var(--accent); opacity: .55; }
+.tabs { display: flex; flex: none; background: var(--bar); }
+.tabs button {
+  flex: 1; padding: 9px 2px; background: none; border: 0; border-bottom: 2px solid transparent;
+  color: var(--dim); font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.tabs button:hover { color: var(--fg); }
+.tabs button.on { color: var(--fg); border-bottom-color: var(--accent); background: var(--panel); }
+
+#panel section { display: none; padding: 12px 14px 20px; overflow-y: auto; }
+#panel section.on { display: block; }
+
+h4 {
+  margin: 16px 0 6px; font-size: 10px; letter-spacing: .13em; color: var(--dim);
+  text-transform: uppercase; font-weight: 600; border-bottom: 1px solid var(--line); padding-bottom: 4px;
+}
+#panel section > h4:first-child { margin-top: 0; }
+
+.rows { display: grid; grid-template-columns: 1fr auto; gap: 0 12px; align-items: baseline; }
+.rows > span { color: var(--dim); padding: 3px 0; font-size: 12px; }
+.rows > b {
+  padding: 3px 0; font-weight: 600; font-family: var(--num); font-size: 12.5px;
+  font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
+}
+.rows > b.good { color: var(--go); }
+.rows > b.bad { color: var(--warn); }
+.rows > b.err { color: var(--red); }
+
+.cap { color: var(--dim); font-size: 11.5px; line-height: 1.5; margin: 8px 0; }
+code { background: #1e232a; padding: 1px 4px; border-radius: 3px; font-family: var(--mono); font-size: 10.5px; }
+
+/* ---------------------------------------------------------------- meters and bars */
+
+.meter { position: relative; height: 16px; border: 1px solid var(--line); border-radius: 3px; background: #1e232a; overflow: hidden; }
+.meter > span { display: block; height: 100%; width: 0; background: var(--blue); transition: width .1s linear; }
+.meter > span.near { background: var(--warn); }
+.meter > span.over { background: var(--go); }
+.meter .mark { position: absolute; top: 0; bottom: 0; left: 66.6%; width: 1px; background: #8e99a8; }
+
+.budget { display: flex; flex-direction: column; gap: 2px; }
+.brow { display: grid; grid-template-columns: 1fr 76px 52px; gap: 8px; align-items: center; font-size: 11.5px; }
+.brow .n { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+.brow .t { height: 8px; background: #1e232a; border-radius: 2px; overflow: hidden; }
+.brow .t i { display: block; height: 100%; background: var(--accent); }
+.brow .v { text-align: right; font-family: var(--num); font-variant-numeric: tabular-nums; font-size: 11.5px; font-weight: 600; color: var(--fg); }
+.brow.lead .n { color: var(--fg); font-weight: 600; }
+
+.verdict { background: #242a32; border-left: 3px solid var(--accent); padding: 8px 10px; font-size: 12px; line-height: 1.5; margin: 8px 0 0; }
+.faults { margin: 6px 0 0; padding-left: 18px; }
+.faults li { font-size: 11.5px; line-height: 1.5; color: var(--fg); margin-bottom: 6px; }
+
+/* ---------------------------------------------------------------- charts */
+
+.chart { background: #1e232a; border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
+.chart canvas { display: block; width: 100%; height: auto; }
+
+/* ---------------------------------------------------------------- tune sliders */
+
+.tune { margin-bottom: 12px; }
+.tune label { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--dim); }
+.tune label b { color: var(--fg); font-family: var(--num); font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12.5px; }
+.tune input[type=range] { width: 100%; accent-color: var(--accent); margin: 2px 0 0; }
+.tune small { display: block; color: var(--dim); opacity: .75; font-size: 10.5px; line-height: 1.4; }
+
+/* ---------------------------------------------------------------- buttons */
+
+button {
+  background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 4px; padding: 6px 12px; font: inherit; font-size: 12px; cursor: pointer;
+}
+button:hover { background: #3c4553; }
+button:active { transform: translateY(1px); }
+button:disabled { opacity: .45; cursor: default; }
+button:disabled:hover { background: var(--panel2); }
+button.go { background: var(--go); border-color: #3d8a4d; color: #fff; font-weight: 600; }
+button.go:hover { background: #55af69; }
+button.on { background: var(--accent); border-color: #d9740f; color: #1b1f25; font-weight: 600; }
+.btnrow { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.btnrow button { flex: 1; min-width: 92px; }
+
+/* ---------------------------------------------------------------- action bar */
+
+#actions {
+  position: absolute; left: 0; right: 0; bottom: 0; height: var(--act-h);
+  display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  background: var(--bar); border-top: 1px solid #000;
+}
+#deck { display: flex; gap: 6px; flex-wrap: nowrap; overflow: hidden; }
+#perf, #brain { color: var(--dim); white-space: nowrap; }
+#primary { min-width: 132px; }
+
+/* ---------------------------------------------------------------- guide */
+
+.guide-group { margin-bottom: 18px; }
+.guide-group h5 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+.guide-item { display: grid; grid-template-columns: 78px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.guide-item:last-child { border-bottom: 0; }
+.guide-item kbd {
+  align-self: start; background: #1e232a; border: 1px solid var(--line); border-radius: 3px;
+  padding: 1px 5px; font-family: var(--mono); font-size: 10.5px; text-align: center; color: var(--fg);
+}
+.guide-item p { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--dim); }
+.guide-item p b { color: var(--fg); font-weight: 600; }
+
+@media (max-width: 1180px) {
+  .brand small { display: none; }
+  #topbar { gap: 10px; padding: 0 8px; }
+}
+@media (max-width: 1000px) {
+  .scores, .field.hide-narrow { display: none; }
+}

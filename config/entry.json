@@ -1,0 +1,98 @@
+{
+ "_about": "MEASURED by tools/entrycheck.ts: of the balls that reach the up-CELL mouth at a given arrival speed and descent angle, what fraction STAY IN. tools/shottable.ts multiplies this into its objective, so the table stops choosing shots that thread the mouth and bounce straight back out.",
+ "_method": "24 balls per cell injected at the mouth with the launcher's own spin convention, aim jittered by a ball radius, rocker pinned at 200 kg so a tip cannot empty the CELL mid-count.",
+ "_caveat": "Binomial noise at this sample size is about +-10 points per cell. Read the shape, not individual cells.",
+ "generated": "2026-09-17T04:07:03.777Z",
+ "ballsPerCell": 24,
+ "speeds_mps": [
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9
+ ],
+ "descents_deg": [
+  25,
+  35,
+  45,
+  55,
+  65,
+  75,
+  85
+ ],
+ "rate": [
+  [
+   1,
+   0.9583333333333334,
+   0.6666666666666666,
+   0.2916666666666667,
+   0.20833333333333334,
+   0,
+   0,
+   0
+  ],
+  [
+   0.8333333333333334,
+   0.875,
+   0.875,
+   0.875,
+   0.6666666666666666,
+   0.4583333333333333,
+   0.041666666666666664,
+   0.2916666666666667
+  ],
+  [
+   0.9583333333333334,
+   0.875,
+   0.7083333333333334,
+   0.8333333333333334,
+   0.8333333333333334,
+   0.875,
+   0.75,
+   0.625
+  ],
+  [
+   1,
+   0.75,
+   0.6666666666666666,
+   0.7083333333333334,
+   0.75,
+   0.5416666666666666,
+   0.6666666666666666,
+   0.5416666666666666
+  ],
+  [
+   1,
+   0.375,
+   0.4166666666666667,
+   0.7083333333333334,
+   0.4583333333333333,
+   0.125,
+   0.125,
+   0.3333333333333333
+  ],
+  [
+   1,
+   0.8333333333333334,
+   0.625,
+   0.6666666666666666,
+   0.2916666666666667,
+   0.3333333333333333,
+   0.2916666666666667,
+   0.3333333333333333
+  ],
+  [
+   0.9583333333333334,
+   0.7916666666666666,
+   0.75,
+   0.875,
+   0.8333333333333334,
+   0.5833333333333334,
+   0.6666666666666666,
+   0.5416666666666666
+  ]
+ ]
+}

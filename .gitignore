@@ -1,0 +1,9 @@
+node_modules/
+dist/
+java/out/
+java/out-teamcode/
+
+# Generated from cad/field-cad-step.step by tools/cad2assets.py (~12 MB).
+# PLAN.md section 9: don't commit generated assets over a few MB -- regenerate them.
+assets/field.glb
+assets/field-index.json

@@ -1,0 +1,734 @@
+# Decisions and deviations log
+
+Append-only. When reality disagrees with `PLAN.md`, add an entry here rather than
+silently diverging. Keep entries short. Newest at the bottom.
+
+Format:
+
+```
+## YYYY-MM-DD — short title
+Plan said:   …
+Found:       …
+Did instead: …
+Costs/risks: …
+Who/where:   agent or person, files touched
+```
+
+---
+
+## 2026-09-16 — Plan v2: Java-first brain
+Plan said:   v1 had no Control Hub bridge and no Java; the robot brain was implied to be TypeScript.
+Found:       The team wants the control code to port to the real REV Control Hub quickly.
+Did instead: Split into a TypeScript "world" and a Java 8 "brain" written against the real FTC SDK
+             interfaces, with an SDK shim, fake hardware (simsdk) and a WebSocket bridge. `java/teamcode/`
+             is the portable deliverable. See PLAN.md §0.4, §3, §7, §9, §14.
+Costs/risks: Shim drift vs the real SDK — mitigated by a CI compile check against the SDK jars or a manual
+             port at each phase boundary. Two toolchains instead of one.
+Who/where:   plan author; PLAN.md, AGENT_PROMPT.md
+
+## 2026-09-16 — CAD units and axes
+Plan said:   (nothing yet)
+Found:       The STEP declares metres but OpenCASCADE (OCP) imports it in millimetres; Y is up in the file;
+             inside width is 141.35 in with 23.5 in tiles, not 144/24.
+Did instead: `cad/analyse_step.py` divides by 25.4; PLAN.md §1 records the CAD numbers as ground truth.
+Costs/risks: Anyone re-exporting with another tool must re-check a POLLEN measures 71.1 mm.
+Who/where:   plan author; cad/analyse_step.py, cad/cad-summary.json
+
+## 2026-09-16 — No STEP→mesh asset pipeline; the field is built from CAD numbers
+Plan said:   §6 `tools/cad2assets.py` tessellates the STEP into glTF render meshes and
+             decomposed convex colliders, via OCP + Blender + V-HACD.
+Found:       The only geometry the physics actually needs is the CELL pocket, the frame, the
+             FLOWER tubes and the perimeter — and the plan itself (§6.4, §7) requires the
+             pocket to be *convex pieces*, not a mesh, or balls float on a hull across the
+             mouth. Tessellating 373 k triangles to then throw them away and hand-author
+             convex boxes is a day of work that changes no number.
+Did instead: `packages/core/src/field/geometry.ts` builds everything parametrically from the
+             numbers in `cad/cad-summary.json`, with the CAD constants in one exported `CAD`
+             block. The pocket is a 20 × 14 × 12.04 in box of five convex plates; its fit was
+             checked against the CAD up-CELL bbox and agrees to better than 1 in on every face
+             (`tests/geometry.test.ts`). The staged positions of all 56 balls *are* taken from
+             the CAD, by `tools/cad2staging.mjs` reading `cad/parts.json`.
+Costs/risks: No pretty field mesh — the renderer draws the same primitives the physics uses,
+             which at least guarantees what you see is what collides. The pocket is a box, not
+             the real pentagon, so where balls pool is approximate: they settle at a 9-10 in
+             lever arm here. If that number matters more later, decompose the real ribs.
+Who/where:   packages/core/src/field/geometry.ts, tools/cad2staging.mjs, tests/geometry.test.ts
+
+## 2026-09-16 — The rocker is an over-centre see-saw, and the blue one starts mirrored
+Plan said:   §1.4 gives a CG "1.83 in above the pivot, 1.05 in toward the down-CELL side" and
+             rest angles ±30°, without saying how the two relate.
+Found:       Rotating the CAD CG offset into the rocker body frame (θ = 0) puts it 2.11 in
+             *straight up* over the pivot, to within 0.2°. So θ = 0 is the unstable
+             over-centre point, gravity torque is m·g·r·sin θ, and at the ±30.04° stops that
+             is 0.626 N·m — exactly the figure §1.6 quotes. The two CELLs are 158° apart on
+             the body at ±79°, and the rest angle 30.04° falls straight out of the CAD.
+             Separately, `cad/parts.json` shows the blue rocker staged *mirrored*: red's
+             AUDIENCE cell is up (bottom skin Y 51.95, Z +13.30) while blue's SCORING cell is
+             up (Y 51.95, Z −13.30). The two up-CELLs face opposite Z.
+Did instead: `params.hive.cgOffset_m` is now documented and stored in the body frame, and the
+             blue Hive starts at +restAngle. Alliance stations are at ±X (that is where the
+             STEP stages the NECTAR and the loose POLLEN), so the LOADING ZONE and GARDEN
+             were moved there.
+Costs/risks: None known; all of it is asserted in `tests/geometry.test.ts`.
+Who/where:   config/params.json, packages/core/src/field/geometry.ts, physics/hive.ts
+
+## 2026-09-16 — Three Rapier behaviours that silently broke the hive
+Plan said:   §8.3 "Rapier revolute joint on the pivot line... limits at the two damper-contact
+             angles", and §17 "if a result looks surprising: first units, then collider
+             decomposition, then the timestep".
+Found:       Three separate things, each of which alone stopped the hive tipping:
+             1. `JointData.limitsEnabled/limits` set on the *descriptor* is silently ignored.
+                The rocker had no end stops at all and would spin to 10 800 deg/s.
+             2. `RigidBody.addForce`/`addTorque` **persist across steps** until
+                `resetForces`/`resetTorques`. Applying pivot friction every substep compounded
+                it into tens of N·m, so the rocker would not move under 20 N·m. The drivetrain
+                and the ball aero had the same bug.
+             3. With those fixed, the rocker still would not move: its pocket was jammed
+                against the static frame approximation (the ACM panels at Z = ±19.48 in sit
+                where the down-CELL swings to Z = −25 in).
+Did instead: 1. `joint.setLimits(min, max)` on the created `RevoluteImpulseJoint`.
+             2. `resetForces`/`resetTorques` at the top of every `preStep`.
+             3. `packages/core/src/physics/groups.ts`: the rocker collides with balls only.
+                The robot cannot reach a 44 in pivot under R102's 29 in cap anyway.
+             Also `CoefficientCombineRule.Min` for restitution instead of Rapier's default
+             Average — with Average every ball bounced back out of the CELL mouth.
+Costs/risks: The rocker/robot exclusion means a rules-illegal tall robot could pass through
+             the hive. Acceptable; the validator flags over-height robots instead.
+Who/where:   packages/core/src/physics/{hive,robot,balls,world,groups}.ts, tests/hive.test.ts
+
+## 2026-09-16 — Phase 1 result: 12 POLLEN or 8 NECTAR tip the HIVE
+Plan said:   §1.6 hypothesised 8–17 POLLEN depending on where balls pool, and noted the
+             community default (ftc_demo) of 8 POLLEN-equivalents. "Neither number is trusted."
+Found:       With the CAD mass estimate (2.38 kg), pivot friction 0.05 N·m and elements placed
+             gently into the up CELL, the simulated onset is **12 POLLEN** or **8 NECTAR**.
+             Balls pool at a **9–10 in lever arm** — between the plan's 5–8 in guess from the
+             floor bbox and the 11–12 in the pocket-box geometry predicts. Ball torque at
+             onset is 0.729 N·m against 0.609 N·m of gravity, and the tip takes 0.88 s.
+Did instead: `tools/hivedrop.ts` produces this on demand and `tests/hive.test.ts` locks in the
+             ordering (NECTAR < POLLEN, heavier rocker needs more).
+Costs/risks: It rests on the guessed rocker mass and on the pocket being a box. Both are
+             config; sweep them. This replaces the plan's table with a simulated one, not
+             with a measured one — November still decides.
+Who/where:   tools/hivedrop.ts, tests/hive.test.ts
+
+## 2026-09-16 — Solver iterations: 16, measured not guessed
+Plan said:   `params.sim.solverIterations: 8`.
+Found:       With 56 balls, two rockers and the robot: peak rocker drift 0.102 deg/s at 4
+             iterations, 0.053 at 8, 0.004 at 16, 0.003 at 24 — costing 1.05 / 1.57 / 2.59 /
+             4.22 ms per rendered frame.
+Did instead: 16. A still rocker with ~380 fps of headroom.
+Who/where:   config/params.json
+
+## 2026-09-16 — Tools run through Vite, not node --experimental-strip-types
+Plan said:   (nothing) — tools are `.ts` under `tools/`.
+Found:       Node's type stripping does not do the ESM `.js` -> `.ts` specifier mapping that
+             TypeScript requires, so `node --experimental-strip-types tools/x.ts` cannot
+             resolve any core import.
+Did instead: `tools/run.mjs` (17 lines) uses Vite's own SSR loader, which is already a
+             dependency. `npm run tool -- tools/hivedrop.ts --mass 2.4`.
+Costs/risks: Tools must export `main(args)`. No new dependency.
+Who/where:   tools/run.mjs, package.json
+
+## 2026-09-16 — Aiming now leads for the robot's own velocity
+Plan said:   §7.8 "TurretTracker: turn the turret so the muzzle bearing equals the bearing to
+             the up-CELL mouth". Nothing about shooting on the move.
+Found:       The world adds chassis velocity to every ball (`v = v_exit*dir + v_chassis`,
+             physics/robot.ts `launch`), but the aim was purely geometric. A robot moving
+             2 m/s across the line of fire threw the ball >10 deg off target and nothing
+             compensated. Verified by `tools/shootercheck.ts`.
+Did instead: `ShotLead` (java/teamcode/control) and `leadShot` (core/robot/builtinTeleOp.ts)
+             solve the triangle exactly rather than approximating it: the horizontal velocity
+             the ball must leave with is (table speed along the bearing) minus (robot
+             velocity), so the turret points along that vector and the flywheel is asked for
+             |that vector| / cos(elevation). Closing shots need less RPM, retreating more.
+             Asserted in tests/shotlead.test.ts and java SelfCheck (both check that the ball's
+             resulting bearing lands on the target, not just that a number changed).
+Costs/risks: Velocity only, not acceleration: over a ~1 s flight the a*t^2 term is small next
+             to the 1-2 deg of launch scatter, and differentiating a noisy velocity estimate
+             would be worse than no lead. On the hub the lead is only as good as the
+             Localizer's velocity, which is why it reads through the interface.
+Who/where:   java/teamcode/control/{ShotLead,AimController}.java, packages/core/src/robot/builtinTeleOp.ts
+
+## 2026-09-16 — Turret coverage is +-120 deg, and the chassis never turns to aim
+Plan said:   §7.5 turret `range_deg` e.g. +-90 from forward.
+Found:       Measured with `tools/shootercheck.ts`: with the chassis heading held fixed, the
+             turret alone reaches the up CELL from every bearing between -120 and +120 deg.
+             Outside that the shot is correctly refused ("turret cannot reach") rather than
+             silently mis-aimed -- the driver has to turn the robot, which is the truth.
+Did instead: Kept `range_deg: [-120, 120]`. `TurretTracker.canReach` gates the shot and
+             `AimController.status()` says why.
+Who/where:   config/robot.json, java/teamcode/control/TurretTracker.java
+
+## 2026-09-16 — Flywheel inertia and the omega -> exit-speed chain, checked
+Plan said:   §2 "Flywheel inertia | Gecko 96 mm 1.21e-4 ... kg.m^2 | shot-sim | fixed".
+Found:       1.21e-4 kg.m^2 at a 96 mm wheel implies 105 g as a solid disc or 53 g as a rim,
+             which is what a compliant 96 mm wheel actually weighs. With the motor rotor
+             reflected the total is 1.31e-4, giving a spin-up time constant
+             I*w_free/tau_stall = 0.74 s. Exit speed measured against k*omega*r at 1500-5500
+             RPM agrees to better than 0.5% (the residual is the configured 1.5% scatter),
+             and each shot costs the wheel 195 RPM at 1500 up to 667 RPM at 5500, rising with
+             speed as lossFactor*KE/(I*omega) should.
+Who/where:   tools/shootercheck.ts
+
+## 2026-09-16 — The brain half: shim, simsdk, bridge and runner, with no Gradle
+Plan said:   §3.3/§4 build the Java with Gradle, pull Gson from Maven, use Java-WebSocket,
+             and keep the shim honest with a CI compile against the season's SDK AARs.
+Found:       No Gradle and no Maven on this machine, so nothing can be fetched.
+Did instead: `javac` only, driven by `java/build.sh`. Dependencies replaced by the JDK:
+             `java.net.http.HttpClient` has a WebSocket client built in, and `sim.bridge.Json`
+             is a ~180-line reader/writer. TeamCode is compiled `--release 8` against the SHIM
+             ONLY, which is the compile check that matters: nothing sim-side is even on its
+             classpath, so an accidental `import sim.*` cannot compile.
+Costs/risks: The shim is hand-written, so SDK drift is caught by the manual port at phase
+             boundaries rather than by CI. Appendix E is the contract.
+Who/where:   java/build.sh, java/{shim,bridge,simsdk,runner}
+
+## 2026-09-16 — Constants are generated, not parsed, on the hub
+Plan said:   §9.1 `RobotConfig.java` loads robot.json with Gson through a `ConfigSource`.
+Found:       No Gson, and reading a file during `init()` is how OpModes get killed by the
+             watchdog. PLAN.md §14.2 already offers the alternative.
+Did instead: `tools/genconstants.mjs` bakes `config/robot.json` and the generated shot table
+             into `RobotConstants.java` and `ShotTableData.java`. One origin for every number
+             still holds -- edit robot.json, re-run the generator, the Java follows.
+Costs/risks: The generator has to be re-run after editing robot.json. `java/build.sh` does not
+             run it automatically because it needs Node.
+Who/where:   tools/genconstants.mjs, java/teamcode/config/
+
+## 2026-09-16 — Five bugs found by actually running an OpMode over the bridge
+Found:       Each of these silently produced a robot that did nothing, and none would have
+             shown up without running the Java against the world end to end:
+             1. `RigidBodyDesc.setAdditionalMass*` is ignored in this Rapier build -- the
+                robot came out with mass 0 and invMass 0, i.e. immovable. Mass has to go on a
+                collider (`ColliderDesc.setMassProperties`). Same for the rocker.
+             2. Rapier averages friction coefficients, so the chassis shell's 0.02 paired with
+                the tiles' 0.85 gave an effective 0.435 -- about 60 N of drag, most of the
+                drivetrain's output. `CoefficientCombineRule.Min` fixes it; top speed went from
+                30 in/s to 62.8 in/s against a hand-computed 62.
+             3. An ActuatorFrame carries only each motor's FINAL state for the frame, so
+                `setMode(STOP_AND_RESET_ENCODER)` followed immediately by `setMode(...)` -- the
+                standard idiom -- never reached the world. Added a sticky `reset` flag cleared
+                once the frame ships.
+             4. The world reported encoder counts in the PHYSICAL frame while powers were in
+                the motor's electrical frame, so a reversed wheel's encoder cancelled its
+                partner's and the drivetrain's average travel was always zero.
+             5. The runner serialised the actuator frame while the OpMode thread was still
+                writing it (ConcurrentModificationException). `ActuatorFrame` now hands over a
+                finished map per device under one lock.
+Who/where:   packages/core/src/physics/{robot,hive}.ts, robot/hubEmulation.ts,
+             java/bridge/ActuatorFrame.java, java/simsdk/SimDcMotorEx.java, java/runner/Main.java
+
+## 2026-09-16 — Three bugs in TeamCode itself, found the same way
+Found:       1. `FlywheelGate.setTargetRpm` reset readiness whenever the target changed at
+                all. A live target is a continuously varying double (range jitter times the
+                motion lead), so readiness was reset every single loop and the gate never
+                opened. Now only a change worth more than half the tolerance counts.
+             2. `DriveToRange` has a +-6 in deadband around the shot table's best range. At
+                24 in -- outside a table whose floor is 30 in -- that deadband said "close
+                enough" and the robot stopped somewhere it could never score from. The
+                deadband now only applies inside the usable band.
+             3. Reading an encoder in the same loop as `STOP_AND_RESET_ENCODER` returns the
+                value from before the reset (true on a hub too). On the return leg of a
+                there-and-back that looks like "already arrived" and the move is skipped.
+                `resetAndSettle` waits for the count to actually reach zero.
+             Also: driving open loop drifted about a foot laterally over a 30 in leg, so both
+             autos now hold heading on the IMU.
+Who/where:   java/teamcode/control/{FlywheelGate,DriveToRange}.java, opmodes/Auto*.java
+
+## 2026-09-16 — Match preloads, and a measured ball count
+Plan said:   §9.3 `AutoOneTip` fires "the 4 preloaded POLLEN". Nothing said where they come from.
+Found:       `Hopper.setCount()` only set TeamCode's dead-reckoning counter; the WORLD's hopper
+             was empty, so the transfer had nothing to feed and the auto fired zero shots.
+Did instead: `WorldOptions.preload` takes the nearest N POLLEN off the field into the robot's
+             hopper at construction and on reset (4 in the app, `--preload` headless). And
+             TeamCode gained `BallCounter`, the same `tryGet` shape as `Localizer` and
+             `TargetProvider`: the sim supplies a real count, the hub returns null and the
+             Hopper dead-reckons, with telemetry saying which it is.
+Who/where:   packages/core/src/physics/world.ts, java/teamcode/control/BallCounter.java,
+             java/teamcode/subsystems/Hopper.java, java/simsdk/SimBallCounter.java
+
+## 2026-09-16 — Phase 3 and phase 5 acceptance, in lockstep
+`Auto Leave + Park`: LEAVE + PARK, 8 points.
+`Auto One Tip`:      LEAVE + PARK, 6 shots, 1 TIP, 28 points in autonomous.
+Both driven by the real Java OpModes over the bridge against the headless world.
+Determinism: same seed and command log give bit-identical snapshot hashes over three runs
+(`tests/determinism.test.ts`). `World.reset()` restores game state but NOT the hash, because
+Rapier warm-starts its contact solver -- only rebuilding the World reproduces a hash, which is
+what the app's reset button now does.
+
+## 2026-09-16 — The turret is a real axis: velocity AND acceleration limited
+Plan said:   §7.5 the turret has `speed_dps`, and §9.2 `TurretTracker` is "slew-rate limited".
+Found:       A rate limit alone means the axis leaves standstill at full slew speed and stops
+             dead on arrival -- infinite acceleration in both directions. Nothing about the
+             turret's settling time was real, so the readiness gate's "turret slewing" state
+             was optimistic.
+Did instead: `Robot.stepTurret` runs a trapezoidal profile with `speed_dps` and a new
+             `turret.accel_dps2`: the rate ramps at the acceleration limit and starts braking
+             at sqrt(2*a*err) so it arrives stopped instead of overshooting. Three details the
+             discrete form needs, each of which showed up as a test failure first:
+              - the continuous sqrt(2*a*err) bound overshoots by up to half a step, so it is
+                backed off by half a velocity quantum; otherwise the axis reaches a hard stop
+                still doing 32 deg/s and the limit has to discard the rate (a fake 1900
+                deg/s^2 spike);
+              - one step can only change the rate by a*dt, so without an explicit landing case
+                the profile dithers either side of the target forever;
+              - the landing bleeds the last of the rate off at the acceleration limit rather
+                than zeroing it, for the same reason as the first point.
+             The snapshot now carries `turret.omegaDps`, `targetDeg` and `atLimit`, and the UI
+             shows the rate.
+Costs/risks: `accel_dps2: 900` is a guess (0.2 s to reach the 180 deg/s slew limit). It should
+             be derived from motor torque over turret MOI once a real turret exists -- the
+             config key and its `_accelSource` note are there for that.
+Who/where:   config/robot.json, packages/core/src/physics/robot.ts, tests/turret.test.ts
+
+## 2026-09-16 — The rocker is drawn as the CAD part, not as its collision boxes
+Plan said:   §6 render meshes come from tessellating the STEP; §5 the renderer draws what the
+             physics collides with.
+Found:       Drawing only the five convex plates per CELL is honest but unreadable -- it looks
+             like a crate, not like am-5853, and you cannot tell which way a CELL faces.
+Did instead: The pocket walls are still drawn (they ARE the colliders, so what you see still
+             collides), and the recognisable parts are added on top as render-only geometry
+             sized from `cad/parts.json`: pentagon end ribs (am-5866, 21.2 x 14.3 in), the
+             basket base tube out to the pivot (am-5868, 1 in square, 17.6 in long), two
+             10.5 in churros bracing the mouth (am-5867) and the AprilTag panel (am-5888,
+             17 x 4.3 in). The A-frame is likewise drawn as the four splayed legs the CAD
+             has -- from the foot bars at X +-24.1, Z +-18.3 up to the top corners at
+             X +-12.6, Y 41.3 -- rather than the four vertical posts the physics uses.
+Costs/risks: The render and the collision shape now differ, which is the thing §5 warns about.
+             The difference is additive only (dressing, never a surface a ball can touch), and
+             the pocket the balls actually meet is still drawn.
+Who/where:   packages/render/src/scene.ts
+
+## 2026-09-16 — UI: a tip meter, first-person view, and auto-load
+Found:       The single number people want from this simulator is "how close is the HIVE to
+             going over", and it was buried in two torque readouts of opposite sign.
+Did instead: A meter on the Hive tab showing the ball torque OPPOSING gravity as a fraction of
+             the restoring torque, with the 100 % line marked. Only the opposing component
+             counts -- after a tip the balls in the now-down CELL push the rocker onto its
+             stop, which read as "158 % of the way over" until this was fixed.
+             Also: a first-person camera (key 4) that looks where the CHASSIS points, which is
+             the view that makes an independently-aimed turret make sense; and an Auto-load
+             toggle (key L) that keeps the hopper topped up from balls on the floor so aiming
+             can be practised without a collection lap. Auto-load takes real balls off the
+             real field and the field does run out -- it is a practice aid, not a game rule.
+Who/where:   index.html, packages/ui/src/{main.ts,style.css}, packages/render/src/scene.ts
+
+## 2026-09-16 — Drive is robot-centric by default
+Plan said:   §9.2 `Drivetrain` does "field/robot-centric mecanum drive"; §9.3 TeleOpMain is
+             "field-centric drive".
+Found:       Field-centric referenced to FTC +X means the stick's "forward" is a fixed field
+             direction, so from the default start pose (heading 90 deg) pressing W made the
+             robot STRAFE. Measured: W moved the robot 30.7 in along FTC +X while it was
+             facing FTC +Y. Correct field-centric, and it feels broken.
+Did instead: Robot-centric is the default -- the stick drives the robot the way it points.
+             Field-centric is a toggle (C / L3) and is referenced to a heading zero the driver
+             can reset (Z / Back), not to FTC +X.
+             While checking this: A and D looked asymmetric (30.6 in vs 4.2 in). Not a bug --
+             the default start pose is 4 in off the wall, so one direction runs out of field.
+Who/where:   packages/core/src/robot/builtinTeleOp.ts, packages/ui/src/input.ts,
+             tests/drivetrain.test.ts
+
+## 2026-09-16 — Latching controls and a button deck
+Found:       Holding a key to run the intake and holding another to fire is how a gamepad
+             works, not how the robot works. A real intake runs the whole match, and the
+             shot rate is set by `transfer.cycleTime_s`, not by how long a thumb is down --
+             so holding the fire button was doing nothing the cycle timer was not already
+             doing.
+Did instead: `intakeOn` defaults to TRUE and is a toggle; the left trigger still spits and the
+             right trigger still forces it on while it is switched off. `firing` is a latch:
+             press once and it keeps feeding at the cycle time until pressed again, with
+             gamepad B kept as a non-latching hold for single shots.
+             Added an action deck down the left of the app so none of it needs the keyboard:
+             match control, the five robot latches, spit-one-out, and the practice aids
+             (auto-load, fill hopper, drop a POLLEN, drive mode). Buttons and keys drive the
+             same state through one `ACTIONS` table, so they cannot disagree, and each toggle
+             reports its own state back for the lit styling.
+Who/where:   packages/core/src/robot/builtinTeleOp.ts, packages/ui/src/{main.ts,input.ts,style.css},
+             index.html, docs/CONTROLS.md
+
+## 2026-09-16 — The STEP really is tessellated now (reversing the earlier shortcut)
+Plan said:   §6 `tools/cad2assets.py` turns the STEP into render meshes.
+Earlier:     I skipped it and rebuilt the field from `cad-summary.json` numbers, arguing the
+             physics only needs convex boxes. True for the physics, wrong for the view -- the
+             field looked like crates and the FLOWERs were featureless tubes.
+Did instead: `tools/cad2assets.py` loads the STEP through OCP XCAF (which IS installed:
+             OCP 7.9.3.1), tessellates by role and writes `assets/field.glb` via trimesh.
+             171 parts, ~675k triangles in about 40 s. Fasteners, cable ties and anything
+             under 900 mm^3 are dropped (676 parts) -- they are the part count and none of the
+             silhouette. Tiles are not exported either; the renderer draws them procedurally
+             and they were 80k triangles of flat squares.
+             The PHYSICS is untouched and still uses the convex boxes: a mesh collider becomes
+             its hull, and a hull across the CELL mouth is the "balls float on an invisible
+             lid" bug. A **Colliders** toggle in the app swaps the CAD skin for the boxes so
+             the difference is inspectable rather than hidden.
+Costs/risks: 12 MB asset, gitignored and regenerated. The app falls back to the procedural
+             stand-in if it is missing, so a clean checkout still runs.
+Who/where:   tools/cad2assets.py, packages/render/src/scene.ts, .gitignore
+
+## 2026-09-16 — This STEP carries no colour, so colour comes from what each part is
+Found:       `SetColorMode(True)` and XCAFDoc_ColorTool return nothing for all 171 parts --
+             the AndyMark export has no colour data at all.
+Did instead: `tools/cad2assets.py` assigns a colour per part NAME and bakes it as vertex
+             colours: alliance red/blue for the goal ribs, skins and basket parts, aluminium
+             for churros, tubes, brackets and the A-frame, near-white for the AprilTag panels
+             and the HIPS flower pipes, tinted glass for the perimeter. One `vertexColors`
+             material then draws the whole field.
+Who/where:   tools/cad2assets.py
+
+## 2026-09-16 — Three rendering bugs worth naming
+1. **Re-parenting inside `Object3D.traverse`** silently skipped half the meshes: the walk
+   mutates the children arrays it is iterating. Collect first, reparent after. Symptom was
+   the red rocker loading and the blue one staying a box.
+2. **Ball holes merged into spikes.** The 26 hole axes (a cube's 6 face + 12 edge + 8 corner
+   directions, which is exactly 26) are about 35 deg apart at the closest; at a 0.30 rad
+   half-angle the holes overlapped and dissolved the sphere. 0.135 rad leaves them distinct.
+3. **Vite served the 12 MB GLB as a module** (200 OK, unparseable). `import ... from
+   '...glb?url'` makes it an asset. It is also cached in a static promise now, because
+   rebuilding the Scene on every reset was re-downloading the whole field.
+Who/where:   packages/render/src/scene.ts
+
+## 2026-09-16 — Balls staged outside the glass are out of play, not floating
+Found:       The STEP stages 16 POLLEN and 10 NECTAR at X = +-73..77 in -- beyond the 70.675 in
+             wall. Those are the human player's hands, and rendering them left balls hanging
+             in mid-air outside the field with nothing under them.
+Did instead: `World.parkOffField()` disables anything staged outside the perimeter at
+             construction and on reset. They are out of play until a human hands them in
+             (G426/G427), which is exactly what the rules say.
+Who/where:   packages/core/src/physics/world.ts
+
+## 2026-09-16 — A robot instead of a box
+Found:       "A box with a yellow stick on top" made it impossible to see where the intake or
+             the outtake were, which matters because the turret aims independently of the
+             chassis.
+Did instead: Render-only detail: chassis rails and side panels, four mecanum wheels whose
+             rollers sit at +-45 deg and which SPIN at their real omega, a roller intake
+             across the front with a mouth and a lip, a transparent hopper you can see the
+             ball stack in, and a turret carrying the flywheel (spinning at its real RPM)
+             behind a barrel that is unmistakably the outtake. The physics is still one box
+             plus the tyre model, exactly as `robot.json` describes it.
+Who/where:   packages/render/src/scene.ts
+
+---
+
+## The intake, hopper and feed became real mechanisms
+
+**Was:** a state machine. A ball that touched a trigger box in front of the robot was
+disabled, removed from the solver, and appended to an array; a timer moved it along an
+"intake line"; another timer fed it to the muzzle. Nothing collided with anything.
+
+**Now:** the chassis is built out of plates — floor, sides, back, a front wall that stops
+above the intake mouth, and a vertical feed tube up the turret axis. A ball is a rigid body
+the whole way through the robot. The roller grips it by slip-limited friction, the indexer
+sweeps it into the tube, the belt lifts it, a gate plate holds it, and the nip fires it.
+
+**What this cost, honestly.** Six real jams, each of which looked perfectly reasonable in
+the source:
+
+1. `applyAero` ran *after* the robot and reset every ball's accumulated force, so the intake
+   and feed silently did nothing at all. Aero now runs first.
+2. The shell was given 0.25 friction so balls would grip inside the bin. It is also the only
+   part that touches a tile, and at 0.25 against the tiles' 0.85 it dragged at ~35 N and top
+   speed fell from 63 to 45 in/s. Back to 0.02; the bin's walls contain balls without it.
+3. A ramp was added to lift balls over the floor plate's edge. A plate that reaches tile
+   level also *drags* on the tile — it turned the robot into a plough. Deleted; the roller's
+   lift term does that job, which is what a real compliant roller does.
+4. The feed tube was open only at the front, so any ball that ended up behind it was
+   unreachable for the rest of the match. Both ends are open now.
+5. The tube was bored for the larger game element (4.1 in) — and two 2.8 in POLLEN wedge
+   diagonally in 4.1 in. Bored for one POLLEN now. NECTAR will not enter, which is correct.
+6. The indexer pushed *every* eligible ball at the tube at once, sending two in through the
+   two openings on the same step. Metered to one at a time.
+
+**And one that only showed up under load:** the belt was gated on "ready to fire", so the
+tube emptied back into the bin after every shot and the robot re-lifted the same ball. The
+gate is a real plate now, the belt runs continuously, and the magazine stays loaded.
+
+Verified by `tools/mechcheck.ts`, which drives each stage separately: a ball is collected off
+the floor in 0.57 s, six preloads fire 6 of 6, and the full suite still passes.
+
+**What is still an impulse:** the nip. At 3500 rpm it opens and closes in ~400 µs, two orders
+of magnitude below the 1/240 s timestep. Everything that *decides* whether a shot happens is
+physical; the momentum transfer is not.
+
+## A shot's error is measured where it ARRIVES
+
+`missBy` used to be the distance from the CELL mouth to where the ball stopped rolling. A
+ball that dropped an inch wide of the lip and then bounced forty inches across the field was
+scored as a forty-inch miss, so the statistics were measuring the floor, not the shooter.
+Now the world watches each shot down and records the point where it crossed the mouth's
+height descending. Reported spread fell from ±40 in to ±12 in without a single physics
+change — the old number was an artefact.
+
+## Shots logged the flywheel speed AFTER the shot dipped it
+
+`lastShotRpm` was read after `launch()` had already taken the ball's energy out of the wheel,
+so every shot in the log looked like it had gone out off-speed and the Analysis tab reported
+a readiness-gate fault that did not exist. Captured at the top of `launch()` now.
+
+## Matches started with the HIVE 57% tipped
+
+The STEP stages six NECTAR inside the two CELLs. That is the CAD's display state, not a match
+start. Left in, every match began with the balls already more than half way to overcoming
+gravity, and they rendered as balls floating under the CAD skin. `parkOffField` now takes
+anything above the pivot out of play, and the hive census ignores parked balls — `park()`
+disables a body but leaves it where it was, so without that check they went on contributing
+torque after being removed.
+
+## Tried: deriving the CELL pocket radius from the CAD floor plate. Reverted.
+
+The pocket is built around the CELL assembly's centroid (14.96 in from the pivot), which is
+arguably too far inside the pocket it describes. `cad-summary.json` has `up_floor_bbox_in`,
+whose centre is at 15.71 in, suggesting a pocket centre near 21.7 in.
+
+It is wrong. That bbox is the *axis-aligned* box of a plate tilted 30°, so its centre is not
+the plate's radial position — and with the larger radius the CAD's own staged balls end up
+below the floor it implies, and the pocket pokes outside the CAD's up-CELL bbox. Two geometry
+tests caught it. The centroid is the better of the two estimators; the real fix is to derive
+the pocket from the STEP's faces, which has not been done. Logged in `docs/PHYSICS.md` §7.
+
+## Calibration is a closed loop, not advice
+
+The Analysis tab computes the trim a run implies and **Apply calibration** writes it into
+`robot.calibration`; the shot table is then looked up at `(range − rangeTrim)`. Verified with
+`npm run tool -- tools/collect.ts --shots 24 --calibrate 2`:
+
+| round | bias | spread | trim applied first |
+|---|---|---|---|
+| 0 | +3.4 in | ±8.9 in | — |
+| 1 | **−0.2 in** | ±11.2 in | range +3.4 in, turret +0.85° |
+| 2 | −1.3 in | ±10.9 in | none (inside the run noise) |
+
+Bias converges, spread does not move, and the third round correctly declines to chase the
+sample. That is the whole claim the split between bias and spread makes, and it holds.
+
+## The flatter shot table was never the problem; the feed was
+
+The HIVE-tip scenario failed after the shot table's objective changed, and the obvious story
+was retention: a flatter shot lands nearer the mouth, so it has further to roll back down.
+`tools/retention.ts` was written to test that story and killed it.
+
+| table | shots in 70 s | peak in CELL | lost, not via a tip |
+|---|---|---|---|
+| steep (margin only) | 30 | 8 | 12 |
+| flat (margin x entry) | 14 | 6 | **2** |
+
+The flat table *retained better*. It simply fired half as often, and the two suspects have
+opposite fixes, so the plausible one would have cost a day. Two real bugs, both of which had
+already been fixed in the sister build and neither of which had been ported here:
+
+1. **The indexer pushed horizontally only** (`addForce({x, y: 0, z})`). A ball sitting on the
+   bin floor is held by its own floor contact; 0.95 N sideways does not lift it over the lip.
+   Balls reached the magazine only when something else shook them there — which is why a
+   table that fires *less* also feeds *less*, a loop that made the flat table look worse than
+   it was.
+2. **The shaft census counted a ball as "in the tube" with its centre 10 mm outside the
+   bore** (`sh.half + 0.01`), i.e. half of it still in the doorway. The belt then lifted it
+   into the lintel and jammed it.
+
+They mask each other, which is why neither showed up alone: fixing the push *first* took
+firing from 13 shots to **zero**, a ball wedged permanently in the doorway. The census fix is
+its companion, not a separate improvement.
+
+| | before | after |
+|---|---|---|
+| steep | 25 shots | **44** |
+| flat | 13 shots | **44** |
+| frames ready with an empty magazine | 1377 / 2292 | **7 / 8** |
+
+`tools/retention.ts` also had to be fixed before it could be believed: its first version
+counted every decrease in the CELL population as a ball lost, and a tip empties the CELL on
+purpose. It scored the best possible outcome as the worst, reporting 19 "lost" for a table
+that was tipping the hive repeatedly.
+
+## The shot table was never the problem either. The firing window was.
+
+With the feed fixed, the flat table and the steep one land identically -- 48.5% against 47.9%
+over 278 shots, 0.1 standard errors apart. The entry model predicted a rout. Finding out why
+took four measurements, and each one killed the conclusion before it:
+
+**1. The misses are not bounce-outs.** `tools/missmix.ts` splits them using the arrival point
+every shot already records. Only 4% of shots arrived over the opening and came back out; 29%
+arrived beyond the far lip and 17% went wide. Optimising what a ball does once it reaches the
+mouth cannot fix a shot that never reaches it -- which is why the flat table bought nothing.
+
+**2. The shot leaves wrong, it does not fly wrong.** `tools/aimbias.ts` re-runs the SOLVER at
+the conditions each shot actually left with. It puts them 5.2 in long against 8.8 in observed,
+so the flight is close to right and the exit conditions are not. Exit speed matched
+`k*r*omega` to 0.002 m/s and the sensed range was exact, which leaves the wheel speed: it
+fires a standing **+38 rpm above target**.
+
+**3. The table is centred; the window is not.** `tools/apercheck.ts` replays each table row
+through the solver with no simulation at all. Every row clears the near lip by 3.5-7.6 in,
+passes under the far lip by 4.0-8.9 in, and crosses the mouth's centre height within 1.5 in
+of its centre. The table is fine. The same tool prices the error:
+
+| | inches of range |
+|---|---|
+| +10 rpm | 1.4 |
+| +38 rpm (the measured standing error) | **5.0** |
+| +-120 rpm (`tolRpm`, the window it fires inside) | **+-14.9** |
+| +1 deg hood | 1.4 |
+
+The hole is 8.9 in deep. The firing window alone permits a miss nearly twice the size of the
+target, and that is the spread; the +38 rpm standing error is the bias.
+
+**4. A trim is worth 38 points, which is the tell.** `tools/trimsweep.ts` sweeps the field
+trims against balls in the CELL rather than against a proxy: `rangeTrim` +6 in takes the land
+rate from 51.2% to 84.4%, six standard errors. A table that is right cannot be improved by
+lying to it about the range by half a foot -- so the trim is not a calibration here, it is a
+measurement of the rpm bias in disguise, and the honest fix is upstream of it.
+
+### Do not compute rangeTrim from the mean downrange error
+
+`config/robot.json` documents the recipe as "the mean signed downrange error of a collected
+run", and there is a trap next to it. The shots that LAND arrive 5.8 in long while all shots
+average 8.8 in, which reads like the aim point really being 5.8 in past the mouth centre. It
+is survivorship: with the group centred past the target, the ones that go in are the ones that
+happened to be least long. Trusting it would have parked the group on a point the measurement
+says is 33 points worse.
+
+## The brain was reading a tachometer no team can buy
+
+Chasing the +38 rpm standing error found something larger. `tools/flywheeltune.ts` shows the
+hub's velocity loop settling to **zero** offset with zero ripple at every integral gain, at the
+speed the table actually asks for -- so the bias is not the controller, it is a limit cycle:
+fire, dip, recover, overshoot, satisfy the window at the top of the bounce, fire again.
+
+But reading the loop to find that out turned up two places where the sim was flattering the
+robot:
+
+1. `HubMotorLoop` stored a REAL-VALUED encoder position, so its 20 ms velocity window was
+   about fifty times better than a quadrature counter's.
+2. `sensors().game.flywheelRpm` returned `radSToRpm(flywheelOmega)` -- ground truth. The
+   readiness gate never saw the hub's estimate at all.
+
+The flywheel is direct-driven on 28 ticks a rev. At 2800 rpm that is 26 counts in a 20 ms
+window, so **one count is 107 rpm**, about 15 in of range. A Control Hub cannot tell 2800 from
+2850. The encoder now floors to whole ticks and the brain reads the hub's estimate; ground
+truth stays for the shot log and the analysis, where it belongs.
+
+This matters because the previous session's sweep had recommended `tolRpm` 15 -- best in the
+sim, and **not implementable on any FTC robot**. It was an artefact of the perfect tachometer.
+
+### What replaced it, measured on the honest encoder
+
+| velocity window | fired | rate |   | tolRpm | fired | rate |
+|---|---|---|---|---|---|---|
+| **20 ms** | 102 | **87.3%** |   | 120 | 102 | 87.3% |
+| 50 ms | 98 | 84.7% |   | **60** | 82 | **92.7%** |
+| 100 ms | 89 | 80.9% |   | 30 | **0** | never fires |
+| 200 ms | 82 | 80.5% |   | | | |
+
+Filtering the velocity HURTS: the extra resolution is worth less than the lag it costs, and a
+lagging estimate fires on stale data. And 30 rpm never fires because 30 rpm is below what the
+hub can report.
+
+60 rpm works for a reason worth writing down: `readySteps` requires three consecutive in-window
+readings, and with a +-107 rpm quantisation those are three near-independent draws. Three of
+them landing near target is evidence the wheel really is there. The gate is acting as a
+statistical filter over a noisy sensor, and that is a filter a team can implement exactly as
+written.
+
+With the window at 60, both field trims measure out at zero: the best combination beats zero
+trim by 0.6 points, 0.1 standard errors. The +6 in trim that looked worth 38 points was
+correcting a bias that only existed because the robot was firing at the top of a limit cycle it
+could see and now cannot.
+
+## Three land-rate metrics, two of them wrong
+
+Every number about how well this robot shoots depends on what "landed" means, and it took two
+wrong definitions to arrive at one that holds.
+
+| | what it counts | how it fails |
+|---|---|---|
+| `inCell + tips * 12`, capped at shots | survivors, with a guess for tips | **saturates.** Once the robot is good enough to tip, the expression returns the shot count whatever happened. Three different turret trims printed exactly 100.0%. |
+| sum of RISES in the CELL census | every ball that ever entered | **overcounts.** Credits a ball that drops in, bounces out and ends on the floor. Read 92.7% where the settled per-shot rate was 61%. |
+| **census at each tip, plus the census at the end** | what was in the CELL when it mattered | nothing assumed, cannot saturate, a visit counts for nothing |
+
+The two survivors are both legitimate and they measure different things, which is worth keeping
+straight:
+
+  - `tools/landcal.ts` scores each shot by where it SETTLES. That is the right input for a
+    calibration, because a calibration needs a per-shot outcome.
+  - `tools/landrate.ts` scores the RUN by what is in the CELL at the end. That is what the game
+    pays for.
+
+They disagree by about 13 points -- 61% settled against 48% still there -- and the gap is real:
+later shots knock earlier ones out of the pocket. That is the retention effect that was
+originally, and wrongly, blamed on the flatter shot table. It exists; it is a property of a
+filling pocket, not of the trajectory.
+
+The correction reversed a conclusion. Under the overcounting metric, filtering the flywheel
+velocity looked harmful (20 ms window 87.3%, 200 ms 80.5%) and the answer was "do not filter".
+Under the scoring metric it is the opposite, and not by a little: 19.5% unfiltered against 44.9%
+at 200 ms. A metric that rewards transients rewards firing fast and loose, because a ball that
+bounces through the pocket scores the same as one that stays.
+
+## The gate now ships to the hub, because the hub is the deliverable
+
+`builtinTeleOp.ts` says it plainly at the top: the TypeScript brain is a mirror, `java/teamcode`
+is the deliverable, and if the two disagree the Java is right. The land-probability gate had
+been built entirely on the mirror. `ShotTableData.java` carried four columns -- range, hood,
+rpm, margin -- so the hub could not have computed P(land) even if it wanted to.
+
+Ported:
+
+  - `genconstants.mjs` now emits `SPEED_LO`, `SPEED_HI`, `SIGMA_SPEED`, `P_STAY` and
+    `HALF_LAT_M` alongside the existing columns, plus the measured calibration curve from
+    `config/landcal.json` as `CAL_SCORE` / `CAL_OBSERVED` / `CAL_CEILING`.
+  - `control/LandProbability.java` is the model: `normalCdf` (A&S 26.2.17), `pThread`, the
+    piecewise-linear calibration, and `pLand` combining speed, bearing and entry. The hub
+    still solves nothing -- it interpolates the solver's own outputs.
+  - `FlywheelGate` gained the velocity filter as a ring buffer, because readiness is what it
+    owns and a single `getVelocity()` reading is quantised to about 107 rpm.
+
+`SelfCheck` runs the same assertions as `tests/landprob.test.ts` -- the normal CDF values, the
+two-sigma band, the zero-scatter degenerate case, that the calibration never promises more than
+the ceiling, and that pointing 12 degrees off scores worse than pointing at the goal. 15
+assertions became 24, and a drift between the two halves now fails the Java build rather than
+being discovered in a match.
+
+## OPEN: the robot cannot hold a magazine
+
+Place the robot, preload four POLLEN, arm nothing at all and step the world. Three of the four
+are outside the robot within a tenth of a second, moving at over a metre a second, having left
+through the intake mouth. No belt, no indexer, no shooter -- the balls are already at z = +0.20
+in the robot frame one frame after placement, and `preload()` puts them at +0.068.
+
+It has been there all along and every harness hides it: `landRate`, `retention` and the shoot
+tests all top the hopper up each frame, so a magazine that empties itself looks like a magazine
+that is being fired. It only surfaced when the feed was metered properly, because until then
+the gate was held open whenever the robot was ready and the balls left as shots instead.
+
+Not fixed. The obvious suspect is wrong: the slots do overlap the feed tube's outer wall by
+about 4 mm on paper -- the stand-off is measured from `sh.half`, the BORE, and the wall is a
+plate 2t thick outside it -- and correcting that moves nothing, so the balls are not being
+placed where the formula says. The next step is to log the world position `preload()` actually
+releases each ball at, rather than reasoning about the slot list.
+
+Impact: every land-rate number in this document was measured with a topped-up hopper, so they
+describe a robot with an infinite magazine. In a match this robot would spill its preload.
+
+## OPEN: no land-rate metric in this repo is trustworthy yet
+
+`tools/gatecal.ts`, run immediately after `tools/landcal.ts`, on the same robot and the same
+table, reported **1.0%** where landcal had just measured **66%** settled per shot. Both cannot
+be right, and the two are wrong in opposite directions:
+
+  - `tools/landrate.ts` counts `ballsInUpCell`, which is one CELL of one rocker. The rocker
+    ROCKS -- that is the whole mechanism -- and a rotation short of a scored tip carries the
+    balls into the down CELL, where this reads zero. A run can score all afternoon and report
+    nothing. It also explains the same tool reading 31%, 48% and 1% across three sessions.
+  - `tools/landcal.ts` uses the shot log's `result`, set by `world.trackBallStates`, which
+    tests `pointInCell` over EVERY cell of BOTH hives. It counts the down CELL and it counts
+    the opponent's hive, so it is generous.
+
+Neither is "POLLEN in our up CELL at the buzzer, plus what a tip dumped". Until one of them is,
+every land rate in this document -- and `flywheel.minLandProb`, which was set from the landcal
+fit -- is provisional. The A/B between the two shot tables is unsettled for the same reason:
+the last run put the STEEP table 24.8 points ahead, the opposite of every previous measurement,
+which is what a metric sensitive to rocker angle rather than to scoring would do.
+
+The fix is one honest census: balls inside the up CELL of the alliance's own hive, sampled at
+the buzzer and at each tip. It should live in `World`, next to the scoring, so that every tool
+shares it instead of each one inventing its own.
+

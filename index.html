@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BIOBUZZ Simulator</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23f5821f'/><text x='8' y='12' font-size='10' text-anchor='middle' fill='%23fff' font-family='sans-serif'>B</text></svg>" />
+    <link rel="stylesheet" href="/packages/ui/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="view"></canvas>
+
+      <!-- ------------------------------------------------------------- top bar -->
+      <header id="topbar">
+        <span class="brand">BIOBUZZ<small>FTC 2026&ndash;27</small></span>
+
+        <div class="seg" id="mode" role="tablist">
+          <button data-mode="practice" class="on" title="Drive the robot yourself. Nothing is scripted; the clock and scoring run as they would in a match.">Practice</button>
+          <button data-mode="collect" title="The robot drives and shoots on its own across a range sweep, logging every shot, then reports what it got wrong.">Data</button>
+          <button data-mode="test" title="Sandbox. Change any physical constant, see what it does to the shot before you fire, and fire by hand or on a timer.">Test</button>
+        </div>
+
+        <div class="clock">
+          <span id="period">STAGING</span>
+          <strong id="time">0:00</strong>
+        </div>
+
+        <div class="scores">
+          <span class="s red"><i>RED</i><b id="red-total">0</b></span>
+          <span class="s blue"><i>BLUE</i><b id="blue-total">0</b></span>
+        </div>
+
+        <span class="grow"></span>
+
+        <label class="field hide-narrow">Alliance
+          <select id="alliance" title="Which HIVE you are shooting into. Changing it rebuilds the match.">
+            <option value="red">Red</option><option value="blue">Blue</option>
+          </select>
+        </label>
+        <label class="field">View
+          <select id="camera" title="Where the camera sits. Orbit is free; Follow and Driver ride the robot; Muzzle looks down the barrel.">
+            <option value="orbit">Orbit</option>
+            <option value="follow">Follow</option>
+            <option value="fpv">Driver</option>
+            <option value="top">Overhead</option>
+            <option value="muzzle">Muzzle</option>
+          </select>
+        </label>
+        <label class="field">Brain
+          <select id="brain-select" title="Built-in runs the TypeScript driver. Java connects to your real OpMode over the relay.">
+            <option value="builtin">Built-in</option>
+            <option value="java">Java</option>
+          </select>
+        </label>
+      </header>
+
+      <!-- ------------------------------------------------------------- status strip -->
+      <aside id="status">
+        <div class="stat"><label>Shooter</label><b id="st-note">idle</b></div>
+        <div class="stat"><label>Range</label><b id="st-range">—</b></div>
+        <div class="stat"><label>Turret</label><b id="st-turret">—</b></div>
+        <div class="stat"><label>Flywheel</label><b id="st-rpm">—</b></div>
+        <div class="stat"><label>Hopper</label><b id="st-hopper">—</b></div>
+        <div class="stat"><label>Battery</label><b id="st-batt">—</b></div>
+      </aside>
+
+      <!-- ------------------------------------------------------------- side panel -->
+      <div id="grip" title="Drag to resize the panel."></div>
+      <aside id="panel">
+        <nav class="tabs">
+          <button data-tab="robot" class="on">Robot</button>
+          <button data-tab="predict">Predictor</button>
+          <button data-tab="analysis">Analysis</button>
+          <button data-tab="tune">Variables</button>
+          <button data-tab="guide">Guide</button>
+        </nav>
+
+        <section data-panel="robot" class="on">
+          <h4>Pose</h4><div class="rows" id="r-pose"></div>
+          <h4>Shooter</h4><div class="rows" id="r-shoot"></div>
+          <h4>Hive</h4>
+          <div class="meter"><span id="tip-fill"></span><i class="mark"></i></div>
+          <p class="cap" id="tip-label">—</p>
+          <div class="rows" id="r-hive"></div>
+          <h4>Drivetrain</h4><div class="rows" id="r-wheels"></div>
+          <h4>Brain telemetry</h4><div class="rows" id="r-telemetry"></div>
+        </section>
+
+        <section data-panel="predict">
+          <p class="cap">What each variable does to <b>this</b> shot, measured by re-running
+            the real ballistic integrator with the variable nudged. Contribution is that
+            derivative times the variable's own 1&nbsp;&sigma; uncertainty — the inches of
+            scatter it is responsible for.</p>
+          <div class="rows" id="p-summary"></div>
+          <h4>Error budget</h4>
+          <div id="p-rows" class="budget"></div>
+          <p class="cap" id="p-why"></p>
+        </section>
+
+        <section data-panel="analysis">
+          <div class="rows" id="a-plan"></div>
+          <div class="btnrow">
+            <button id="a-start" class="go" title="Run the collection plan above. The robot drives to each sample pose, settles, and fires one shot.">Start collection</button>
+            <button id="a-clear" title="Throw away every shot recorded so far and start the statistics over.">Clear log</button>
+            <button id="a-csv" title="Download every logged shot as CSV: range, bearing, hood, rpm, result, and the signed long/lateral error.">Shots CSV</button>
+            <button id="a-trace" title="Download the flight recorder: every actuator, the battery, the wheel slip and the HIVE torque balance, sampled at 20 Hz through the whole session. This is the one for mechanical tuning.">Trace CSV</button>
+          </div>
+          <p class="cap" id="a-trace-note"></p>
+          <h4>Result</h4>
+          <div class="rows" id="a-rows"></div>
+          <p class="verdict" id="a-verdict">No shots yet.</p>
+          <h4>Calibration</h4>
+          <div class="rows" id="a-cal"></div>
+          <p class="cap" id="a-fixwhy"></p>
+          <div class="btnrow">
+            <button id="a-apply" title="Write the trims above into the running robot. The shot table is then looked up at the corrected range and the turret at the corrected azimuth. Re-run the collection to confirm it worked.">Apply calibration</button>
+            <button id="a-calclear" title="Set both trims back to zero.">Zero trims</button>
+          </div>
+
+          <h4>Faults found</h4>
+          <ul id="a-faults" class="faults"><li class="cap">Nothing yet — collect some shots.</li></ul>
+          <h4>Where the shots landed</h4>
+          <div class="chart"><canvas id="a-scatter" width="640" height="400"></canvas></div>
+          <p class="cap">Each dot is one shot as it arrived at the goal: across is left/right
+            of the shot line, up is long/short. The ring is the CELL mouth. Filled dots
+            scored.</p>
+          <h4>Error against range</h4>
+          <div class="chart"><canvas id="a-vsrange" width="640" height="300"></canvas></div>
+          <p class="cap">Downrange error at each firing distance. A sloped cloud is a shot
+            table that is wrong at one end; a flat one that is simply offset is a constant
+            bias.</p>
+          <h4>Downrange error distribution</h4>
+          <div class="chart"><canvas id="a-hist" width="640" height="220"></canvas></div>
+          <h4>By range</h4>
+          <div id="a-bins" class="budget"></div>
+          <h4>Last 12 shots</h4>
+          <div class="rows" id="a-log"></div>
+        </section>
+
+        <section data-panel="tune">
+          <p class="cap">Every value here is read from <code>config/*.json</code> at load and
+            written back into the running world. Nothing in the simulator is hard-coded past
+            this panel. <b>Apply</b> rebuilds the match with the new numbers.</p>
+          <div id="tune-rows"></div>
+          <div class="btnrow">
+            <button id="apply-reset" class="go" title="Rebuild the world with the values above. Resets the match and clears the shot log.">Apply &amp; restart</button>
+            <button id="tune-default" title="Put every slider back to the value in config/params.json.">Defaults</button>
+          </div>
+        </section>
+
+        <section data-panel="guide">
+          <div id="guide"></div>
+        </section>
+      </aside>
+
+      <!-- ------------------------------------------------------------- action bar -->
+      <footer id="actions">
+        <div id="deck"></div>
+        <span class="grow"></span>
+        <span id="perf" class="mono"></span>
+        <span id="brain" class="mono">built-in</span>
+        <button id="primary" class="go">Start match</button>
+      </footer>
+    </div>
+    <script type="module" src="/packages/ui/src/main.ts"></script>
+  </body>
+</html>

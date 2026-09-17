@@ -1,0 +1,1034 @@
+/**
+ * Three.js view of the world. It draws the same primitives the physics collides with, so
+ * what you see is what the solver sees -- there is no separate render mesh to drift out of
+ * step with the colliders.
+ */
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+// `?url` so Vite treats the 12 MB STEP tessellation as an asset instead of trying to parse
+// it as a module (which serves a 200 that GLTFLoader cannot read).
+import fieldUrl from '../../../assets/field.glb?url';
+import type { FieldGeometry, BoxPiece } from '@core/field/geometry.js';
+import { inches, M_TO_IN, DEG } from '@core/units.js';
+import type { Snapshot, Vec3 } from '@core/types.js';
+
+const COL = {
+  tile: 0x39434f,
+  tileAlt: 0x323b46,
+  wall: 0x9fd8f0,
+  frame: 0x98a2ae,
+  red: 0xd0342c,
+  blue: 0x2f6fd0,
+  pollen: 0xf2b705,
+  robot: 0x5b6470,
+  flower: 0x4bbf8a,
+  zone: 0xffffff,
+  // the practice room the field stands in
+  roomFloor: 0x2a9db0,
+  roomFloorAlt: 0x2690a2,
+};
+
+export type CameraMode = 'orbit' | 'follow' | 'top' | 'muzzle' | 'fpv';
+
+/**
+ * POLLEN and NECTAR are hollow 26-hole balls, and that is most of what they look like.
+ * Punching real holes in the geometry would cost a CSG per ball; an alpha map on a sphere
+ * gives the same read for one 256px canvas, and the holes are see-through from both sides.
+ */
+/** A square bar spanning two points. Diagonal members are most of a real FTC field. */
+function bar(a: Vec3, b: Vec3, thick: number, mat: THREE.Material): THREE.Mesh {
+  const dir = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const len = dir.length();
+  const m = new THREE.Mesh(new THREE.BoxGeometry(thick, thick, len), mat);
+  m.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
+  m.lookAt(new THREE.Vector3(b[0], b[1], b[2]));
+  return m;
+}
+
+function holedBallTexture(): THREE.Texture {
+  const W = 512;
+  const H = 256;
+  // 26 hole axes: the 6 face, 12 edge and 8 corner directions of a cube. That is exactly
+  // the 26 a POLLEN has, and it spaces them evenly without any pole pile-up.
+  const axes: [number, number, number][] = [];
+  for (const v of [-1, 0, 1]) {
+    for (const w of [-1, 0, 1]) {
+      for (const u of [-1, 0, 1]) {
+        if (u || v || w) {
+          const n = Math.hypot(u, v, w);
+          axes.push([u / n, v / n, w / n]);
+        }
+      }
+    }
+  }
+  // Hole half-angle. The closest two of the 26 axes are about 35 deg apart (edge to
+  // corner), so anything past ~0.15 rad makes neighbouring holes merge and the ball
+  // dissolves into spikes.
+  const cosLimit = Math.cos(0.135);
+
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const g = cv.getContext('2d')!;
+  const img = g.createImageData(W, H);
+  for (let y = 0; y < H; y++) {
+    const theta = (y / (H - 1)) * Math.PI; // 0 at +Y pole
+    const sy = Math.cos(theta);
+    const st = Math.sin(theta);
+    for (let x = 0; x < W; x++) {
+      const phi = (x / W) * Math.PI * 2;
+      const dx = st * Math.cos(phi);
+      const dz = st * Math.sin(phi);
+      let hole = false;
+      for (const a of axes) {
+        if (dx * a[0] + sy * a[1] + dz * a[2] > cosLimit) {
+          hole = true;
+          break;
+        }
+      }
+      const i = (y * W + x) * 4;
+      const v = hole ? 0 : 255;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
+export class Scene {
+  readonly scene = new THREE.Scene();
+  readonly camera: THREE.PerspectiveCamera;
+  readonly renderer: THREE.WebGLRenderer;
+  cameraMode: CameraMode = 'orbit';
+  showTrajectory = true;
+
+  private ballMeshes: THREE.Mesh[] = [];
+  private rockers: THREE.Group[] = [];
+  private robotGroup = new THREE.Group();
+  private turretGroup = new THREE.Group();
+  private hoodMesh!: THREE.Mesh;
+  private wheelMeshes: THREE.Object3D[] = [];
+  private intakeRoller!: THREE.Mesh;
+  private flywheelMesh!: THREE.Mesh;
+  private spin = { wheel: 0, intake: 0, fly: 0 };
+  private trajLine: THREE.Line;
+  /** The convex boxes the physics actually uses. Hidden unless you ask for them. */
+  private colliderMeshes: THREE.Object3D[] = [];
+  /** Stand-in geometry, shown only until the CAD arrives (or if it never does). */
+  private proceduralMeshes: THREE.Object3D[] = [];
+  /** CAD geometry, once assets/field.glb has loaded. */
+  private cadRockers: (THREE.Object3D | null)[] = [null, null];
+  private orbit = { theta: -Math.PI / 2, phi: 1.0, dist: 6.5, target: new THREE.Vector3(0, 0.7, 0) };
+  private aimMarker: THREE.Mesh;
+  /**
+   * Where the viewer is looking, degrees, in the same frame as the robot's heading.
+   * Right-drag turns this; the UI feeds it to the brain so the robot follows the view.
+   */
+
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    private readonly geom: FieldGeometry,
+    ballSpecs: { id: number; r: number; kind: string }[],
+  ) {
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.scene.background = new THREE.Color(0xd8dde3);
+    this.scene.fog = new THREE.Fog(0xd8dde3, 26, 46);
+
+    this.camera = new THREE.PerspectiveCamera(50, 1, 0.05, 100);
+    this.camera.position.set(0, 3, 6);
+
+    // Indoor lighting: a bright ceiling bounce plus two soft overheads. No coloured rims --
+    // this is a gymnasium, and the shapes should read by their own colour.
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8a9199, 1.5));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.35);
+    sun.position.set(6, 12, 7);
+    this.scene.add(sun);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.55);
+    fill.position.set(-7, 8, -6);
+    this.scene.add(fill);
+
+    this.buildRoom();
+    this.buildField();
+    this.buildHives();
+    this.buildRobot();
+
+    // One material per ball kind, so the colour code is unmistakable:
+    // POLLEN yellow, red NECTAR red, blue NECTAR blue.
+    const holes = holedBallTexture();
+    const ballMat: Record<string, THREE.Material> = {};
+    for (const [kind, colour] of [['pollen', COL.pollen], ['nectarRed', COL.red], ['nectarBlue', COL.blue]] as const) {
+      ballMat[kind] = new THREE.MeshStandardMaterial({
+        color: colour, roughness: 0.42, metalness: 0.0,
+        emissive: colour, emissiveIntensity: kind === 'pollen' ? 0.14 : 0.22,
+        alphaMap: holes, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
+      });
+    }
+    for (const b of ballSpecs) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(b.r, 20, 14), ballMat[b.kind] ?? ballMat.pollen);
+      this.ballMeshes.push(m);
+      this.scene.add(m);
+    }
+
+    this.trajLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.85 }),
+    );
+    this.scene.add(this.trajLine);
+
+    this.aimMarker = new THREE.Mesh(
+      new THREE.RingGeometry(0.06, 0.09, 24),
+      new THREE.MeshBasicMaterial({ color: 0xffd166, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }),
+    );
+    this.scene.add(this.aimMarker);
+
+    this.applyVisibility();
+    this.loadCad();
+    this.attachControls();
+  }
+
+  private colliders = false;
+  private cadStatics: THREE.Object3D[] = [];
+  private cadLoaded = false;
+  private zoneMesh: THREE.Mesh | null = null;
+  /** One texture per rocker stop: the mouth swings across the pivot on a TIP. */
+  private zoneTex: [THREE.CanvasTexture | null, THREE.CanvasTexture | null] = [null, null];
+  private zoneSide: 0 | 1 = 0;
+  /** Whose hive the map was computed for. tools/shotzone.ts builds it for red. */
+  private zoneAlliance: 'red' | 'blue' = 'red';
+
+  /**
+   * Paint the field with where a shot is worth taking (tools/shotzone.ts).
+   *
+   * One textured plane a centimetre off the tiles, not a mesh per square: the map is a
+   * picture, and a picture is a texture. Green clears the gate, red does not, and the spots
+   * with no solution at all are left clear so the floor shows through.
+   *
+   * It is a MODEL map. It says where the physics is forgiving for a perfectly aimed shot,
+   * which is not the same as where this robot has been measured hitting anything.
+   */
+  setShotZone(
+    cells: { x_in: number; z_in: number; p: number }[],
+    cellsTipped: { x_in: number; z_in: number; p: number }[],
+    threshold: number,
+    step_in: number,
+  ): void {
+    if (this.zoneMesh) {
+      this.scene.remove(this.zoneMesh);
+      this.zoneMesh.geometry.dispose();
+      this.zoneMesh = null;
+    }
+    for (const t of this.zoneTex) t?.dispose();
+    this.zoneTex = [this.paintZone(cells, threshold, step_in), this.paintZone(cellsTipped, threshold, step_in)];
+    if (!this.zoneTex[0]) return;
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(2 * this.geom.halfWidth_m, 2 * this.geom.halfWidth_m),
+      new THREE.MeshBasicMaterial({ map: this.zoneTex[this.zoneSide], transparent: true, depthWrite: false }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = 0.01;
+    mesh.renderOrder = 2;
+    mesh.visible = false;
+    this.zoneMesh = mesh;
+    this.scene.add(mesh);
+  }
+
+  /** One stop's worth of map, as a texture. */
+  private paintZone(
+    cells: { x_in: number; z_in: number; p: number }[],
+    threshold: number,
+    step_in: number,
+  ): THREE.CanvasTexture | null {
+    if (!cells.length) return null;
+    const hw = this.geom.halfWidth_m;
+    const px = 512;
+    const cv = document.createElement('canvas');
+    cv.width = px;
+    cv.height = px;
+    const g = cv.getContext('2d');
+    if (!g) return null;
+    g.clearRect(0, 0, px, px);
+    const half = (step_in * 0.0254) / 2;
+    for (const c of cells) {
+      if (c.p <= 0) continue;
+      // Field metres -> texture pixels. The plane is laid out so +x is right and +z is down.
+      const toPx = (m: number) => ((m + hw) / (2 * hw)) * px;
+      const x = c.x_in * 0.0254;
+      const z = c.z_in * 0.0254;
+      const w = Math.max(2, (half * 2 / (2 * hw)) * px);
+      // Red below the gate, green above it, and the alpha carries how close it is either way.
+      const good = c.p >= threshold;
+      const t = Math.min(1, c.p / Math.max(threshold, 1e-6));
+      g.fillStyle = good ? 'rgba(60, 220, 120, 0.55)' : `rgba(230, 70, 60, ${(0.12 + 0.33 * t).toFixed(3)})`;
+      g.fillRect(toPx(x) - w / 2, toPx(z) - w / 2, w, w);
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /**
+   * Follow the rocker. A TIP puts it on its other stop and the up CELL becomes the other one,
+   * so the mouth swings across the pivot -- the zone measured 37 squares centred at z = -49 in
+   * there against 30 centred at +47 in before it. An overlay that did not switch would be
+   * telling the driver to stand in the wrong half of the field for the rest of the match.
+   */
+  private setZoneSide(side: 0 | 1): void {
+    if (side === this.zoneSide || !this.zoneMesh) return;
+    this.zoneSide = side;
+    const m = this.zoneMesh.material as THREE.MeshBasicMaterial;
+    m.map = this.zoneTex[side] ?? this.zoneTex[0];
+    m.needsUpdate = true;
+  }
+
+  set showShotZone(on: boolean) {
+    if (this.zoneMesh) this.zoneMesh.visible = on;
+  }
+  get showShotZone(): boolean {
+    return this.zoneMesh?.visible ?? false;
+  }
+
+  /** Show the convex shapes the solver sees instead of the CAD skin. */
+  set showColliders(on: boolean) {
+    this.colliders = on;
+    this.applyVisibility();
+  }
+  get showColliders(): boolean {
+    return this.colliders;
+  }
+
+  /**
+   * Three layers occupy the same space, so exactly one is shown at a time:
+   * the CAD skin, the procedural stand-in (before field.glb loads), and the collision boxes.
+   */
+  private applyVisibility(): void {
+    const showCad = this.cadLoaded && !this.colliders;
+    for (const m of this.colliderMeshes) m.visible = this.colliders;
+    for (const m of this.cadStatics) m.visible = showCad;
+    for (const r of this.cadRockers) if (r) r.visible = showCad;
+    for (const m of this.proceduralMeshes) m.visible = !showCad && !this.colliders;
+  }
+
+  /**
+   * Load the tessellated STEP (tools/cad2assets.py). Until it arrives -- or if it is missing
+   * because nobody has run the pipeline -- the procedural geometry stands in, so the app
+   * still works from a clean checkout.
+   */
+  private loadCad(): void {
+    // One fetch per page load, not per Scene: reset rebuilds the world and would otherwise
+    // re-download the whole field every time.
+    if (!Scene.cadPromise) {
+      Scene.cadPromise = new Promise((resolve, reject) => new GLTFLoader().load(fieldUrl, resolve, undefined, reject));
+    }
+    Scene.cadPromise.then(
+      (loaded) => {
+        const gltf = { scene: loaded.scene.clone(true) };
+        // The mesh carries a colour per vertex, assigned per part by tools/cad2assets.py,
+        // so one material serves every part and the alliance panels, aluminium and AprilTag
+        // panels all come out right.
+        const cad = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.35, roughness: 0.5, side: THREE.DoubleSide });
+        const glass = new THREE.MeshStandardMaterial({ color: 0x9fd8f5, metalness: 0.05, roughness: 0.12, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false });
+
+        // Collect first, THEN reparent: re-parenting inside traverse() mutates the very
+        // children arrays it is walking, which silently skips half the meshes.
+        const meshes: THREE.Mesh[] = [];
+        gltf.scene.traverse((o) => {
+          if (o instanceof THREE.Mesh) meshes.push(o);
+        });
+
+        for (const o of meshes) {
+          const name = (o.name || o.parent?.name || '').toLowerCase();
+          if (name.includes('rocker')) {
+            const red = name.includes('red');
+            const i = red ? 0 : 1;
+            const pivotX = red ? this.geom.hiveX_m.red : this.geom.hiveX_m.blue;
+            // The STEP holds the rocker at its CAD rest angle in world coordinates. Move the
+            // pivot to the origin, then undo that rest angle, and what is left is the body
+            // frame the live joint angle is applied to.
+            const inner = new THREE.Group();
+            o.position.set(-pivotX, -this.geom.pivotY_m, 0);
+            o.material = cad;
+            inner.add(o);
+            inner.rotation.x = red ? this.geom.restAngle_rad : -this.geom.restAngle_rad;
+            this.rockers[i]?.add(inner);
+            this.cadRockers[i] = inner;
+          } else {
+            o.material = name.includes('perimeter') ? glass : cad;
+            this.cadStatics.push(o);
+            this.scene.add(o);
+          }
+        }
+
+        this.cadLoaded = true;
+        this.applyVisibility();
+      },
+      () => {
+        // No field.glb: keep the procedural stand-in and say so once.
+        console.warn('assets/field.glb unreadable — run `python tools/cad2assets.py` to regenerate it');
+      },
+    );
+  }
+
+  /** Shared across Scene instances so a reset does not re-fetch the field. */
+  private static cadPromise: Promise<{ scene: THREE.Group }> | null = null;
+
+  // ---------------------------------------------------------------- build
+
+  private boxMesh(p: BoxPiece, mat: THREE.Material): THREE.Mesh {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(p.half[0] * 2, p.half[1] * 2, p.half[2] * 2), mat);
+    m.position.set(p.pos[0], p.pos[1], p.pos[2]);
+    m.rotation.x = p.rotX;
+    return m;
+  }
+
+  /**
+   * The room the field stands in.
+   *
+   * Floor only, deliberately. Walls gave the field a place to be but they also boxed the
+   * camera in: from any low angle you were looking at grey plasterboard instead of the
+   * robot. So the room is a floor that runs past the field on every side, a few landmarks
+   * to judge heading against, and open air above -- which reads as a venue and never gets
+   * between you and the shot.
+   */
+  private buildRoom(): void {
+    const hw = this.geom.halfWidth_m;
+    const R = hw + 4.2;
+    const room = new THREE.Group();
+
+    // 60 cm commercial tile, two tones, instanced: 2 draw calls for the whole floor.
+    const t = 0.6;
+    const n = Math.ceil(R / t);
+    const quad = new THREE.PlaneGeometry(t * 0.985, t * 0.985);
+    const tileA = new THREE.InstancedMesh(quad, new THREE.MeshStandardMaterial({ color: COL.roomFloor, roughness: 0.75 }), n * n * 4);
+    const tileB = new THREE.InstancedMesh(quad, new THREE.MeshStandardMaterial({ color: COL.roomFloorAlt, roughness: 0.75 }), n * n * 4);
+    const m4 = new THREE.Matrix4();
+    const rx = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
+    let ia = 0;
+    let ib = 0;
+    for (let i = -n; i < n; i++) {
+      for (let j = -n; j < n; j++) {
+        m4.copy(rx).setPosition(t * (i + 0.5), -0.02, t * (j + 0.5));
+        if ((i + j) & 1) tileB.setMatrixAt(ib++, m4);
+        else tileA.setMatrixAt(ia++, m4);
+      }
+    }
+    tileA.count = ia;
+    tileB.count = ib;
+    room.add(tileA, tileB);
+
+    // Two landmarks on the audience side, low enough to stay out of the shot: the scoring
+    // table and a banner board behind it. Without something asymmetric out there, the
+    // Driver camera gives you no way to tell which end of the field you are facing.
+    const board = new THREE.Mesh(
+      new THREE.BoxGeometry(3.4, 0.9, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x232830, roughness: 0.65 }),
+    );
+    board.position.set(0, 0.95, -(hw + 2.6));
+    room.add(board);
+    for (const sx of [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.4, 0.05), new THREE.MeshStandardMaterial({ color: 0x6d757e, metalness: 0.4, roughness: 0.5 }));
+      post.position.set(sx * 1.6, 0.7, -(hw + 2.6));
+      room.add(post);
+    }
+    room.add(this.table(0, -(hw + 1.5), 2.4));
+
+    this.scene.add(room);
+  }
+
+  /** A folding table: top plus four legs. One landmark, not a furniture showroom. */
+  private table(x: number, z: number, len: number, ry = 0): THREE.Group {
+    const g = new THREE.Group();
+    const topMat = new THREE.MeshStandardMaterial({ color: 0xb9c0c8, roughness: 0.6 });
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x6d757e, roughness: 0.5, metalness: 0.4 });
+    const top = new THREE.Mesh(new THREE.BoxGeometry(len, 0.04, 0.75), topMat);
+    top.position.y = 0.74;
+    g.add(top);
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.72, 0.04), legMat);
+        leg.position.set(sx * (len / 2 - 0.08), 0.36, sz * 0.31);
+        g.add(leg);
+      }
+    }
+    g.position.set(x, 0, z);
+    g.rotation.y = ry;
+    return g;
+  }
+
+  private buildField(): void {
+    const hw = this.geom.halfWidth_m;
+    const tile = inches(23.5);
+    const n = Math.round((hw * 2) / tile);
+    const tiles = new THREE.Group();
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const mat = new THREE.MeshStandardMaterial({ color: (i + j) % 2 ? COL.tile : COL.tileAlt, roughness: 0.95 });
+        const m = new THREE.Mesh(new THREE.BoxGeometry(tile * 0.985, 0.015, tile * 0.985), mat);
+        m.position.set(-hw + tile * (i + 0.5), -0.0075, -hw + tile * (j + 0.5));
+        tiles.add(m);
+      }
+    }
+    this.scene.add(tiles);
+
+    // perimeter
+    const wallMat = new THREE.MeshStandardMaterial({ color: COL.wall, transparent: true, opacity: 0.22, roughness: 0.1, metalness: 0.1, side: THREE.DoubleSide });
+    const h = this.geom.railTopY_m;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const g = new THREE.PlaneGeometry(hw * 2, h);
+      const m = new THREE.Mesh(g, wallMat);
+      m.position.set(dx * hw, h / 2, dz * hw);
+      m.rotation.y = dx !== 0 ? Math.PI / 2 : 0;
+      this.scene.add(m);
+    }
+
+    // The A-frame as the CAD actually builds it: four legs splaying from foot bars at the
+    // +-X walls up to two top corners, and the top bar between them. `geom.frame` is the
+    // physics approximation (posts and panels); this is what it looks like.
+    const frameMat = new THREE.MeshStandardMaterial({ color: COL.frame, roughness: 0.55, metalness: 0.45 });
+    const stand = (m: THREE.Object3D) => { this.proceduralMeshes.push(m); this.scene.add(m); return m; };
+    const footY = inches(0.6);
+    const topY = inches(41.45);
+    const footX = inches(24.08);
+    const footZ = inches(18.27);
+    const cornerX = inches(12.61);
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        stand(bar([sx * footX, footY, sz * footZ], [sx * cornerX, topY, 0], inches(1.1), frameMat));
+      }
+      // foot bar along Z at each end
+      const foot = new THREE.Mesh(new THREE.BoxGeometry(inches(2), inches(2.1), inches(38.9)), frameMat);
+      foot.position.set(sx * footX, footY, 0);
+      stand(foot);
+      const corner = new THREE.Mesh(new THREE.BoxGeometry(inches(3.3), inches(4.7), inches(3)), frameMat);
+      corner.position.set(sx * cornerX, inches(41.26), 0);
+      stand(corner);
+    }
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(inches(24), inches(1), inches(1)), frameMat);
+    topBar.position.set(0, topY, 0);
+    stand(topBar);
+
+    // FLOWERs, built the way am-5855 actually is: four vertical HIPS pipes standing on a
+    // base plate, three layer plates threaded onto them (cad-summary ring_y_in), and the
+    // backstop disc on top. It is a CAGE, not a tube -- you can see the ball inside it,
+    // which is the whole reason the real part is made of pipes.
+    const pipeMat = new THREE.MeshStandardMaterial({ color: 0xf2f5f8, roughness: 0.45 });
+    const plateMat = new THREE.MeshStandardMaterial({ color: COL.frame, roughness: 0.5, metalness: 0.4 });
+    const bandMat = new THREE.MeshBasicMaterial({ color: COL.flower, transparent: true, opacity: 0.11, side: THREE.DoubleSide, depthWrite: false });
+    for (const f of this.geom.flowers) {
+      const fg = new THREE.Group();
+      fg.position.set(f.x_m, 0, f.z_m);
+      const pipeR = inches(0.5);
+      const ringR = f.openingR_m + pipeR;   // pipe centres sit just outside the opening
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
+        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(pipeR, pipeR, f.topY_m, 10), pipeMat);
+        pipe.position.set(Math.cos(a) * ringR, f.topY_m / 2, Math.sin(a) * ringR);
+        fg.add(pipe);
+      }
+      // The three layer plates: annular, so the 4 in throat stays open all the way down.
+      for (const y of [f.scoreLow_m - inches(4.14), f.scoreLow_m, f.scoreHigh_m]) {
+        const plate = new THREE.Mesh(new THREE.RingGeometry(f.openingR_m, ringR + pipeR, 24), plateMat);
+        plate.rotation.x = -Math.PI / 2;
+        plate.position.y = y;
+        plate.material.side = THREE.DoubleSide;
+        fg.add(plate);
+      }
+      // Backstop disc, closed: this is what a ball entering from above bounces off.
+      const back = new THREE.Mesh(new THREE.CylinderGeometry(ringR + pipeR, ringR + pipeR, inches(0.25), 24), plateMat);
+      back.position.y = f.topY_m + inches(0.12);
+      fg.add(back);
+      stand(fg);
+
+      // The scoring band, drawn even with the CAD showing: a ball between these two plates
+      // is scored, and you cannot see that from the structure alone.
+      const band = new THREE.Mesh(
+        new THREE.CylinderGeometry(f.openingR_m * 0.99, f.openingR_m * 0.99, f.scoreHigh_m - f.scoreLow_m, 20, 1, true),
+        bandMat,
+      );
+      band.position.set(f.x_m, (f.scoreLow_m + f.scoreHigh_m) / 2, f.z_m);
+      this.scene.add(band);
+      // The two boundaries themselves. A tinted column alone is ambiguous about where it
+      // starts and stops, and where it stops is the difference between scored and not.
+      for (const y of [f.scoreLow_m, f.scoreHigh_m]) {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(f.openingR_m * 1.02, 0.004, 6, 24),
+          new THREE.MeshBasicMaterial({ color: COL.flower }),
+        );
+        ring.rotation.x = Math.PI / 2;
+        ring.position.set(f.x_m, y, f.z_m);
+        this.scene.add(ring);
+      }
+    }
+
+    // zones
+    for (const z of this.geom.zones) {
+      const g = new THREE.PlaneGeometry(z.max[0] - z.min[0], z.max[2] - z.min[2]);
+      const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: z.alliance === 'red' ? COL.red : COL.blue, transparent: true, opacity: z.name === 'LOADING' ? 0.18 : 0.30, side: THREE.DoubleSide }));
+      m.rotation.x = -Math.PI / 2;
+      m.position.set((z.min[0] + z.max[0]) / 2, 0.004, (z.min[2] + z.max[2]) / 2);
+      this.scene.add(m);
+      void COL.zone;
+    }
+  }
+
+  /**
+   * The rocker, shaped like the CAD part rather than like its collision boxes.
+   *
+   * The pocket walls ARE the colliders (so what you see still collides), but the pentagon
+   * end ribs, the basket arm out to the pivot, the churro bracing across the mouth and the
+   * AprilTag panel are the real am-5853 parts, sized from cad/parts.json. Render only --
+   * none of it is in the physics, which is why it can be shaped honestly.
+   */
+  private buildHives(): void {
+    const g0 = this.geom;
+    for (const [i, alliance] of (['red', 'blue'] as const).entries()) {
+      const g = new THREE.Group();
+      g.position.set(alliance === 'red' ? g0.hiveX_m.red : g0.hiveX_m.blue, g0.pivotY_m, 0);
+      const colour = alliance === 'red' ? COL.red : COL.blue;
+
+      const skin = new THREE.MeshStandardMaterial({
+        color: colour, roughness: 0.45, metalness: 0.1,
+        transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+      });
+      const ribMat = new THREE.MeshStandardMaterial({ color: colour, roughness: 0.4, metalness: 0.15, side: THREE.DoubleSide });
+      const alu = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.75, roughness: 0.3 });
+
+      const wire = new THREE.MeshBasicMaterial({ color: 0x67e8f9, wireframe: true });
+      for (const cell of g0.cells) {
+        // the collision shell: what the solver actually sees
+        for (const piece of cell.pieces) {
+          const solid = this.boxMesh(piece, skin);
+          g.add(solid);
+          this.proceduralMeshes.push(solid);
+          const box = this.boxMesh(piece, wire);
+          g.add(box);
+          this.colliderMeshes.push(box);
+        }
+
+        const phi = cell.bodyAngle_rad;
+        const c = Math.cos(phi);
+        const sn = Math.sin(phi);
+        /** pocket-local (x, u, t) -> rocker body frame */
+        const at = (x: number, u: number, t: number): Vec3 => [
+          x,
+          (cell.radius_m + u) * c - t * sn,
+          (cell.radius_m + u) * sn + t * c,
+        ];
+        const hu = cell.halfInterior[1];
+        const ht = cell.halfInterior[2];
+        const hx = cell.halfInterior[0];
+
+        // Pentagon end ribs (am-5866), one at each end of the 20 in width.
+        const profile = new THREE.Shape();
+        const pts: [number, number][] = [
+          [hu, ht], [hu, -ht], [-hu * 0.45, -ht], [-hu, -ht * 0.55], [-hu, ht * 0.55], [-hu * 0.45, ht],
+        ];
+        profile.moveTo(pts[0][0], pts[0][1]);
+        for (const [u, t] of pts.slice(1)) profile.lineTo(u, t);
+        profile.closePath();
+        for (const sx of [-1, 1]) {
+          const rib = new THREE.Mesh(new THREE.ExtrudeGeometry(profile, { depth: inches(0.25), bevelEnabled: false }), ribMat);
+          // the shape lives in (u, t); stand it up and slide it to the end of the pocket
+          rib.rotation.set(0, Math.PI / 2, 0);
+          rib.position.set(sx * hx, 0, 0);
+          const holder = new THREE.Group();
+          holder.add(rib);
+          holder.position.set(0, cell.radius_m * c, cell.radius_m * sn);
+          holder.rotation.x = phi;
+          g.add(holder);
+          this.proceduralMeshes.push(holder);
+        }
+
+        // Basket base tube (am-5868): the arm from the pivot out to the pocket.
+        const arm = bar([0, 0, 0], at(0, -hu + inches(1), 0), inches(1), alu);
+        g.add(arm);
+        this.proceduralMeshes.push(arm);
+
+        // Two 10.5 in churros (am-5867) bracing the mouth, one at each end.
+        for (const sx of [-1, 1]) {
+          const ch = bar(at(sx * hx * 0.92, hu * 0.55, -ht * 0.8), at(sx * hx * 0.92, -hu * 0.1, ht * 0.9), inches(0.35), alu);
+          g.add(ch);
+          this.proceduralMeshes.push(ch);
+        }
+
+        // AprilTag panel (am-5888) on the underside, facing out of the mouth.
+        const tag = new THREE.Mesh(
+          new THREE.PlaneGeometry(inches(17), inches(4.3)),
+          new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.9, side: THREE.DoubleSide }),
+        );
+        const tagPos = at(0, -hu + inches(0.4), -ht * 0.55);
+        tag.position.set(tagPos[0], tagPos[1], tagPos[2]);
+        tag.rotation.x = phi + Math.PI / 2;
+        g.add(tag);
+        this.proceduralMeshes.push(tag);
+      }
+
+      // the pivot axle itself (am-5881 spacers ride on this line)
+      const axle = new THREE.Mesh(new THREE.CylinderGeometry(inches(0.5), inches(0.5), inches(22), 14), alu);
+      axle.rotation.z = Math.PI / 2;
+      g.add(axle);
+      this.proceduralMeshes.push(axle);
+
+      this.scene.add(g);
+      this.rockers[i] = g;
+    }
+  }
+
+  /**
+   * A robot rather than a box: mecanum wheels you can see turn, a roller intake across the
+   * front with a visible mouth, a hopper you can see balls sitting in, and a turret carrying
+   * the shooter with a barrel that is clearly the OUTtake. Render only -- the physics is
+   * still one box plus the tyre model, which is what `robot.json` describes.
+   */
+  private buildRobot(): void {
+    const c = { L: 0.43, W: 0.43, H: 0.30 };
+    const frame = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.5, roughness: 0.45 });
+    const panel = new THREE.MeshStandardMaterial({ color: COL.robot, metalness: 0.2, roughness: 0.4, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+    const rubber = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 });
+    const roller = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.7 });
+    const steel = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.7, roughness: 0.3 });
+
+    // chassis rails
+    for (const sy of [-1, 1]) {
+      for (const [w, d, ox, oz] of [[c.W, 0.03, 0, c.L / 2], [c.W, 0.03, 0, -c.L / 2], [0.03, c.L, c.W / 2, 0], [0.03, c.L, -c.W / 2, 0]] as const) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, d), frame);
+        rail.position.set(ox, (sy * c.H) / 2 - sy * 0.025, oz);
+        this.robotGroup.add(rail);
+      }
+    }
+    // side panels so it reads as a body, not a cage
+    for (const sx of [-1, 1]) {
+      const side = new THREE.Mesh(new THREE.PlaneGeometry(c.L, c.H * 0.8), panel);
+      side.position.set((sx * c.W) / 2, 0, 0);
+      side.rotation.y = Math.PI / 2;
+      this.robotGroup.add(side);
+    }
+
+    // four mecanum wheels, with rollers at 45 deg so the direction reads
+    this.wheelMeshes = [];
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const hub = new THREE.Group();
+        const tyre = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.038, 18), rubber);
+        tyre.rotation.z = Math.PI / 2;
+        hub.add(tyre);
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          const r = new THREE.Mesh(new THREE.CapsuleGeometry(0.008, 0.028, 3, 6), steel);
+          r.position.set(0, Math.cos(a) * 0.045, Math.sin(a) * 0.045);
+          // rollers lie at +-45 deg, mirrored across the diagonals like a real mecanum set
+          r.rotation.set(0, 0, Math.PI / 2);
+          r.rotateOnAxis(new THREE.Vector3(1, 0, 0), a);
+          r.rotateOnAxis(new THREE.Vector3(0, 1, 0), (sx * sz > 0 ? 1 : -1) * Math.PI / 4);
+          hub.add(r);
+        }
+        hub.position.set((sx * (c.W + 0.03)) / 2, -c.H / 2 + 0.028, (sz * 0.33) / 2);
+        this.robotGroup.add(hub);
+        this.wheelMeshes.push(hub);
+      }
+    }
+
+    // INTAKE: a roller across the front, under a mouth you can see into
+    const intake = new THREE.Group();
+    this.intakeRoller = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.30, 12), roller);
+    this.intakeRoller.rotation.z = Math.PI / 2;
+    intake.add(this.intakeRoller);
+    for (const sx of [-1, 1]) {
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.10, 0.10), frame);
+      plate.position.set(sx * 0.16, 0.02, -0.02);
+      intake.add(plate);
+    }
+    const lip = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.012, 0.07), frame);
+    lip.position.set(0, -0.032, 0.035);
+    lip.rotation.x = -0.35;
+    intake.add(lip);
+    intake.position.set(0, -c.H / 2 + 0.05, c.L / 2 + 0.03);
+    this.robotGroup.add(intake);
+
+    // a nose stripe, so facing is unmistakable from the top camera
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.012, 0.04), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    nose.position.set(0, c.H / 2 + 0.008, c.L / 2 - 0.04);
+    this.robotGroup.add(nose);
+
+    // hopper: an open bin you can see the stack of balls sitting in
+    const bin = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.20, 0.24), new THREE.MeshStandardMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.22, side: THREE.DoubleSide }));
+    bin.position.set(0, -c.H / 2 + 0.12, -0.02);
+    this.robotGroup.add(bin);
+
+    // TURRET, shaped like a real FTC shooter rather than a cannon.
+    //
+    // A lazy-susan ring carries a deck; two side plates stand on the deck and hold a single
+    // grippy flywheel; a curved HOOD wraps over the top of the flywheel, and the ball is
+    // squeezed between the two and leaves along the tangent at the hood's lip. That is the
+    // whole mechanism, and every part of it here does the job its real counterpart does:
+    // changing the hood angle rotates the wrap, which is exactly what aims the shot.
+    const alum = new THREE.MeshStandardMaterial({ color: 0xaeb6c0, metalness: 0.65, roughness: 0.32, side: THREE.DoubleSide });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x3a4250, metalness: 0.4, roughness: 0.5 });
+    const grip = new THREE.MeshStandardMaterial({ color: 0x23282f, roughness: 0.95 });
+
+    // lazy-susan: a bearing race with visible teeth, then the deck it turns
+    const race = new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.115, 0.012, 32), dark);
+    this.turretGroup.add(race);
+    const teeth = new THREE.Mesh(new THREE.CylinderGeometry(0.108, 0.108, 0.016, 48), alum);
+    teeth.position.y = 0.012;
+    this.turretGroup.add(teeth);
+    const deck = new THREE.Mesh(new THREE.CylinderGeometry(0.100, 0.100, 0.008, 24), alum);
+    deck.position.y = 0.024;
+    this.turretGroup.add(deck);
+
+    // side plates: the load-bearing part of every shooter ever built
+    const FLY_Y = 0.085;       // flywheel axle height above the turret origin
+    const FLY_R = 0.050;
+    for (const side of [-1, 1]) {
+      const plateShape = new THREE.Shape();
+      plateShape.moveTo(-0.075, 0);
+      plateShape.lineTo(0.075, 0);
+      plateShape.lineTo(0.075, 0.055);
+      plateShape.absarc(0, 0.061, 0.075, 0, Math.PI, false);
+      plateShape.lineTo(-0.075, 0);
+      // lightening hole, because a real plate has one and it reads instantly as aluminium
+      const hole = new THREE.Path();
+      hole.absarc(0, 0.061, 0.030, 0, Math.PI * 2, true);
+      plateShape.holes.push(hole);
+      const plate = new THREE.Mesh(new THREE.ExtrudeGeometry(plateShape, { depth: 0.004, bevelEnabled: false }), alum);
+      plate.rotation.y = Math.PI / 2;
+      plate.position.set(side * 0.048, 0.028, 0);
+      this.turretGroup.add(plate);
+    }
+
+    // the flywheel: a grippy wheel on a visible axle, between the plates
+    this.flywheelMesh = new THREE.Mesh(new THREE.CylinderGeometry(FLY_R, FLY_R, 0.055, 24), grip);
+    this.flywheelMesh.rotation.z = Math.PI / 2;
+    this.flywheelMesh.position.set(0, FLY_Y, 0);
+    // four rim markers: a plain black wheel spinning at 4000 rpm reads as stationary
+    // without something on it to watch.
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2;
+      const mark = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.058, 0.009), alum);
+      mark.position.set(Math.cos(a) * FLY_R * 0.82, 0, Math.sin(a) * FLY_R * 0.82);
+      this.flywheelMesh.add(mark);
+    }
+    this.turretGroup.add(this.flywheelMesh);
+    const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.115, 8), steel);
+    axle.rotation.z = Math.PI / 2;
+    axle.position.set(0, FLY_Y, 0);
+    this.turretGroup.add(axle);
+
+    // feed ramp up from the hopper, so you can see where the ball comes from
+    const ramp = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.003, 0.13), alum);
+    ramp.position.set(0, 0.048, -0.055);
+    ramp.rotation.x = 0.45;
+    this.turretGroup.add(ramp);
+
+    // HOOD: a curved wrap concentric with the flywheel, held one ball-radius off it. It
+    // pivots about the flywheel axis, and the ball leaves tangentially at its lip -- so the
+    // hood angle you see IS the launch elevation.
+    this.hoodMesh = new THREE.Group() as unknown as THREE.Mesh;
+    // The wrap spans local angle a in [0, WRAP], measured from +Z (straight ahead) up and
+    // over the wheel, so a = 0 IS the exit lip. Rotating the group by -elevation about X
+    // then puts the lip at exactly the elevation the shot leaves at -- the hood you see is
+    // the hood the ballistics uses.
+    const WRAP = Math.PI * 0.83;
+    const gap = FLY_R + inches(2.5);               // wheel radius + a POLLEN
+    const wrap = new THREE.Mesh(
+      new THREE.CylinderGeometry(gap, gap, 0.062, 30, 1, true, 0, WRAP),
+      new THREE.MeshStandardMaterial({ color: 0xd7dde4, metalness: 0.45, roughness: 0.35, side: THREE.DoubleSide }),
+    );
+    wrap.rotation.z = Math.PI / 2;                 // cylinder axis Y -> X, cross-section into YZ
+    this.hoodMesh.add(wrap);
+    // edge ribs: what stops a real sheet hood flexing, and they make the curve read
+    for (const sx of [-1, 1]) {
+      const rib = new THREE.Mesh(new THREE.TorusGeometry(gap, 0.004, 6, 26, WRAP), alum);
+      rib.rotation.y = -Math.PI / 2;               // torus XY plane -> YZ, angle from +Z
+      rib.position.x = sx * 0.031;
+      this.hoodMesh.add(rib);
+    }
+    // the lip the ball leaves over, tangent to the wrap at a = 0
+    const exit = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.026, 0.004), new THREE.MeshStandardMaterial({ color: COL.pollen, roughness: 0.5 }));
+    exit.position.set(0, -0.010, gap);
+    this.hoodMesh.add(exit);
+    // the link that sets the angle, from the deck up to the back of the wrap
+    const link = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.08, 6), steel);
+    link.position.set(0.042, Math.sin(WRAP) * gap * 0.5 - 0.03, Math.cos(WRAP) * gap * 0.5);
+    link.rotation.x = 0.7;
+    this.hoodMesh.add(link);
+    this.hoodMesh.position.set(0, FLY_Y, 0);
+    this.turretGroup.add(this.hoodMesh);
+
+    this.turretGroup.position.set(0, c.H / 2 - 0.02, 0);
+    this.robotGroup.add(this.turretGroup);
+    this.scene.add(this.robotGroup);
+  }
+
+  // ---------------------------------------------------------------- update
+
+  update(s: Snapshot, aim: Vec3 | null, traj: Vec3[] | null): void {
+    for (let i = 0; i < s.balls.length; i++) {
+      const b = s.balls[i];
+      const m = this.ballMeshes[i];
+      if (!m) continue;
+      m.visible = b.p[1] > -0.5;
+      m.position.set(b.p[0], b.p[1], b.p[2]);
+    }
+
+    for (const [i, h] of s.hives.entries()) {
+      const g = this.rockers[i];
+      if (g) g.rotation.x = h.angleDeg * DEG;
+      if (h.alliance === this.zoneAlliance) this.setZoneSide(h.upCell === 'A' ? 0 : 1);
+    }
+
+    const r = s.robot;
+    this.robotGroup.position.set(r.p[0], r.p[1], r.p[2]);
+    this.robotGroup.rotation.y = r.yawDeg * DEG;
+    this.turretGroup.rotation.y = r.turret.angleDeg * DEG;
+    this.hoodMesh.rotation.x = -r.hood.angleDeg * DEG;
+
+    // Moving parts actually move: wheels at their own rate, the intake roller while it is
+    // running, the flywheel at its real RPM. It is the quickest read on what the robot is
+    // doing without looking at a single number.
+    const dt = 1 / 60;
+    r.wheels.forEach((w, i) => {
+      const hub = this.wheelMeshes[i];
+      if (hub) hub.rotation.x += w.omega * dt;
+    });
+    this.spin.intake += r.intake.power * 14 * dt;
+    this.intakeRoller.rotation.y = this.spin.intake;
+    this.spin.fly += (r.flywheel.rpm / 60) * 2 * Math.PI * dt;
+    this.flywheelMesh.rotation.y = this.spin.fly;
+
+    if (aim) {
+      this.aimMarker.position.set(aim[0], aim[1], aim[2]);
+      this.aimMarker.lookAt(this.camera.position);
+      this.aimMarker.visible = true;
+    } else {
+      this.aimMarker.visible = false;
+    }
+
+    if (this.showTrajectory && traj && traj.length > 1) {
+      this.trajLine.geometry.dispose();
+      this.trajLine.geometry = new THREE.BufferGeometry().setFromPoints(traj.map((p) => new THREE.Vector3(p[0], p[1], p[2])));
+      this.trajLine.visible = true;
+    } else {
+      this.trajLine.visible = false;
+    }
+
+    this.placeCamera(s);
+  }
+
+  private placeCamera(s: Snapshot): void {
+    const r = s.robot;
+    const o = this.orbit;
+    switch (this.cameraMode) {
+      case 'top':
+        this.camera.position.set(0, 6.2, 0.001);
+        this.camera.lookAt(0, 0, 0);
+        break;
+      case 'follow': {
+        // Behind the robot, at the orbit's own elevation so the wheel still tilts the view.
+        const yaw = r.yawDeg * DEG;
+        const back = 2.1 + o.phi * 0.5;
+        this.camera.position.set(r.p[0] - Math.sin(yaw) * back, r.p[1] + 0.55 + o.phi * 0.9, r.p[2] - Math.cos(yaw) * back);
+        this.camera.lookAt(r.p[0] + Math.sin(yaw) * 1.5, r.p[1] + 0.25, r.p[2] + Math.cos(yaw) * 1.5);
+        break;
+      }
+      case 'fpv': {
+        // Driver's eye: on the robot, looking where the robot is pointed. The turret is
+        // free to be aimed somewhere else entirely, which is the whole point of having one.
+        const yaw = r.yawDeg * DEG;
+        this.camera.position.set(r.p[0] + Math.sin(yaw) * 0.18, r.p[1] + 0.22, r.p[2] + Math.cos(yaw) * 0.18);
+        this.camera.lookAt(
+          r.p[0] + Math.sin(yaw) * 6,
+          r.p[1] + 0.22 + 0.9,
+          r.p[2] + Math.cos(yaw) * 6,
+        );
+        break;
+      }
+      case 'muzzle': {
+        const yaw = (r.yawDeg + r.turret.angleDeg) * DEG;
+        this.camera.position.set(r.p[0] + Math.sin(yaw) * 0.1, r.p[1] + 0.25, r.p[2] + Math.cos(yaw) * 0.1);
+        const el = r.hood.angleDeg * DEG;
+        this.camera.lookAt(
+          r.p[0] + Math.sin(yaw) * Math.cos(el) * 4,
+          r.p[1] + 0.25 + Math.sin(el) * 4,
+          r.p[2] + Math.cos(yaw) * Math.cos(el) * 4,
+        );
+        break;
+      }
+      default:
+        this.camera.position.set(
+          o.target.x + o.dist * Math.sin(o.phi) * Math.cos(o.theta),
+          o.target.y + o.dist * Math.cos(o.phi),
+          o.target.z + o.dist * Math.sin(o.phi) * Math.sin(o.theta),
+        );
+        this.camera.lookAt(o.target);
+    }
+  }
+
+  private attachControls(): void {
+    let dragging = false;
+    let lx = 0;
+    let ly = 0;
+    this.canvas.addEventListener('pointerdown', (e) => {
+      lx = e.clientX;
+      ly = e.clientY;
+      // Either button orbits. Right-drag used to turn the ROBOT as well, which made the
+      // chassis chase the camera every time you looked around -- fine in a shooter, awful
+      // when you are trying to hold a firing position.
+      dragging = true;
+      this.canvas.setPointerCapture(e.pointerId);
+    });
+    const release = (e: PointerEvent) => {
+      dragging = false;
+      try { this.canvas.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+    };
+    this.canvas.addEventListener('pointerup', release);
+    this.canvas.addEventListener('pointercancel', release);
+    addEventListener('blur', () => { dragging = false; });
+    this.canvas.addEventListener('pointermove', (e) => {
+      if (!dragging || this.cameraMode !== 'orbit') return;
+      const dx = e.clientX - lx;
+      const dy = e.clientY - ly;
+      if (e.shiftKey || e.buttons === 4) {
+        // Shift-drag pans: slide the orbit target across the camera's own screen plane, so
+        // it follows the mouse whichever way the camera happens to be facing.
+        const scale = this.orbit.dist * 0.0016;
+        const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0);
+        const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 1);
+        this.orbit.target.addScaledVector(right, -dx * scale).addScaledVector(up, dy * scale);
+        const lim = this.geom.halfWidth_m + 1;
+        this.orbit.target.x = Math.max(-lim, Math.min(lim, this.orbit.target.x));
+        this.orbit.target.y = Math.max(0, Math.min(3, this.orbit.target.y));
+        this.orbit.target.z = Math.max(-lim, Math.min(lim, this.orbit.target.z));
+      } else {
+        this.orbit.theta += dx * 0.006;
+        this.orbit.phi = Math.min(1.52, Math.max(0.12, this.orbit.phi - dy * 0.006));
+      }
+      lx = e.clientX;
+      ly = e.clientY;
+    });
+    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.orbit.dist = Math.min(14, Math.max(1.2, this.orbit.dist * (1 + Math.sign(e.deltaY) * 0.1)));
+    }, { passive: false });
+  }
+
+  resize(): void {
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    this.renderer.setSize(w, h, false);
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+  }
+
+  render(): void {
+    this.renderer.render(this.scene, this.camera);
+  }
+}
+
+export const _unused = M_TO_IN;

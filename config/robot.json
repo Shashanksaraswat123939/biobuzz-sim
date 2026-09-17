@@ -1,0 +1,243 @@
+{
+ "_about": "One robot description, two consumers: the TypeScript world builds the body from it, the Java RobotConfig reads the same file.",
+ "name": "box-v1",
+ "version": 1,
+ "chassis": {
+  "length_m": 0.43,
+  "width_m": 0.43,
+  "height_m": 0.3,
+  "mass_kg": 14.0,
+  "Izz_kgm2": null,
+  "cgOffset_m": [
+   0,
+   -0.05,
+   0
+  ],
+  "clearance_m": 0.02,
+  "_source": "guess (typical 18in FTC box robot at the weight limit)"
+ },
+ "drivetrain": {
+  "type": "mecanum",
+  "wheelRadius_m": 0.048,
+  "wheelbase_m": 0.33,
+  "track_m": 0.33,
+  "rollerAngle_deg": 45,
+  "mu": 0.85,
+  "eta": 0.8,
+  "rollingRes_N": 3.0,
+  "_source": "goBILDA 96mm mecanum; mu/eta/rollingRes guessed - CALIBRATE",
+  "motors": {
+   "fl": {
+    "variant": "5203-312",
+    "gearRatio": 1.0,
+    "reversed": true
+   },
+   "fr": {
+    "variant": "5203-312",
+    "gearRatio": 1.0,
+    "reversed": false
+   },
+   "bl": {
+    "variant": "5203-312",
+    "gearRatio": 1.0,
+    "reversed": true
+   },
+   "br": {
+    "variant": "5203-312",
+    "gearRatio": 1.0,
+    "reversed": false
+   }
+  }
+ },
+ "intake": {
+  "motor": {
+   "variant": "5203-1150",
+   "gearRatio": 1.0
+  },
+  "mouth": {
+   "width_m": 0.3,
+   "height_m": 0.12,
+   "depth_m": 0.1
+  },
+  "captureThreshold": 0.3,
+  "captureDelay_s": 0.1,
+  "length_m": 0.35,
+  "speed_mps": 1.2,
+  "_source": "guess - design parameter, not measured",
+  "rollerRadius_m": 0.035,
+  "rollerRadius_m_source": "guess: a 2.75 in compliant wheel, the usual FTC intake roller - CALIBRATE",
+  "rollerMu": 1.1,
+  "rollerMu_source": "guess: durometer-35 compliant wheel on a moulded plastic ball. Caps the force the roller can put into a ball - CALIBRATE",
+  "squeeze_N": 6.0,
+  "squeeze_N_source": "guess: how hard the roller is preloaded onto the ball by sitting below ball height. This is the normal load that makes the friction cap non-trivial - CALIBRATE"
+ },
+ "hopper": {
+  "capacity": 6,
+  "_source": "design parameter"
+ },
+ "transfer": {
+  "motor": {
+   "variant": "5203-312",
+   "gearRatio": 1.0
+  },
+  "cycleTime_s": 1.5,
+  "feedPulse_s": 0.25,
+  "feedTransit_s": 0.15,
+  "gate": {
+   "enabled": true,
+   "servo": "gate",
+   "open": 1.0,
+   "closed": 0.0
+  },
+  "_source": "design parameter - the knob this project exists to explore",
+  "beltRadius_m": 0.024,
+  "beltRadius_m_source": "guess: the drive pulley on the feed belt. Belt speed is motor omega times this, and the belt has to beat gravity to lift a ball up the shaft - CALIBRATE",
+  "indexLift": 0.6,
+  "indexLift_source": "How much of the indexer's push acts upward. A real indexer is a wheel pressed against the ball with its contact patch BELOW the ball's centre, so it lifts as much as it shoves. At 0 -- a purely horizontal shove, which is what this was -- a ball resting on the bin floor is pinned by its own floor contact and does not move at all, so balls only reached the magazine when something else shook them there. Sweep it before trusting the value: the working window measured in the sister build is 0.3-0.8, with 0 and 0.1 feeding nothing and 1.0 throwing balls out of the bin."
+ },
+ "turret": {
+  "enabled": true,
+  "type": "motor",
+  "motor": {
+   "variant": "5203-117",
+   "gearRatio": 2.0,
+   "ticksPerDeg": 8.0
+  },
+  "range_deg": [
+   -120,
+   120
+  ],
+  "speed_dps": 180,
+  "accel_dps2": 900,
+  "muzzleOffset_m": 0.12,
+  "muzzleHeight_m": 0.28,
+  "_source": "design parameter",
+  "_accelSource": "guess: 900 deg/s^2 reaches the 180 deg/s slew limit in 0.2 s, which is what a 5203-117 through a 2:1 reduction does against a turret of a few hundred g.cm^2. Derive it properly from motor torque over turret MOI once the real turret exists - CALIBRATE"
+ },
+ "hood": {
+  "enabled": true,
+  "servo": "hood",
+  "angleRange_deg": [
+   30,
+   85
+  ],
+  "fixedAngle_deg": 45,
+  "speed_dps": 120,
+  "_source": "design parameter, chosen by tools/hoodsweep.ts",
+  "_sweepNote": "PLAN.md's default was [30,60]. At that range every solution arrives still CLIMBING at 20-40 deg, threads the mouth and rebounds off the far wall: 19 usable ranges, best speed margin 8.0%. Extending the top of the range to 85 deg lets the ball drop in at 85 deg: 25 usable ranges covering 30-150 in, best margin 14.8% at 75 in. Re-run the sweep if the shooter geometry changes."
+ },
+ "flywheel": {
+  "type": "single",
+  "motor": {
+   "variant": "5202-6000",
+   "gearRatio": 1.0
+  },
+  "I_fly_kgm2": 0.000121,
+  "r_fly_m": 0.048,
+  "k": 0.45,
+  "lossFactor": 2.0,
+  "minRpmFrac": 0.97,
+  "readySteps": 3,
+  "dragQuad_Nms2": 1.4e-08,
+  "coulomb_Nm": 0.002,
+  "_dragSource": "guess, sized so windage costs about 5% of stall torque at free speed; a bigger value simply caps the achievable RPM - CALIBRATE from a TuningFlywheel spin-up curve",
+  "tolRpm": 60,
+  "maxRpm": 6000,
+  "_tolRpmSource": "the hub velocity loop settles 50-90 RPM above target at these gains, so an 80 RPM window opened only intermittently; 120 RPM is about 3% at the typical 3700 RPM target - tighten it once the loop is calibrated on the real hub",
+  "scatter": {
+   "angle_deg": 1.0,
+   "yaw_deg": 1.0,
+   "speedFrac": 0.015
+  },
+  "_source": "I_fly from Gecko 96mm (cited); k/lossFactor guesses - CALIBRATE.",
+  "_motorNote": "PLAN.md's default was a 5203-1620 at 1:1, which tops out at v_exit = k*w*r = 0.45*169.6*0.048 = 3.7 m/s and cannot reach the HIVE from anywhere on the field. A bare 6000 RPM motor gives 13.6 m/s. A 2:1 step-up on the 1620, or a dual-wheel k of 0.90, would do as well.",
+  "minLandProb": 0.9,
+  "minLandProb_source": "MEASURED, and for the first time the number asked for is the number delivered. The shot is refused unless the robot computes at least this CALIBRATED chance of landing: P(exit speed inside the band that threads the mouth, from the FILTERED wheel speed) x P(pointing inside the mouth, from the current turret error and the launch yaw scatter) x P(a ball arriving like that stays in, from tools/entrycheck.ts), all passed through the measured score-to-frequency curve in config/landcal.json. tools/landcal.ts, 304 settled shots over 8 seeds and 3 ranges, equal-count bins: the 0.90-0.92 band lands 90% -- a ONE POINT model error -- and the ceiling is 90%. Earlier fits could not support this: with the tachometer unfiltered and the wheel driven by the hub's velocity PIDF the ceiling measured 70%, and with the bearing term missing entirely it measured 86% on 14 samples and did not reproduce. Setting 0.90 before those were fixed made the robot mute; setting it now is honest. This sits ON TOP of the tolRpm window rather than replacing it, so 0 reproduces the old ungated behaviour exactly.",
+  "tolRpm_source": "MEASURED by tools/trimsweep.ts against balls in the CELL. It cannot be read off a datasheet because the floor is the encoder: the flywheel runs 28 ticks a rev direct-driven, so the hub's 20 ms velocity window sees 26 counts at 2800 rpm and ONE COUNT is 107 rpm -- about 15 in of range by tools/apercheck.ts. A single reading cannot resolve 30 rpm, which is why rpmFilterFrames exists: six loops of moving average is what makes this window mean anything. 120 rpm is +-14.9 in against a hole 8.9 in deep, and measured worse than 60 at every setting tried.",
+  "kS": 0.00442,
+  "kV": 0.000164698,
+  "kP": 0.0008,
+  "kSkV_source": "MEASURED by tools/flywheeltune.ts --ff, which is TuningFlywheel run offline: hold a duty, wait for steady state, record the speed, least-squares fit duty = kS + kV*rpm over 0.2..0.9 duty. Worst residual 0.0037 duty across the range, so the wheel really is that linear. These REPLACE the generic kS = 0.03, kV = 1/freeRpm that genconstants.mjs used to derive: at 2800 rpm the guess asks for 0.497 duty against the measured 0.466, which parks the wheel about 190 rpm high -- far enough outside a 60 rpm readiness window that the robot fires NOTHING. kP is unchanged and only has to cover the dip a shot takes out of the wheel; re-fit all three against a real TuningFlywheel log - CALIBRATE.",
+  "rpmFilterFrames": 6,
+  "rpmFilterFrames_source": "MEASURED by tools/trimsweep.ts: 1 loop 14.0%, 3 loops 18.3%, 6 loops 31.5% of balls scoring, on the arrival-counting metric that run used. Averaging the hub's velocity estimate costs lag and buys resolution, and one raw reading is quantised to about 107 rpm. FlywheelGate.java carries the same ring buffer so the hub does the same thing."
+ },
+ "calibration": {
+  "_about": "Field trims. These are what a team actually adjusts between matches: they correct the SHOT TABLE against the real robot without regenerating it, and the Analysis tab computes them from a collected run.",
+  "rangeTrim_in": 0.0,
+  "rangeTrim_in_source": "measured: the mean signed downrange error of a collected run. The table is looked up at (range - rangeTrim), so a group landing 8 in LONG gets a trim of +8 and the table is asked for a shorter shot.",
+  "turretTrim_deg": 0.0,
+  "turretTrim_deg_source": "measured: atan(mean lateral error / mean range) from a collected run. Subtracted from the commanded azimuth, so it also absorbs a turret encoder zero that is a degree off."
+ },
+ "sensors": {
+  "imu": {
+   "latencyMs": 40,
+   "_source": "guess (Beta8397 uses 175ms; start lower)"
+  },
+  "_mountFrame": "robot-local FTC convention: x forward, y left, z up (metres)",
+  "distance": [
+   {
+    "name": "front",
+    "mount_m": [
+     0.22,
+     0.0,
+     0.1
+    ],
+    "dir": [
+     1,
+     0,
+     0
+    ],
+    "unit": "in",
+    "max_m": 2.0
+   }
+  ],
+  "localizer": {
+   "source": "groundTruth",
+   "noise": {
+    "xy_in": 0.0,
+    "heading_deg": 0.0
+   }
+  }
+ },
+ "hardware": {
+  "fl": "motor0",
+  "fr": "motor1",
+  "bl": "motor2",
+  "br": "motor3",
+  "intake": "motor4",
+  "transfer": "motor5",
+  "flywheel": "motor6",
+  "turret": "motor7",
+  "hood": "servo0",
+  "gate": "servo1",
+  "imu": "imu",
+  "battery": "Control Hub"
+ },
+ "hub": {
+  "loopPeriodMs": 16,
+  "bulkCacheMode": "AUTO",
+  "imuLatencyMs": 40,
+  "encoderVelocityWindowMs": 20,
+  "commandLatencyMs": 2,
+  "velocityPid": {
+   "p": 10,
+   "i": 15,
+   "d": 0,
+   "f": 12,
+   "settleMs": 80
+  },
+  "_velocityPidSource": "The /32767 scale is the hub's own, which is why f*maxTicksPerSec/32767 is about 1. Measured here on the flywheel settling inside its 80 RPM readiness window 5 s after the command: i=3 lands 186 RPM high, i=8 158 high, i=15 47 high (ready), i=25 20 high. 15 it is - CALIBRATE against a real TuningFlywheel log, and note that a team running its own feedforward + P loop (FlywheelGate) bypasses this entirely.",
+  "voltageNoise_V": 0.05,
+  "_source": "guess - CALIBRATE against TuningDrive logs from a real hub"
+ },
+ "limits": {
+  "startingCube_in": 18,
+  "expansion_in": [
+   18,
+   24,
+   29
+  ],
+  "maxMotors": 8,
+  "maxServos": 8
+ }
+}

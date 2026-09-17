@@ -1,0 +1,28 @@
+{
+  "_about": "goBILDA 5203 Yellow Jacket variants. All are the same bare motor behind a gearbox, so the bare numbers are the single origin and every variant is derived from its ratio. That keeps the table self-consistent: freeRpm x ratio = 5955..5994 for every listed variant, which is the 6000 RPM bare motor.",
+  "bare": {
+    "freeRpm": 6000,
+    "stallTorque_Nm": 0.1241,
+    "stallAmps": 9.2,
+    "noLoadAmps": 0.25,
+    "ticksPerRev": 28,
+    "rotorInertia_kgm2": 1.0e-5,
+    "_source": "goBILDA 5203 datasheet (312 RPM variant: 24.3 kg.cm / 19.2 = 1.266 kg.cm bare); rotorInertia is a guess"
+  },
+  "gearboxEfficiency": 0.9,
+  "gearboxEfficiency_source": "guess (typical multi-stage planetary)",
+  "variants": {
+    "5203-30":   { "ratio": 188.0, "ticksPerRev": 5281.1, "freeRpm": 30 },
+    "5203-43":   { "ratio": 139.0, "ticksPerRev": 3895.9, "freeRpm": 43 },
+    "5203-60":   { "ratio": 99.5,  "ticksPerRev": 2786.2, "freeRpm": 60 },
+    "5203-84":   { "ratio": 71.2,  "ticksPerRev": 1993.6, "freeRpm": 84 },
+    "5203-117":  { "ratio": 50.9,  "ticksPerRev": 1425.1, "freeRpm": 117 },
+    "5203-223":  { "ratio": 26.9,  "ticksPerRev": 751.8,  "freeRpm": 223 },
+    "5203-312":  { "ratio": 19.2,  "ticksPerRev": 537.7,  "freeRpm": 312 },
+    "5203-435":  { "ratio": 13.7,  "ticksPerRev": 384.5,  "freeRpm": 435 },
+    "5203-1150": { "ratio": 5.2,   "ticksPerRev": 145.1,  "freeRpm": 1150 },
+    "5203-1620": { "ratio": 3.7,   "ticksPerRev": 103.8,  "freeRpm": 1620 },
+    "5202-6000": { "ratio": 1.0,   "ticksPerRev": 28.0,   "freeRpm": 6000 }
+  },
+  "variants_source": "goBILDA product pages; ticksPerRev as published (they differ from 28 x ratio by <1%)"
+}

@@ -881,3 +881,56 @@ by the equations of motion.** Better resolution on the flywheel shaft -- a highe
 or gearing the existing one up -- is what buys it, and it is the same fix that would let
 `tolRpm` come down from 60.
 
+## Scrapping the RPM lead: hold the wheel still and let the HOOD do the compensating
+
+Every reason shooting-while-accelerating is hard is a property of the FLYWHEEL, not of the
+problem:
+
+  - it has inertia, so it lags a moving target (1102 rpm/s available against 912 rpm/s demanded
+    per m/s of radial speed);
+  - its speed has to be MEASURED, and one encoder count over a 20 ms window is 107 rpm, so the
+    firing window is +-60 rpm -- +-21 cm of range into a pocket 22.5 cm deep;
+  - leading on the predicted release velocity halves the resulting bias and can do no better,
+    because you cannot correct an error smaller than you can measure.
+
+None of it is true of the hood. It is a servo: commanded to a position, nothing to measure,
+nothing to chase. So run the wheel at ONE speed all match and solve for range with the hood --
+and stop trying to cancel the robot's velocity at all. It is simply part of the launch:
+
+    horizontal  S*cos(theta) + v        vertical  S*sin(theta)
+
+a different launch speed AND a different launch angle, both known exactly at the instant the
+ball goes. `tools/fixedspeed.ts` asks whether a hood angle exists for every range and every
+speed the robot can be doing:
+
+| fixed rpm | exit speed | solved, of 35 |
+|---|---|---|
+| 2600 | 5.88 m/s | 20 |
+| 3000 | 6.79 m/s | 27 |
+| **3400** | **7.69 m/s** | **28** |
+| 3800 | 8.60 m/s | 27 |
+
+At 3400 rpm, 28 of 35 combinations of range (1.0-2.5 m) and radial velocity (-1.5 to +1.5 m/s)
+have a hood solution inside the mechanism's existing 30-85 deg travel. The gaps are the corners:
+closing fast at short range wants a hood past vertical, retreating fast at long range wants more
+speed than one fixed rpm has. A second rpm for the far zone would cover most of what is left --
+and it would still be constant DURING a shot, which is all that matters.
+
+### What it buys
+
+| | flywheel | hood |
+|---|---|---|
+| has to move | 912 rpm per m/s | 8.0 deg per m/s |
+| can move at | 1102 rpm/s | 120 deg/s |
+| so it tracks | **1.2 m/s^2** | **15.0 m/s^2** |
+| set to | a measured speed, +-60 rpm = +-21 cm | a commanded position, 1 deg = 3.5 cm |
+
+No FTC robot accelerates at 15 m/s^2, so the acceleration budget stops being a constraint. And
+the precision improves by roughly six times STANDING STILL, because the hood has no measurement
+in its loop to be wrong about.
+
+Not implemented yet -- this is the solver saying the geometry allows it. What it needs: the
+shot table regenerated as hood-versus-(range, radial velocity) at a fixed rpm, the brain
+commanding a constant wheel speed, and the readiness gate reduced to "is the hood there yet",
+which is a servo position and settles in tens of milliseconds rather than tenths of a second.
+

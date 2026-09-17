@@ -7,7 +7,23 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 // `?url` so Vite treats the 12 MB STEP tessellation as an asset instead of trying to parse
 // it as a module (which serves a 200 that GLTFLoader cannot read).
-import fieldUrl from '../../../assets/field.glb?url';
+/**
+ * The tessellated field, IF it has been generated.
+ *
+ * A plain `import ... from '../../../assets/field.glb?url'` is a build-time dependency, and
+ * the file is deliberately not in git -- it is 19 MB generated from the STEP by
+ * tools/cad2assets.py, and .gitignore says so. So a fresh clone could not build at all: vite
+ * stopped with "Could not resolve ../../../assets/field.glb?url" before it rendered anything.
+ *
+ * `import.meta.glob` matches nothing when the file is absent, which turns a build error into
+ * `undefined` -- and the procedural stand-in below is already the answer to that.
+ */
+const CAD_URLS = import.meta.glob('../../../assets/field.glb', {
+  query: '?url',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+const fieldUrl: string | undefined = Object.values(CAD_URLS)[0];
 import type { FieldGeometry, BoxPiece } from '@core/field/geometry.js';
 import { inches, M_TO_IN, DEG } from '@core/units.js';
 import type { Snapshot, Vec3 } from '@core/types.js';
@@ -191,6 +207,7 @@ export class Scene {
     this.attachControls();
   }
 
+  private static warnedNoCad = false;
   private colliders = false;
   private cadStatics: THREE.Object3D[] = [];
   private cadLoaded = false;
@@ -321,6 +338,15 @@ export class Scene {
   private loadCad(): void {
     // One fetch per page load, not per Scene: reset rebuilds the world and would otherwise
     // re-download the whole field every time.
+    if (!fieldUrl) {
+      // Not an error: the stand-in geometry is the documented fallback, and the console note
+      // says how to get the real thing.
+      if (!Scene.warnedNoCad) {
+        Scene.warnedNoCad = true;
+        console.info('assets/field.glb not built — showing the procedural field. Run `python tools/cad2assets.py` for the CAD one.');
+      }
+      return;
+    }
     if (!Scene.cadPromise) {
       Scene.cadPromise = new Promise((resolve, reject) => new GLTFLoader().load(fieldUrl, resolve, undefined, reject));
     }

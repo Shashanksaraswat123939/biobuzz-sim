@@ -62,7 +62,14 @@ export interface RobotSpec {
     indexLift?: number;
     /** Feed belt drive pulley radius: belt speed is motor omega times this. */
     beltRadius_m: number; gate: { enabled: boolean; servo: string; open: number; closed: number } };
-  turret: { enabled: boolean; type: 'motor' | 'servo'; motor: MotorSpec; range_deg: [number, number]; speed_dps: number; accel_dps2: number; muzzleOffset_m: number; muzzleHeight_m: number };
+  turret: { enabled: boolean; type: 'motor' | 'servo'; motor: MotorSpec; range_deg: [number, number];
+    speed_dps: number; accel_dps2: number; muzzleOffset_m: number; muzzleHeight_m: number;
+    /** Hold the command still while the solution is inside this, so the axis locks instead of creeping. */
+    aimDeadband_deg?: number;
+    /** One-pole filter on the commanded bearing. 1 is straight through, which is what hunted. */
+    aimFilterAlpha?: number;
+    /** Hold fire above this chassis yaw rate: the setpoint outruns the axis. deg/s. */
+    fireYawCap_dps?: number };
   hood: { enabled: boolean; servo: string; angleRange_deg: [number, number]; fixedAngle_deg: number; speed_dps: number;
     /** How close the hood must be to the angle the shot needs before firing, degrees. */
     tolDeg?: number };

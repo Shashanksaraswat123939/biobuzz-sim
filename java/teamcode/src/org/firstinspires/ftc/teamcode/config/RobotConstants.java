@@ -33,16 +33,16 @@ public final class RobotConstants {
 
     // ---- mechanisms ----
     /** The knob this whole project exists to explore. */
-    public static final double CYCLE_TIME_S = 1.5;
+    public static final double CYCLE_TIME_S = 1;
     public static final double FEED_PULSE_S = 0.25;
     public static final boolean GATE_ENABLED = true;
     public static final double GATE_OPEN = 1;
     public static final double GATE_CLOSED = 0;
     public static final int HOPPER_CAPACITY = 4;
 
-    public static final double TURRET_MIN_DEG = -175;
-    public static final double TURRET_MAX_DEG = 175;
-    public static final double TURRET_SPEED_DPS = 180;
+    public static final double TURRET_MIN_DEG = -185;
+    public static final double TURRET_MAX_DEG = 185;
+    public static final double TURRET_SPEED_DPS = 261;
     public static final double TURRET_TICKS_PER_DEG = 8;
     /** Muzzle distance from the turret axis along the shot line, m. The lever arm of omega x r in ShotLead.muzzleVelocity(). */
     public static final double MUZZLE_OFFSET_M = 0.12;

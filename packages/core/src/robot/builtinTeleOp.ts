@@ -294,6 +294,8 @@ export class BuiltinTeleOp {
   /** Last velocity sample and the filtered acceleration built from it, for the lead. */
   private lastVel = { x: 0, y: 0, t: 0 };
   private accel = { x: 0, y: 0 };
+  /** The gimbal's held bearing: filtered and deadbanded, so the axis locks instead of hunting. */
+  private aimHold = 0;
   /** One-pole filtered localizer velocity. The lead is only ever as good as this. */
   private velFilt = { x: 0, y: 0 };
   /** The fixed-speed solution for this loop, or null when there is no shot from here. */
@@ -474,8 +476,45 @@ export class BuiltinTeleOp {
       // Lead-corrected bearing to the up CELL, relative to the robot's heading.
       // The lateral trim also absorbs a turret encoder zero that is a degree out, which
       // looks identical in the data and has the same fix.
-      const want = lead.azimuthDeg - cal.turretTrim_deg;
-      turretDeg = clamp(want, this.spec.turret.range_deg[0], this.spec.turret.range_deg[1]);
+      // A GIMBAL, NOT A WEATHERVANE.
+      //
+      // The aim is re-solved every loop from a localizer carrying 0.5 in and 0.5 deg of noise,
+      // so the raw solution jitters even with the robot parked. Commanding it straight through
+      // made the axis hunt continuously: it never settled, the readiness gate saw an error
+      // that never stopped moving, and every shot left while the head was still travelling.
+      //
+      // Two things fix that, and both are what a gimbal does. A one-pole filter on the
+      // COMMAND takes the noise out without lagging a real slew -- the bearing to a fixed goal
+      // moves on the timescale of the robot's own driving, tens of milliseconds, and the noise
+      // is per-frame. And a deadband holds the command still while the solution is inside it,
+      // so the axis stops rather than creeping: below the launch yaw scatter there is nothing
+      // to chase, because a tenth of a degree of aim is invisible next to a degree of scatter.
+      const raw = lead.azimuthDeg - cal.turretTrim_deg;
+      const dead = this.spec.turret.aimDeadband_deg ?? 0.25;
+      if (Math.abs(wrapPi((raw - this.aimHold) * DEG) * RAD) > dead) {
+        const a = clamp(this.spec.turret.aimFilterAlpha ?? 0.35, 0.01, 1);
+        this.aimHold += wrapPi((raw - this.aimHold) * DEG) * RAD * a;
+      }
+      // UNWIND RATHER THAN PIN. A bearing is only ever known modulo 360, so a turret with more
+      // than a full turn of travel can reach most of them two ways -- and which way matters,
+      // because a robot spinning on the spot drives the bearing through +-180 again and again.
+      //
+      // Clamping the wrapped solution pinned the axis at its stop and left it there: the gate
+      // refused the shot (correctly) and nothing ever recovered, so the robot came round and
+      // the turret was still parked against the same end. Picking whichever of want, want-360
+      // and want+360 is INSIDE the travel and nearest the axis now makes it take the short way
+      // and keep tracking; with 370 deg of travel there is always at least one, so the dead
+      // cone directly behind the robot is gone.
+      const [lo, hi] = this.spec.turret.range_deg;
+      const here = turretActualDeg;
+      let want = this.aimHold;
+      let bestGap = Infinity;
+      for (const cand of [this.aimHold, this.aimHold - 360, this.aimHold + 360]) {
+        if (cand < lo || cand > hi) continue;
+        const gap = Math.abs(cand - here);
+        if (gap < bestGap) { bestGap = gap; want = cand; }
+      }
+      turretDeg = clamp(want, lo, hi);
       // HOW FAR PAST THE END STOP THE SHOT WANTED TO BE, which is not the same question as
       // how far the axis is from its command and is the one nothing was asking.
       //
@@ -657,6 +696,22 @@ export class BuiltinTeleOp {
     // at all, so the last few degrees are shots that cannot geometrically enter.
     const mouthOpen = s.game.upCellOpenDeg <= 75;
 
+    // SPINNING FASTER THAN THE TURRET CAN FOLLOW.
+    //
+    // The feed commits about leadLatency_s + the pulse before the ball is gone, and a chassis
+    // yawing at w drags the turret's setpoint at w for all of it. The axis slews at 261 deg/s
+    // and the gate lets a shot through at 3 deg of error, so the error at RELEASE is w times
+    // that delay -- at 100 deg/s of spin the setpoint moves 40 deg while the ball is on its
+    // way to the nip, and the turret is nowhere near it. Measured spinning on the spot: 75% in
+    // with 6 wild of 24, downrange 49 +-86 cm, against 100% for every other driving case.
+    //
+    // STRATEGY.md 7.2 caps deliberate turning while firing for this reason. Enforcing it turns
+    // a wild shot into a held one, which costs a cycle and saves a ball. The readiness check
+    // for turret ERROR cannot do this on its own: the axis is on target when the shot is
+    // committed and behind by the time it leaves.
+    const yawCap = this.spec.turret.fireYawCap_dps ?? Infinity;
+    const yawOk = Math.abs(s.localizer.omega) <= yawCap;
+
     // ACCELERATING OUT OF THE BAND BEFORE THE BALL LEAVES.
     //
     // The lead cancels the velocity the robot HAS. The feed commits about `leadLatency_s`
@@ -684,12 +739,13 @@ export class BuiltinTeleOp {
     const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
     st.readyCount = atSpeed ? st.readyCount + 1 : 0;
     st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretErrDeg) < 3
-      && st.turretPastStopDeg < 0.5 && !s.game.hiveTipping && mouthOpen && accelOk;
+      && st.turretPastStopDeg < 0.5 && !s.game.hiveTipping && mouthOpen && accelOk && yawOk;
 
     st.hold = !wheelOn ? ''
       : s.game.hiveTipping ? 'hive is tipping'
       : !mouthOpen ? `mouth faces away, ${s.game.upCellOpenDeg.toFixed(0)} deg off its opening - DRIVE ROUND`
       : !accelOk ? `accelerating out of the band: ${(st.accelBudget * 100).toFixed(0)}% of it before the ball leaves`
+      : !yawOk ? `turning too fast to aim: ${Math.abs(s.localizer.omega).toFixed(0)} deg/s, cap ${yawCap.toFixed(0)}`
       : st.turretPastStopDeg >= 0.5 ? `turret cannot reach, ${st.turretPastStopDeg.toFixed(0)} deg past its stop`
       : Math.abs(st.turretErrDeg) >= 3 ? `turret ${st.turretErrDeg.toFixed(0)} deg off`
       // No cell is a real answer, not a failure: there is no hood angle that scores from here

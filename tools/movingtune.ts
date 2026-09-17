@@ -74,6 +74,8 @@ export async function run(opts: {
   seed: number; range_in: number; drive: [number, number]; wobble: number; secs: number;
   /** Degrees off the mouth's normal to stand. 0 is square on; the room is off to the side. */
   bearing_deg?: number;
+  /** Stick on the turn axis. A robot spinning on the spot drives the bearing through +-180. */
+  spin?: number;
   mutate?: (p: Params, r: RobotSpec) => void;
 }): Promise<Result> {
   const p = structuredClone(params) as unknown as Params;
@@ -133,6 +135,7 @@ export async function run(opts: {
     g.left_stick_x = opts.drive[0];
     const fwd = opts.drive[1] + opts.wobble * Math.sin(2 * Math.PI * 0.5 * (world.t - t1));
     g.left_stick_y = -Math.max(-1, Math.min(1, fwd));
+    g.right_stick_x = -(opts.spin ?? 0);
     return g;
   };
   for (let f = 0; f < 30; f++) step(hold());
@@ -207,13 +210,13 @@ export async function run(opts: {
 /** Pool several seeds of one case. */
 export async function pool(
   name: string, drive: [number, number], wobble: number, range_in: number, seeds: number,
-  mutate?: (p: Params, r: RobotSpec) => void, bearing_deg = 0,
+  mutate?: (p: Params, r: RobotSpec) => void, bearing_deg = 0, spin = 0,
 ): Promise<{ name: string; shots: Shot[]; secs: number; cycle_s: number }> {
   const shots: Shot[] = [];
   let secs = 0;
   let cycle_s = 1;
   for (let i = 0; i < seeds; i++) {
-    const r = await run({ seed: 7 + i * 18, range_in, drive, wobble, secs: 14, bearing_deg, mutate });
+    const r = await run({ seed: 7 + i * 18, range_in, drive, wobble, secs: 14, bearing_deg, spin, mutate });
     shots.push(...r.shots);
     secs += r.secs;
     cycle_s = r.cycle_s;
@@ -222,7 +225,7 @@ export async function pool(
 }
 
 function report(rows: { name: string; shots: Shot[]; secs: number; cycle_s: number }[]): void {
-  console.log('  case              n   in%   wild  shots/s  landed/s     long cm        lat cm     rpm err');
+  console.log('  case              n   in%   wild  shots/s  landed/s     long cm        lat cm    |yaw|/s');
   for (const r of rows) {
     const s = r.shots;
     if (!s.length) { console.log(`  ${r.name.padEnd(16)} ${String(0).padStart(3)}   (no shots)`); continue; }
@@ -238,7 +241,7 @@ function report(rows: { name: string; shots: Shot[]; secs: number; cycle_s: numb
       `${(s.length / Math.max(0.1, r.secs)).toFixed(2).padStart(7)}  ${(s.filter((x) => x.landed).length / Math.max(0.1, r.secs)).toFixed(2).padStart(8)}   ` +
       `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ` +
       `${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}   ` +
-      `${mean(s.map((x) => x.rpmErr)).toFixed(0).padStart(6)}`,
+      `${mean(s.map((x) => Math.abs(x.omega))).toFixed(0).padStart(6)}`,
     );
   }
 }
@@ -257,15 +260,24 @@ export async function main(argv: string[] = []): Promise<void> {
   // band in a second or two and the sample is three balls. The stick values are gentle for
   // the same reason: 0.35 is about 0.45 m/s, which crosses the whole band in nine seconds.
   // name, [strafe, forward], wobble, range_in, bearing off the normal
-  const cases: [string, [number, number], number, number, number][] = [
-    ['stopped 50in', [0, 0], 0, 50, 30],
-    ['closing 0.25', [0, 0.25], 0, 78, 55],
-    ['receding 0.25', [0, -0.25], 0, 38, 55],
-    ['strafing 0.35', [0.35, 0], 0, 50, 30],
-    ['wobbling', [0, 0], 0.35, 50, 30],
+  // name, [strafe, forward], wobble, range_in, bearing off the normal, spin stick
+  const cases: [string, [number, number], number, number, number, number][] = [
+    ['stopped 50in', [0, 0], 0, 50, 30, 0],
+    ['closing 0.25', [0, 0.25], 0, 78, 55, 0],
+    ['receding 0.25', [0, -0.25], 0, 38, 55, 0],
+    ['strafing 0.35', [0.35, 0], 0, 50, 30, 0],
+    ['wobbling', [0, 0], 0.35, 50, 30, 0],
+    // SPINNING ON THE SPOT: the case that drives the bearing through +-180 over and over and
+    // makes the turret unwind. Nothing else in this list exercises the wrap.
+    //
+    // 0.25 of stick is about 66 deg/s, which is inside the yaw cap -- this is the robot doing
+    // what it is meant to do while turning. Above the cap it holds fire instead, on purpose,
+    // so a faster case here would only be measuring the cap. --spin sweeps it with the cap
+    // lifted, which is where the cap's own number comes from.
+    ['spinning 0.25', [0, 0], 0, 50, 30, 0.25],
   ];
   const rows = [];
-  for (const [name, drive, wobble, range, bear] of cases) rows.push(await pool(name, drive, wobble, range, seeds, undefined, bear));
+  for (const [name, drive, wobble, range, bear, spin] of cases) rows.push(await pool(name, drive, wobble, range, seeds, undefined, bear, spin));
   report(rows);
 
   const all = rows.flatMap((r) => r.shots);
@@ -300,6 +312,55 @@ export async function main(argv: string[] = []): Promise<void> {
     console.log('');
   }
 
+  // --cycle: the transfer's minimum gap between shots, swept. Faster is not free -- the
+  // wheel has to recover the energy each ball takes out of it, and the previous ball is
+  // still in the air -- so the question is where landed-per-second stops improving.
+  if (argv.includes('--cycle')) {
+    console.log('TRANSFER CYCLE TIME SWEEP');
+    console.log('');
+    console.log('  cycle   n   in%   wild   shots/s   landed/s     long cm       lat cm');
+    for (const c of [0.6, 0.8, 1.0, 1.2, 1.5]) {
+      const rs = [];
+      for (const [name, drive, wobble, range, bear, spin] of cases) {
+        rs.push(await pool(name, drive, wobble, range, Math.max(2, seeds - 2), (_p, r) => { r.transfer.cycleTime_s = c; }, bear, spin));
+      }
+      const s = rs.flatMap((r) => r.shots);
+      const secs = rs.reduce((a, r) => a + r.secs, 0);
+      const lng = s.map((x) => cm(x.long_in)).filter(Number.isFinite);
+      const lat = s.map((x) => cm(x.lat_in)).filter(Number.isFinite);
+      const wild = s.filter((x) => Math.abs(x.lat_in) * 2.54 > 20 || Math.abs(x.long_in) * 2.54 > 30).length;
+      const inPct = (100 * s.filter((x) => x.landed).length) / Math.max(1, s.length);
+      console.log(`  ${c.toFixed(1).padStart(5)}  ${String(s.length).padStart(3)}  ${inPct.toFixed(0).padStart(4)}%  ${String(wild).padStart(5)}  ` +
+        `${(s.length / Math.max(0.1, secs)).toFixed(2).padStart(8)}  ${(s.filter((x) => x.landed).length / Math.max(0.1, secs)).toFixed(2).padStart(9)}   ` +
+        `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}`);
+    }
+    console.log('');
+  }
+
+  // --spin: how fast may the chassis turn and still put balls in? The feed commits about
+  // 0.4 s before the ball leaves and a yawing chassis drags the turret's setpoint for all of
+  // it, so this is the budget the cap in config/robot.json should be set from. Run with the
+  // cap lifted, or it just measures the cap.
+  if (argv.includes('--spin')) {
+    console.log('SPIN SWEEP, cap lifted. yaw is the chassis rate actually reached.');
+    console.log('');
+    console.log('  stick   n   in%   wild   shots/s     long cm       lat cm');
+    for (const st of [0.08, 0.12, 0.18, 0.25, 0.35]) {
+      const r = await pool(`spin ${st}`, [0, 0], 0, 50, Math.max(3, seeds - 1),
+        (_p, rs) => { rs.turret.fireYawCap_dps = 1e9; }, 30, st);
+      const s = r.shots;
+      if (!s.length) { console.log(`  ${st.toFixed(2).padStart(5)}    0   (no shots)`); continue; }
+      const lng = s.map((x) => cm(x.long_in)).filter(Number.isFinite);
+      const lat = s.map((x) => cm(x.lat_in)).filter(Number.isFinite);
+      const wild = s.filter((x) => Math.abs(x.lat_in) * 2.54 > 20 || Math.abs(x.long_in) * 2.54 > 30).length;
+      console.log(`  ${st.toFixed(2).padStart(5)}  ${String(s.length).padStart(3)}  ` +
+        `${((100 * s.filter((x) => x.landed).length) / s.length).toFixed(0).padStart(4)}%  ${String(wild).padStart(5)}  ` +
+        `${(s.length / Math.max(0.1, r.secs)).toFixed(2).padStart(8)}   ` +
+        `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}`);
+    }
+    console.log('');
+  }
+
   const sw = argv.indexOf('--sweep');
   if (sw >= 0) {
     console.log('RANGE TRIM SWEEP, inches. The brain looks the table up at (range - trim), so a');
@@ -307,8 +368,8 @@ export async function main(argv: string[] = []): Promise<void> {
     console.log('  trim   n   landed      long cm      lat cm');
     for (const trim of [0, 1, 2, 3, 4, 5, 6]) {
       const rs = [];
-      for (const [name, drive, wobble, range, bear] of cases) {
-        rs.push(await pool(name, drive, wobble, range, Math.max(2, seeds - 1), (_p, r) => { r.calibration.rangeTrim_in = trim; }, bear));
+      for (const [name, drive, wobble, range, bear, spin] of cases) {
+        rs.push(await pool(name, drive, wobble, range, Math.max(2, seeds - 1), (_p, r) => { r.calibration.rangeTrim_in = trim; }, bear, spin));
       }
       const s = rs.flatMap((r) => r.shots);
       const lng = s.map((x) => cm(x.long_in)).filter(Number.isFinite);

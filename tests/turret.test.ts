@@ -62,9 +62,15 @@ describe('turret motion', () => {
     const trace = drive(world, aim(120), 60);
     const peak = Math.max(...trace.map((s) => Math.abs(s.dps)));
     expect(peak).toBeGreaterThan(VMAX * 0.95);
+    // ALLOW A FRAME EITHER SIDE. The trace samples at 60 Hz while the axis integrates at
+    // 1/240, and a servo head reaches its slew limit in about 0.05 s -- three samples. A
+    // percentage tolerance on a three-sample measurement is really a tolerance on where the
+    // sampling grid happened to fall: at 261 deg/s and 5000 deg/s^2 the ideal ramp is 0.052 s
+    // and one frame of quantisation is 0.017, a third of it. So the bound is stated in frames.
+    const ideal = VMAX / AMAX;
     const rampFrames = trace.findIndex((s) => Math.abs(s.dps) >= VMAX * 0.95);
-    expect(rampFrames / 60).toBeGreaterThan((VMAX / AMAX) * 0.7);
-    expect(rampFrames / 60).toBeLessThan((VMAX / AMAX) * 1.6);
+    expect(rampFrames / 60).toBeGreaterThan(ideal * 0.7 - 1 / 60);
+    expect(rampFrames / 60).toBeLessThan(ideal * 1.6 + 1 / 60);
   });
 
   it('arrives on target and stops, without overshooting', () => {

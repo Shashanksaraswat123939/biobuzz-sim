@@ -471,11 +471,18 @@ function paintRobot(s: Snapshot, rangeIn: number): void {
   const fill = $('#tip-fill');
   fill.style.width = `${Math.min(100, (progress / 1.5) * 100)}%`;
   fill.className = progress >= 1 ? 'over' : progress > 0.75 ? 'near' : '';
-  $('#tip-label').textContent = hive.tipping
+  // MOVING IS NOT THE SAME AS GOING OVER. `hive.tipping` is any rotation above 0.2 rad/s,
+  // which is the right test for the fire gate and the wrong one for this label: balls landing
+  // in the pocket rock the rocker on its stop, so the panel announced "Tipping now" at 49% of
+  // the torque needed within a second of the page loading. It is a tip only when the balls
+  // are actually beating gravity.
+  $('#tip-label').textContent = hive.tipping && progress >= 0.9
     ? 'Tipping now.'
-    : progress <= 0
-      ? 'Resting on its stop. The mark is where the balls beat gravity.'
-      : `${(progress * 100).toFixed(0)}% of the torque needed to go over.`;
+    : hive.tipping
+      ? `Rocking on its stop, ${(progress * 100).toFixed(0)}% of the way to going over.`
+      : progress <= 0
+        ? 'Resting on its stop. The mark is where the balls beat gravity.'
+        : `${(progress * 100).toFixed(0)}% of the torque needed to go over.`;
 
   // BOTH CELLS PUSH. `ballTorque` is the net over every ball on the rocker, and after a tip
   // the ones dumped into the now-down CELL are still sitting there holding it down. Showing

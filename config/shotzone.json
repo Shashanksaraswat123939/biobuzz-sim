@@ -1,6 +1,6 @@
 {
  "_about": "MODEL map from tools/shotzone.ts: the chance a perfectly aimed shot lands, per field position, using the hood and rpm the shipped table commands at that range and the CELL mouth as seen from that spot. Not a measurement -- it says where the physics is forgiving, and the spots it likes still have to be shot from.",
- "generated": "2026-09-17T05:53:48.852Z",
+ "generated": "2026-09-17T06:11:45.863Z",
  "step_in": 4,
  "threshold": 0.9,
  "cells": [

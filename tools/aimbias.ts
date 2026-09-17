@@ -29,6 +29,7 @@ import { simulateShot } from '../packages/core/src/physics/ballistics.js';
 import { DEG, M_TO_IN, inches, rpmToRadS } from '../packages/core/src/units.js';
 import { landRate } from './landrate.js';
 import { mouthLips } from './shottable.js';
+import { cmBare, m as fm } from './_units.js';
 import type { Params, RobotSpec, ShotRecord } from '../packages/core/src/types.js';
 
 const RANGES = [40, 55, 70];
@@ -76,7 +77,7 @@ export async function main(argv: string[] = []): Promise<void> {
   const f = spec.flywheel;
 
   console.log('AIM BIAS — is the shot leaving wrong, or flying wrong?');
-  console.log(`  mouth centre ${(mouthY * M_TO_IN).toFixed(1)} in up, muzzle ${(spec.turret.muzzleHeight_m * M_TO_IN).toFixed(1)} in`);
+  console.log(`  mouth centre ${fm(mouthY * M_TO_IN)} up, muzzle ${(spec.turret.muzzleHeight_m).toFixed(2)} m`);
   console.log('');
 
   const before = f.minLandProb;
@@ -109,7 +110,7 @@ export async function main(argv: string[] = []): Promise<void> {
   console.log(`  the model assumes bearing error is N(0, ${f.scatter.yaw_deg} deg). The 'aim err' column is what it`);
   console.log('  actually was, measured at the muzzle: launch azimuth minus the true bearing to the mouth.');
   console.log('');
-  console.log('  range      n   rpm vs target   exit vs k*r*w   sensed range   ACTUAL long   SOLVER says     aim err');
+  console.log('  range      n   rpm vs target   exit vs k*r*w   sensed (cm)   ACTUAL long   SOLVER says     aim err');
   for (const r of RANGES) {
     const g = all.filter((x) => x.range === r);
     if (!g.length) continue;
@@ -120,9 +121,9 @@ export async function main(argv: string[] = []): Promise<void> {
     const pred = g.map((x) => x.predLong).filter(Number.isFinite);
     const aim = g.map((x) => x.rec.aimErrDeg).filter(Number.isFinite);
     console.log(
-      `  ${String(r).padStart(5)}  ${String(g.length).padStart(5)}   ${mean(rpmErr).toFixed(0).padStart(6)} rpm     ` +
-      `${mean(vErr).toFixed(3).padStart(6)} m/s   ${mean(sensed).toFixed(1).padStart(7)} in   ` +
-      `${mean(act).toFixed(1).padStart(6)} in   ${mean(pred).toFixed(1).padStart(6)} in   ` +
+      `  ${(r * 0.0254).toFixed(2).padStart(5)}  ${String(g.length).padStart(5)}   ${mean(rpmErr).toFixed(0).padStart(6)} rpm     ` +
+      `${mean(vErr).toFixed(3).padStart(6)} m/s   ${cmBare(mean(sensed), 1, 7)} cm   ` +
+      `${cmBare(mean(act), 1, 6)} cm   ${cmBare(mean(pred), 1, 6)} cm   ` +
       `${mean(aim).toFixed(2).padStart(5)}+-${sd(aim).toFixed(2)} deg`,
     );
   }
@@ -142,8 +143,8 @@ export async function main(argv: string[] = []): Promise<void> {
   // consistency check on the spread, never as the aim point.
   const inCell = all.filter((x) => x.rec.result === 'cell').map((x) => x.rec.long_in);
   const out = all.filter((x) => x.rec.result !== 'cell').map((x) => x.rec.long_in);
-  console.log(`  landed (n=${inCell.length}): ${mean(inCell).toFixed(1)} +- ${sd(inCell).toFixed(1)} in along the shot line`);
-  console.log(`  missed (n=${out.length}): ${mean(out).toFixed(1)} +- ${sd(out).toFixed(1)} in`);
+  console.log(`  landed (n=${inCell.length}): ${cmBare(mean(inCell))} +- ${cmBare(sd(inCell))} cm along the shot line`);
+  console.log(`  missed (n=${out.length}): ${cmBare(mean(out))} +- ${cmBare(sd(out))} cm`);
   if (mean(inCell) > 3 && mean(out) > mean(inCell)) {
     console.log('  -> both groups are long and the landed ones are less long: that is what a group');
     console.log('     centred PAST the target looks like through the filter of what went in.');
@@ -155,7 +156,7 @@ export async function main(argv: string[] = []): Promise<void> {
     console.log('     long bias is real and is costing shots.');
   }
   console.log('');
-  console.log(`  ALL    ${String(all.length).padStart(5)}   actual ${mean(act).toFixed(1)} +- ${sd(act).toFixed(1)} in,  solver ${mean(pred).toFixed(1)} +- ${sd(pred).toFixed(1)} in  (n=${pred.length})`);
+  console.log(`  ALL    ${String(all.length).padStart(5)}   actual ${cmBare(mean(act))} +- ${cmBare(sd(act))} cm,  solver ${cmBare(mean(pred))} +- ${cmBare(sd(pred))} cm  (n=${pred.length})`);
   console.log('');
   const aimAll = all.map((x) => x.rec.aimErrDeg).filter(Number.isFinite);
   const yawSigma = f.scatter.yaw_deg;
@@ -169,10 +170,10 @@ export async function main(argv: string[] = []): Promise<void> {
   const gap = mean(act) - mean(pred);
   console.log(Math.abs(mean(pred)) > 3
     ? `  THE SHOT LEAVES WRONG. Fired at its own recorded exit conditions the solver puts the ball\n` +
-      `  ${mean(pred).toFixed(1)} in long, so the flight is not the problem -- the rpm, the exit-speed model or the\n` +
+      `  ${cmBare(mean(pred))} cm long, so the flight is not the problem -- the rpm, the exit-speed model or the\n` +
       `  range the table was read at is. Check the three columns above: whichever is not zero.`
     : `  THE SHOT FLIES WRONG. The solver says these exit conditions should land within\n` +
-      `  ${mean(pred).toFixed(1)} in, and the world puts them ${mean(act).toFixed(1)} in out -- a ${gap.toFixed(1)} in disagreement between the\n` +
+      `  ${cmBare(mean(pred))} cm, and the world puts them ${cmBare(mean(act))} cm out -- a ${cmBare(gap)} cm disagreement between the\n` +
       `  solver's integration and the world's. Same aero code, so look at the launch geometry:\n` +
       `  muzzle height and offset, hood angle actually applied, and the turret's exit point.`);
 }

@@ -29,6 +29,7 @@ import { buildFieldGeometry } from '../packages/core/src/field/geometry.js';
 import { M_TO_IN } from '../packages/core/src/units.js';
 import { landRate } from './landrate.js';
 import { mouthLips } from './shottable.js';
+import { cmBare } from './_units.js';
 import type { Params, RobotSpec } from '../packages/core/src/types.js';
 
 const RANGES = [40, 55, 70];
@@ -50,7 +51,7 @@ export async function main(argv: string[] = []): Promise<void> {
   const halfLong = ((lips.near.z - lips.far.z) / 2 - r) * M_TO_IN;
 
   console.log('WHERE THE MISSES GO');
-  console.log(`  opening at the mouth plane: +-${halfLong.toFixed(1)} in along the shot line, +-${halfLat.toFixed(1)} in across it`);
+  console.log(`  opening at the mouth plane: +-${cmBare(halfLong)} cm along the shot line, +-${cmBare(halfLat)} cm across it`);
   console.log(`  ${seeds.length} seeds x ${RANGES.length} ranges x ${shots} shots, gate open`);
   console.log('');
 
@@ -89,12 +90,12 @@ export async function main(argv: string[] = []): Promise<void> {
   };
   const pct = (k: number, n: number) => `${((k / Math.max(1, n)) * 100).toFixed(0)}%`.padStart(5);
 
-  console.log('  range      n   landed   over the hole   short    long    wide     long bias      lat bias');
+  console.log('  range      n   landed   over the hole   short    long    wide    long bias (cm)  lat bias (cm)');
   for (const w of rows) {
     console.log(
-      `  ${String(w.range).padStart(5)}  ${String(w.n).padStart(5)}   ${pct(w.cell, w.n)}   ${pct(w.over, w.n).padStart(13)}   ` +
+      `  ${(w.range * 0.0254).toFixed(2).padStart(5)}  ${String(w.n).padStart(5)}   ${pct(w.cell, w.n)}   ${pct(w.over, w.n).padStart(13)}   ` +
       `${pct(w.short, w.n)}   ${pct(w.long, w.n)}   ${pct(w.wide, w.n)}   ` +
-      `${mean(w.longs).toFixed(1).padStart(6)}+-${sd(w.longs).toFixed(1).padStart(5)}  ${mean(w.lats).toFixed(1).padStart(5)}+-${sd(w.lats).toFixed(1).padStart(5)}`,
+      `${cmBare(mean(w.longs), 1, 6)}+-${cmBare(sd(w.longs), 1, 5)}  ${cmBare(mean(w.lats), 1, 6)}+-${cmBare(sd(w.lats), 1, 5)}`,
     );
   }
   const tot = rows.reduce((a, w) => ({

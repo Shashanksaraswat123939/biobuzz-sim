@@ -100,7 +100,7 @@ export async function main(argv: string[] = []): Promise<void> {
     console.log('');
     console.log(`  best window ${bestW.value} rpm at ${(bestW.rate * 100).toFixed(1)}% (${bestW.fired} shots taken; a tighter window costs shots)`);
     console.log('');
-    console.log('  range trim (in)   fired   landed     rate');
+    console.log('  range trim (cm)   fired   landed     rate');
     // BOTH SIGNS. tools/flywheeltune.ts --scan measures the closed loop parking about 45 rpm
     // BELOW target across the whole band the table uses, which is 6 in of range SHORT -- and
     // a sweep that only looks at positive trims cannot see the correction for it.
@@ -108,7 +108,7 @@ export async function main(argv: string[] = []): Promise<void> {
     const bestR = r.reduce((a, b) => (b.rate > a.rate ? b : a));
     cal.rangeTrim_in = bestR.value;
     console.log('');
-    console.log(`  best range trim ${bestR.value >= 0 ? '+' : ''}${bestR.value} in at ${(bestR.rate * 100).toFixed(1)}%; held there for the turret sweep`);
+    console.log(`  best range trim ${bestR.value >= 0 ? '+' : ''}${(bestR.value * 2.54).toFixed(1)} cm at ${(bestR.rate * 100).toFixed(1)}%; held there for the turret sweep`);
     console.log('');
     console.log('  turret trim (deg) fired   landed     rate');
     const t = await sweep('turretTrim', [-1.5, 0, 1.5], (v) => { cal.turretTrim_deg = v; }, seeds, shots);
@@ -120,7 +120,7 @@ export async function main(argv: string[] = []): Promise<void> {
     const gain = bestT.rate - base.rate;
     const se = Math.hypot(base.se, bestT.se);
     console.log('VERDICT');
-    console.log(`  zero trim: ${(base.rate * 100).toFixed(1)}%.  best found: rangeTrim ${bestR.value} in, turretTrim ${bestT.value} deg -> ${(bestT.rate * 100).toFixed(1)}%`);
+    console.log(`  zero trim: ${(base.rate * 100).toFixed(1)}%.  best found: rangeTrim ${(bestR.value * 2.54).toFixed(1)} cm, turretTrim ${bestT.value} deg -> ${(bestT.rate * 100).toFixed(1)}%`);
     console.log(gain > 1.96 * se
       ? `  A gain of ${(gain * 100).toFixed(1)} points, ${(gain / se).toFixed(1)} standard errors. Worth setting.`
       : `  A gain of ${(gain * 100).toFixed(1)} points, only ${(gain / Math.max(se, 1e-9)).toFixed(1)} standard errors -- inside the noise.\n` +

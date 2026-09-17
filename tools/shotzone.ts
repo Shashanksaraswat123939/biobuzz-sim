@@ -33,6 +33,7 @@ import { ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { loadLandCal } from '../packages/core/src/robot/loadCal.js';
 import { DEG, M_TO_IN, inches, rpmToRadS } from '../packages/core/src/units.js';
 import { loadEntry, mouthLips } from './shottable.js';
+import { cmBare, m as fm } from './_units.js';
 import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 export interface ZoneCell { x_in: number; z_in: number; range_in: number; offAxisDeg: number; p: number }
@@ -153,7 +154,7 @@ export async function main(argv: string[] = []): Promise<void> {
   const cal = loadLandCal();
 
   console.log('SHOT ZONE — where a perfectly aimed shot is worth taking');
-  console.log(`  ${step} in grid, hood and rpm from the shipped table, aperture as seen from each spot.`);
+  console.log(`  ${(step * 2.54).toFixed(0)} cm grid, hood and rpm from the shipped table, aperture as seen from each spot.`);
   console.log(`  ${cal ? 'calibrated against config/landcal.json' : 'RAW model score, nothing measured'}; the gate fires at ${(threshold * 100).toFixed(0)}%.`);
   console.log('');
   console.log('  HIVE at the top. # clears the gate, + is over half of it, . is refused, space has no solution.');
@@ -176,7 +177,7 @@ export async function main(argv: string[] = []): Promise<void> {
   if (live.length) {
     const r = live.map((c) => c.range_in);
     console.log(
-      `  ranges ${Math.min(...r).toFixed(0)}-${Math.max(...r).toFixed(0)} in, ` +
+      `  ranges ${fm(Math.min(...r))}-${fm(Math.max(...r))}, ` +
       `off-axis up to ${Math.max(...live.map((c) => c.offAxisDeg)).toFixed(0)} deg`,
     );
   }
@@ -217,7 +218,7 @@ export async function main(argv: string[] = []): Promise<void> {
   console.log('');
   console.log(`  after a TIP the rocker rests on its other stop: ${flippedLive.length} of ${flipped.cells.length} squares clear the gate there,`);
   const meanZ = (cs: ZoneCell[]) => (cs.length ? cs.reduce((a, c) => a + c.z_in, 0) / cs.length : NaN);
-  console.log(`  centred at z = ${meanZ(flippedLive).toFixed(0)} in against z = ${meanZ(live).toFixed(0)} in before it. The zone MOVES.`);
+  console.log(`  centred at z = ${fm(meanZ(flippedLive))} against z = ${fm(meanZ(live))} before it. The zone MOVES.`);
 
   writeFileSync(new URL('../config/shotzone.json', import.meta.url), JSON.stringify({
     _about: 'MODEL map from tools/shotzone.ts: the chance a perfectly aimed shot lands, per field position, using the hood and rpm the shipped table commands at that range and the CELL mouth as seen from that spot. Not a measurement -- it says where the physics is forgiving, and the spots it likes still have to be shot from.',

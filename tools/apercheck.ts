@@ -19,6 +19,7 @@ import robotJson from '../config/robot.json' with { type: 'json' };
 import { simulateShot } from '../packages/core/src/physics/ballistics.js';
 import { ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { DEG, M_TO_IN, inches } from '../packages/core/src/units.js';
+import { cmBare, m as fm } from './_units.js';
 import { mouthLips } from './shottable.js';
 import type { Params, RobotSpec } from '../packages/core/src/types.js';
 
@@ -32,10 +33,10 @@ export async function main(): Promise<void> {
   const mouthY = (lips.near.y + lips.far.y) / 2;
 
   console.log('APERTURE CHECK — where the table\'s own shot sits in the mouth');
-  console.log(`  near lip ${(lips.near.y * M_TO_IN).toFixed(1)} in up, far lip ${(lips.far.y * M_TO_IN).toFixed(1)} in up, ${((lips.near.z - lips.far.z) * M_TO_IN).toFixed(1)} in apart horizontally`);
+  console.log(`  near lip ${fm(lips.near.y * M_TO_IN)} up, far lip ${fm(lips.far.y * M_TO_IN)} up, ${fm((lips.near.z - lips.far.z) * M_TO_IN)} apart horizontally`);
   console.log('  clearance is how far ABOVE the near lip and BELOW the far lip the ball passes.');
   console.log('');
-  console.log('  range   hood    rpm   near clear   far clear   centre crossing');
+  console.log('  range   hood    rpm   near clear   far clear   centre crossing   (cm)');
 
   let worst = 0;
   for (const row of table.rows) {
@@ -73,12 +74,12 @@ export async function main(): Promise<void> {
     }
     if (Number.isFinite(cross)) worst = Math.max(worst, Math.abs(cross));
     console.log(
-      `  ${row.range_in.toFixed(0).padStart(5)}  ${(row.hoodDeg).toFixed(0).padStart(4)}  ${row.rpm.toFixed(0).padStart(5)}  ` +
-      `${nearClear.toFixed(1).padStart(9)} in  ${farClear.toFixed(1).padStart(8)} in  ${cross.toFixed(1).padStart(10)} in`,
+      `  ${(row.range_in * 0.0254).toFixed(2).padStart(5)}  ${(row.hoodDeg).toFixed(0).padStart(4)}  ${row.rpm.toFixed(0).padStart(5)}  ` +
+      `${cmBare(nearClear, 1, 9)}     ${cmBare(farClear, 1, 8)}    ${cmBare(cross, 1, 12)}`,
     );
   }
   console.log('');
-  console.log(`  worst centre-crossing offset: ${worst.toFixed(1)} in`);
+  console.log(`  worst centre-crossing offset: ${cmBare(worst)} cm`);
   console.log('');
 
   // HOW TIGHT DOES THE CONTROL HAVE TO BE? The table being centred is only half the story:
@@ -108,14 +109,14 @@ export async function main(): Promise<void> {
     };
     const base = crossAt(nominal, mid.hoodDeg);
     const perRpm = nominal / mid.rpm;
-    console.log(`  SENSITIVITY at ${mid.range_in.toFixed(0)} in (hood ${mid.hoodDeg.toFixed(0)} deg, ${mid.rpm.toFixed(0)} rpm), inches of crossing per unit:`);
+    console.log(`  SENSITIVITY at ${fm(mid.range_in)} (hood ${mid.hoodDeg.toFixed(0)} deg, ${mid.rpm.toFixed(0)} rpm), cm of crossing per unit:`);
     for (const d of [10, 38, 120]) {
-      console.log(`    +${String(d).padStart(3)} rpm    ${(crossAt(nominal + d * perRpm, mid.hoodDeg) - base).toFixed(1).padStart(6)} in${d === 38 ? '   <- the measured standing error' : d === 120 ? '   <- the tolRpm window' : ''}`);
+      console.log(`    +${String(d).padStart(3)} rpm    ${cmBare(crossAt(nominal + d * perRpm, mid.hoodDeg) - base, 1, 6)} cm${d === 38 ? '   <- the measured standing error' : d === 120 ? '   <- the tolRpm window' : ''}`);
     }
     for (const d of [0.5, 1, 2]) {
-      console.log(`    +${d.toFixed(1)} deg hood ${(crossAt(nominal, mid.hoodDeg + d) - base).toFixed(1).padStart(6)} in`);
+      console.log(`    +${d.toFixed(1)} deg hood ${cmBare(crossAt(nominal, mid.hoodDeg + d) - base, 1, 6)} cm`);
     }
-    console.log(`    the hole is ${((lips.near.z - lips.far.z) * M_TO_IN).toFixed(1)} in deep, so anything near half of that is a miss on its own.`);
+    console.log(`    the hole is ${cmBare((lips.near.z - lips.far.z) * M_TO_IN)} cm deep, so anything near half of that is a miss on its own.`);
   }
   console.log('  A negative clearance means the nominal shot does not fit through the hole AT ALL,');
   console.log('  which would make the whole table a solution to the wrong problem.');

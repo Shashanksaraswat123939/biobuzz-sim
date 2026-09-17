@@ -97,15 +97,23 @@ function holedBallTexture(): THREE.Texture {
       const phi = (x / W) * Math.PI * 2;
       const dx = st * Math.cos(phi);
       const dz = st * Math.sin(phi);
-      let hole = false;
+      // How far into the nearest hole this texel is, so the edge can be faded rather than cut.
+      let best = -1;
       for (const a of axes) {
-        if (dx * a[0] + sy * a[1] + dz * a[2] > cosLimit) {
-          hole = true;
-          break;
-        }
+        const d = dx * a[0] + sy * a[1] + dz * a[2];
+        if (d > best) best = d;
       }
       const i = (y * W + x) * 4;
-      const v = hole ? 0 : 255;
+      // SOFT EDGES, and a shading map instead of an alpha punch.
+      //
+      // The holes used to be cut with alphaMap + alphaTest 0.5 on a double-sided sphere: a
+      // hard binary cut, so every hole edge was a staircase of aliased pixels, and looking
+      // through the holes at the far inside surface made the ball read as a speckled blob
+      // rather than a ball. Shading them dark keeps the 26-hole look, costs no transparency,
+      // and lets the sphere be lit normally.
+      const edge = 0.012;
+      const t = Math.min(1, Math.max(0, (best - (cosLimit - edge)) / edge));
+      const v = Math.round(255 * (1 - 0.82 * t));
       img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
       img.data[i + 3] = 255;
     }
@@ -156,7 +164,7 @@ export class Scene {
   private intakeRoller!: THREE.Mesh;
   private flywheelMesh!: THREE.Mesh;
   private spin = { wheel: 0, intake: 0, fly: 0 };
-  private trajLine: THREE.Line;
+  private trajLine: THREE.Mesh;
   /** The convex boxes the physics actually uses. Hidden unless you ask for them. */
   private colliderMeshes: THREE.Object3D[] = [];
   /** Stand-in geometry, shown only until the CAD arrives (or if it never does). */
@@ -204,21 +212,35 @@ export class Scene {
     const ballMat: Record<string, THREE.Material> = {};
     for (const [kind, colour] of [['pollen', COL.pollen], ['nectarRed', COL.red], ['nectarBlue', COL.blue]] as const) {
       ballMat[kind] = new THREE.MeshStandardMaterial({
-        color: colour, roughness: 0.42, metalness: 0.0,
-        emissive: colour, emissiveIntensity: kind === 'pollen' ? 0.14 : 0.22,
-        alphaMap: holes, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide,
+        color: colour, roughness: 0.38, metalness: 0.0,
+        emissive: colour, emissiveIntensity: kind === 'pollen' ? 0.10 : 0.16,
+        // The hole pattern shades the surface instead of cutting it away: opaque, single
+        // sided, properly lit. Transparency on a 35 mm ball at this distance was noise.
+        map: holes,
       });
     }
     for (const b of ballSpecs) {
-      const m = new THREE.Mesh(new THREE.SphereGeometry(b.r, 20, 14), ballMat[b.kind] ?? ballMat.pollen);
+      // 32x24 rather than 20x14: at 35 mm across, a coarse sphere reads as a faceted lump the
+      // moment it is anywhere near the camera, and the triangles are free at this count.
+      const m = new THREE.Mesh(new THREE.SphereGeometry(b.r, 32, 24), ballMat[b.kind] ?? ballMat.pollen);
       this.ballMeshes.push(m);
       this.scene.add(m);
     }
 
-    this.trajLine = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3()]),
-      new THREE.LineBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.85 }),
+    // A TUBE, not a line.
+    //
+    // THREE.Line is one pixel wide and stays one pixel wide: WebGL ignores linewidth on every
+    // desktop driver, so the arc was a hairline that aliased into dashes against the field and
+    // vanished end-on. A tube is real geometry -- it has thickness at any zoom, it is lit, and
+    // it reads as an arc in three dimensions instead of a scratch on the screen.
+    this.trajLine = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshStandardMaterial({
+        color: 0xffd166, emissive: 0xffb020, emissiveIntensity: 0.55,
+        roughness: 0.5, transparent: true, opacity: 0.9,
+      }),
     );
+    this.trajLine.renderOrder = 3;
     this.scene.add(this.trajLine);
 
     this.aimMarker = new THREE.Mesh(
@@ -997,7 +1019,14 @@ export class Scene {
 
     if (this.showTrajectory && traj && traj.length > 1) {
       this.trajLine.geometry.dispose();
-      this.trajLine.geometry = new THREE.BufferGeometry().setFromPoints(traj.map((p) => new THREE.Vector3(p[0], p[1], p[2])));
+      // Thin the integrator's output before building the tube: it hands over hundreds of
+      // points a few millimetres apart, and a curve through those is all noise and no shape.
+      const step = Math.max(1, Math.floor(traj.length / 48));
+      const pts = traj.filter((_, i) => i % step === 0 || i === traj.length - 1)
+        .map((q) => new THREE.Vector3(q[0], q[1], q[2]));
+      this.trajLine.geometry = new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3(pts), Math.max(8, pts.length * 2), 0.011, 8, false,
+      );
       this.trajLine.visible = true;
     } else {
       this.trajLine.visible = false;

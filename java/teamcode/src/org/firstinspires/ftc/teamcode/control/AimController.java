@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.control;
 
 import org.firstinspires.ftc.teamcode.subsystems.Robot;
+import org.firstinspires.ftc.teamcode.util.Units;
 
 /**
  * Turret for azimuth, shot table for hood and RPM, gate for permission to fire.
@@ -15,6 +16,9 @@ public class AimController {
     private double lastLeadDeg = 0;
     private double lastHoodErrDeg = 0;
     private double lastPLand = -1;
+    /** One-pole filtered localizer velocity, m/s. The lead is only as good as this. */
+    private double velX = 0;
+    private double velY = 0;
 
     public AimController(Robot robot) { this.robot = robot; }
 
@@ -53,12 +57,20 @@ public class AimController {
         double tableRpm = robot.shots.rpmFor(range);
         double tableSpeed = robot.cfg.exitSpeedFor(tableRpm);
         double tableElev = robot.cfg.hoodMinDeg + robot.shots.hoodFor(range) * hoodSpan;
+        // FILTER THE REPORTED VELOCITY BEFORE AIMING ON IT. The whole lead hangs off this
+        // number and on a real robot it is a differentiated encoder, which is the noisiest
+        // thing on the machine. One pole: the quantity being estimated moves on the timescale
+        // of the robot's own acceleration, so a few tens of milliseconds of lag is cheap and
+        // the noise it removes would otherwise jitter the lead azimuth, drag the turret around
+        // chasing it, and hold the readiness gate open on an axis that never settles.
         Localizer loc = robot.localizer();
+        double rawVx = loc == null ? 0 : loc.getVx() * 0.0254;
+        double rawVy = loc == null ? 0 : loc.getVy() * 0.0254;
+        double a = Units.clamp(robot.cfg.velFilterAlpha, 0.01, 1);
+        velX += a * (rawVx - velX);
+        velY += a * (rawVy - velY);
         lead.solve(
-            bearing, tableSpeed, tableElev,
-            // The localizer reports FTC inches; the shot is solved in metres.
-            loc == null ? 0 : loc.getVx() * 0.0254,
-            loc == null ? 0 : loc.getVy() * 0.0254,
+            bearing, tableSpeed, tableElev, velX, velY,
             loc == null ? 0 : loc.getHeadingDeg(),
             robot.cfg.hoodMinDeg, robot.cfg.hoodMaxDeg);
         lastLeadDeg = lead.correctionDeg;
@@ -110,6 +122,17 @@ public class AimController {
         // G417: only a shot into the up CELL may move the HIVE, and a hive already
         // tipping is not a target. Hold fire.
         aimed = pointing && inRange && hoodThere && likely && robot.flywheel.isReady() && !tp.isTipping();
+
+        // AND KEEP CHECKING AFTER THE DECISION. A feed already in flight is cancelled if the
+        // things that can go bad inside those four tenths do: the turret running out of travel
+        // or falling behind under a turning chassis, and the wheel sagging under its floor.
+        // Not the full readiness latch -- that needs three consecutive good loops against a
+        // tachometer quantised to about 107 rpm a count, and demanding an unbroken run of them
+        // while the gate servo travels stops the robot shooting almost entirely.
+        robot.transfer.stillGood(
+                robot.turret.tracker().canReach(lead.azimuthDeg)
+                && robot.turret.onTarget(3.0)
+                && robot.flywheel.getRpm() > robot.flywheel.gate().getTargetRpm() * robot.cfg.flywheelMinRpmFrac);
         return aimed;
     }
 

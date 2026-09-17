@@ -14,7 +14,7 @@
    0
   ],
   "clearance_m": 0.02,
-  "_source": "guess (typical 18in FTC box robot at the weight limit)"
+  "_source": "guess, sized on a two-pod odometry puck (goBILDA Pinpoint class) rather than measured. WAS ALL ZEROS AND READ BY NOTHING: the brain was handed ground-truth position, heading AND velocity, so the motion lead -- which is built entirely on the reported velocity -- had never been tested against an estimate that could be wrong. vel_mps is the one that matters: a puck differentiates a quantised encoder, and differentiating is the noisiest thing on the robot. 0.04 m/s against a ball horizontal of about 2.3 m/s is one degree of bearing, which is the same order as the launch yaw scatter already modelled. xy_in and heading_deg are a standing error rather than a drift, which flatters a real puck over a long match and is fair over the few seconds a shot takes - CALIBRATE by driving a known square and reading the return error. The TARGET bearing and range are still exact, which is the bigger remaining lie: on a real robot they come from an AprilTag pipeline with its own noise and its own 50-100 ms of latency."
  },
  "drivetrain": {
   "type": "mecanum",
@@ -136,7 +136,8 @@
    "variant": "5202-6000",
    "gearRatio": 1.0
   },
-  "I_fly_kgm2": 0.000121,
+  "I_fly_kgm2": 0.000391,
+  "I_fly_kgm2_source": "A 96 mm goBILDA grip wheel (105 g, 1.21e-4 kg.m^2) PLUS a 96 mm x 12 mm 6061 disc behind it: pi*r^2*t*2700 = 234 g, I = 0.5*m*r^2 = 2.70e-4, so 3.91e-4 together and 0.34 kg on the shaft. WAS THE BARE GRIP WHEEL, and no FTC shooter that works is built that way. At 1.21e-4 a single POLLEN takes 210 rpm out of the wheel on its way past (tools/shootercheck.ts), three and a half times the 60 rpm firing window, and the tachometer cannot even see it coming: the hub reports velocity quantised to about 107 rpm a count on a 28-tick encoder, filtered over 6 loops. Every wild shot in tools/_acc.ts was that gap -- fired with the true speed 367 +- 101 rpm under target while the filtered reading said it was fine. Adding inertia is the answer a team reaches for and it costs nothing in the motor budget, which matters here because the robot is already at FTC's 8-motor limit (4 drive, intake, transfer, flywheel, turret) and cannot have a second flywheel motor without giving one up. Spin-up goes from 0.74 s to 2.0 s, which is what a real shooter takes - CALIBRATE by weighing the actual wheel stack.",
   "r_fly_m": 0.048,
   "k": 0.45,
   "lossFactor": 2.0,
@@ -155,11 +156,11 @@
   },
   "_source": "I_fly from Gecko 96mm (cited); k/lossFactor guesses - CALIBRATE.",
   "_motorNote": "PLAN.md's default was a 5203-1620 at 1:1, which tops out at v_exit = k*w*r = 0.45*169.6*0.048 = 3.7 m/s and cannot reach the HIVE from anywhere on the field. A bare 6000 RPM motor gives 13.6 m/s. A 2:1 step-up on the 1620, or a dual-wheel k of 0.90, would do as well.",
-  "minLandProb": 0.85,
-  "minLandProb_source": "MEASURED, and set by what it COSTS rather than by what it sounds like. The shot is refused unless the robot computes at least this CALIBRATED chance of landing: P(exit speed inside the band that threads the mouth, from the FILTERED wheel speed) x P(pointing inside the mouth, from the current turret error and the launch yaw scatter) x P(a ball arriving like that stays in, from tools/entrycheck.ts), all put through the measured score-to-frequency curve in config/landcal.json. WAS 0.900 AGAINST A MEASURED CEILING OF 0.898 -- above the best the shooter can honestly claim -- so the gate could be satisfied only by rounding, and the robot sat in perfectly good zones holding fire: 0.00 landed per second stopped at 50 in, where the same robot with the gate open landed 0.45. `npm run tool -- tools/movingfire.ts --sweep` prices the trade in BALLS PER SECOND, which is the side a per-shot land rate cannot see: 0.85 gives up nothing (0.45 stopped, 0.65 closing, 0.45 shuttling, the same as an open gate) and takes the hit rate of the shots it does allow from 64% to 90-100%. It is free carefulness, and 0.90 is zero everywhere. Re-run tools/landcal.ts and then the sweep whenever the shooter changes: this number is only meaningful against the curve it was measured with.",
+  "minLandProb": 0.7,
+  "minLandProb_source": "MEASURED, and set by what it COSTS rather than by what it sounds like. The shot is refused unless the robot computes at least this CALIBRATED chance of landing: P(exit speed inside the band that threads the mouth, from the FILTERED wheel speed) x P(pointing inside the mouth, from the current turret error and the launch yaw scatter) x P(a ball arriving like that stays in, from tools/entrycheck.ts), all through the measured curve in config/landcal.json. `npm run tool -- tools/movingfire.ts --sweep` prices it in BALLS PER SECOND, which is the side a per-shot land rate cannot see -- refusing a 60% shot only pays if a better one turns up inside the 1.5 s the refused cycle costs. At 0.70: 0.45 landed per second stopped at 90% of the shots taken, 0.55 closing at 100%, 0.35 shuttling at 100%. 0.80 and above takes the STOPPED case to zero. RE-MEASURE AFTER ANY SHOOTER CHANGE, and do not carry the old number over: it was 0.85 against the bare-grip-wheel flywheel and a noiseless localizer, and both of those moved. It is only meaningful against the landcal curve it was swept on.",
   "tolRpm_source": "MEASURED by tools/trimsweep.ts against balls in the CELL. It cannot be read off a datasheet because the floor is the encoder: the flywheel runs 28 ticks a rev direct-driven, so the hub's 20 ms velocity window sees 26 counts at 2800 rpm and ONE COUNT is 107 rpm -- about 15 in of range by tools/apercheck.ts. A single reading cannot resolve 30 rpm, which is why rpmFilterFrames exists: six loops of moving average is what makes this window mean anything. 120 rpm is +-14.9 in against a hole 8.9 in deep, and measured worse than 60 at every setting tried.",
-  "kS": 0.00442,
-  "kV": 0.000164698,
+  "kS": 0.0049,
+  "kV": 0.000167509,
   "kP": 0.0008,
   "kSkV_source": "MEASURED by tools/flywheeltune.ts --ff, which is TuningFlywheel run offline: hold a duty, wait for steady state, record the speed, least-squares fit duty = kS + kV*rpm over 0.2..0.9 duty. Worst residual 0.0037 duty across the range, so the wheel really is that linear. These REPLACE the generic kS = 0.03, kV = 1/freeRpm that genconstants.mjs used to derive: at 2800 rpm the guess asks for 0.497 duty against the measured 0.466, which parks the wheel about 190 rpm high -- far enough outside a 60 rpm readiness window that the robot fires NOTHING. kP is unchanged and only has to cover the dip a shot takes out of the wheel; re-fit all three against a real TuningFlywheel log - CALIBRATE.",
   "rpmFilterFrames": 6,
@@ -197,9 +198,14 @@
   ],
   "localizer": {
    "source": "groundTruth",
+   "velFilterAlpha": 0.25,
+   "velFilterAlpha_source": "MEASURED as the smallest filter that keeps the robot shooting once the odometry noise is modelled at all. The lead is built entirely on the reported velocity, so with vel_mps at 0.04 the raw reading jitters the lead azimuth, the turret chases the jitter, its tracking error never settles under the gate's 3 deg and three of the shoot tests fired nothing. One pole at alpha 0.25 on a 60 Hz loop is about 50 ms of lag for roughly a third of the noise. The thing being estimated moves on the timescale of the robot's own acceleration, which is tenths of a second, so 50 ms is cheap - RETUNE against a real puck, whose noise will not be Gaussian.",
    "noise": {
-    "xy_in": 0.0,
-    "heading_deg": 0.0
+    "xy_in": 0.5,
+    "heading_deg": 0.5,
+    "vel_mps": 0.04,
+    "omegaDps": 1.0,
+    "_source": "guess, sized on a two-pod odometry puck (goBILDA Pinpoint class) rather than measured. WAS ALL ZEROS AND READ BY NOTHING: the brain was handed ground-truth position, heading AND velocity, so the motion lead -- which is built entirely on the reported velocity -- had never been tested against an estimate that could be wrong. vel_mps is the one that matters: a puck differentiates a quantised encoder, and differentiating is the noisiest thing on the robot. 0.04 m/s against a ball horizontal of about 2.3 m/s is about one degree of bearing, the same order as the launch yaw scatter already modelled. xy_in and heading_deg are a standing error rather than a drift, which flatters a real puck over a long match and is fair over the few seconds a shot takes - CALIBRATE by driving a known square and reading the closing error. The TARGET bearing and range are still exact, which is the bigger remaining lie: on a real robot they come from an AprilTag pipeline with its own noise and 50-100 ms of latency."
    }
   }
  },
@@ -242,6 +248,6 @@
    29
   ],
   "maxMotors": 8,
-  "maxServos": 8
+  "maxServos": 12
  }
 }

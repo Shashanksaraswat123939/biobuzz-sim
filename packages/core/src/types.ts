@@ -87,7 +87,15 @@ export interface RobotSpec {
    * than regenerating a table, and the Analysis tab computes them from a collected run.
    */
   calibration: { rangeTrim_in: number; turretTrim_deg: number };
-  sensors: { imu: { latencyMs: number }; distance: { name: string; mount_m: Vec3; dir: Vec3; unit: string; max_m: number }[]; localizer: { source: string; noise: { xy_in: number; heading_deg: number } } };
+  sensors: { imu: { latencyMs: number }; distance: { name: string; mount_m: Vec3; dir: Vec3; unit: string; max_m: number }[]; localizer: { source: string; noise: {
+    xy_in: number; heading_deg: number;
+    /** One sigma on the REPORTED velocity, m/s. The motion lead is built on this number. */
+    vel_mps?: number;
+    /** One sigma on the reported yaw rate, deg/s. */
+    omegaDps?: number;
+  };
+    /** One-pole alpha the brain filters the reported velocity with before aiming on it. */
+    velFilterAlpha?: number } };
   hardware: Record<string, string>;
   hub: { loopPeriodMs: number; bulkCacheMode: string; imuLatencyMs: number; encoderVelocityWindowMs: number; commandLatencyMs: number; velocityPid: { p: number; i: number; d: number; f: number; settleMs: number }; voltageNoise_V: number };
   limits: { startingCube_in: number; expansion_in: [number, number, number]; maxMotors: number; maxServos: number };

@@ -169,6 +169,18 @@ predicts the velocity at *release*, and now that the wheel barely moves it is wo
 either way (0.36 landed per second at τ = 0, 0.15 and 0.3 alike). It is kept because a real
 hood will lag in a way this one does not.
 
+**And the permission has to still be good when the ball leaves.** The feed commits about four
+tenths of a second before release — the pulse plus the climb up the tube — and the gate shuts
+again if the turret runs out of travel or falls behind in the meantime. Not the full readiness
+latch, which flickers on a quantised tachometer, and not the wheel, whose floor is unmeetable
+for a robot whose range is growing.
+
+> **`turretErrDeg` is measured against the CLAMPED command**, so an axis pinned on its ±120°
+> stop used to report a fraction of a degree of error. Spinning, the lead asked for a bearing
+> 17.7 ± 18.5° outside the travel, the gate called it aimed, and shots went out up to 50° wide.
+> The aim keeps what the lead ASKED for and refuses the shot when the clamp bites —
+> `TurretTracker.canReach` on the hub always did this; the mirror did not.
+
 **The hood has to have arrived.** It is the axis carrying the correction now, so the readiness
 gate waits for it — `hood.tolDeg`, 2°, derived from what the wheel is already allowed (60 rpm
 is ±21 cm of range, 1° of hood is 3.5 cm, so the RPM window is worth about 6° of hood). A servo
@@ -274,3 +286,13 @@ fine.
    CG, so there is no roll moment to resolve, and leaving the axes free let solver noise tip
    the box over.
 5. **Aero on balls inside the robot** is computed and negligible rather than special-cased.
+6. **The target's bearing and range are exact.** `sensors.localizer` now carries real odometry
+   error — 0.5 in, 0.5°, and 0.04 m/s on the reported velocity, which is what the motion lead
+   is built on — but `game.upCellAzimuthDeg` and `upCellRangeIn` still come straight off the
+   truth. On a robot they come from an AprilTag pipeline with its own noise and 50–100 ms of
+   latency, and that latency would matter to a moving shot the way the feed delay does.
+7. **The muzzle is aimed as though it were at the robot's tracked point.** It is 0.12 m out on a
+   rotating turret, so while the lead is holding the aim off the bearing the muzzle sits a
+   centimetre or two off the shot line, and a turning chassis gives it a velocity of its own
+   (ω × r) that the lead does not subtract. Both are worth a degree or two; measured as small
+   next to what has been fixed (`tools/shoterror.ts` prints them), so left alone.

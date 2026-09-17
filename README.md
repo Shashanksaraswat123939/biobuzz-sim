@@ -88,6 +88,7 @@ npm run tool -- tools/hivedrop.ts          # how many balls tip the HIVE
 npm run tool -- tools/landrate.ts          # land rate vs range
 npm run tool -- tools/leadcheck.ts         # does the motion lead land the shot? (no scatter)
 npm run tool -- tools/movingfire.ts        # shooting while moving, and while accelerating
+npm run tool -- tools/shoterror.ts         # where a moving shot's error actually comes from
 npm run tool -- tools/shottable.ts         # regenerate the shot table
 npm run tool -- tools/hoodsweep.ts         # which hood range this robot needs
 npm run tool -- tools/shootercheck.ts      # turret coverage, flywheel MOI, exit speed
@@ -117,19 +118,34 @@ npm test                                   # 84 tests
   the app actually enforces (`tools/movingfire.ts --gate`), landed per second and the hit rate
   of the shots taken:
 
-  | | stopped | closing | strafing | shuttling | closing + wobbling |
-  |---|---|---|---|---|---|
-  | landed/s | 0.36 | 0.64 | 0.28 | 0.36 | 0.80 |
-  | of those taken | 90% | 94% | 100% | 64% | 100% |
-  | downrange bias | +7 cm | +3 cm | −8 cm | −5 cm | +4 cm |
+  Error at the mouth, in cm, with the odometry noise modelled (`tools/shoterror.ts`):
 
-  Every moving case now shoots at least as often as standing still. Before, the same table
-  read 0.00 / 0.68 / 0.12 / 0.04 / 0.68 — the robot mostly held fire, because the threshold
-  was set two tenths of a point above the best land rate the shooter can achieve.
+  | | stopped | shuttling | closing | spinning | spinning + driving |
+  |---|---|---|---|---|---|
+  | downrange | 7 ±13 | 7 ±10 | 8 ±10 | 9 ±8 | 9 ±8 |
+  | across | 2 ±14 | 2 ±22 | 1 ±4 | −2 ±9 | −2 ±4 |
+  | wild shots | 1/79 | 1/68 | 0/21 | 0/37 | 0/50 |
+
+  **Every moving case is now as accurate as standing still.** Spinning used to be −51 ±65 cm
+  across with 13 shots in 78 going wildly wrong; shuttling was −18 ±49 downrange with 20 in
+  108 wild. And through the gate the app enforces, 90–100% of the shots it takes now land.
+
+  What it still will not do is shoot while **running away**: receding at 0.6 m/s the table's
+  target rpm rises with the range faster than the wheel follows it, the readiness gate never
+  latches, and with the gate open it manages two shots in 25 s with a 598 rpm error. That is a
+  mechanical limit, not a policy one, and the gate is right to refuse.
 - **`minLandProb` is set by what it costs, not by what it sounds like.**
-  `tools/movingfire.ts --sweep` prices it in balls per second: 0.85 gives up nothing against an
-  open gate and takes the hit rate from 64% to 90–100%. 0.90 scores zero everywhere, because
-  the calibration's measured ceiling is 0.898.
+  `tools/movingfire.ts --sweep` prices it in balls per second. At 0.70: 0.45 landed/s stopped
+  with 90% of the shots taken landing, 0.55 closing at 100%, 0.35 shuttling at 100%. 0.80 and
+  above takes the stopped case to zero. Re-measure it after any change to the shooter — it was
+  0.85 against the old flywheel and a noiseless localizer, and both of those moved.
+- **The flywheel is a real one now.** A bare 105 g grip wheel loses 210 rpm to every ball it
+  throws, three and a half times the firing window, and no FTC shooter that works is built that
+  way. With a 96 × 12 mm aluminium disc behind it (3.91e-4 kg·m², 0.34 kg) the dip is 70 rpm.
+  Inertia rather than a second motor, because the robot is already at FTC's eight-motor limit.
+- **The localizer is no longer an oracle.** It reports position, heading and velocity with real
+  odometry error, and the brain filters the velocity before aiming on it — which is what a team
+  does, and what the perfect estimate had been hiding.
 - **Top speed matches the motor curve**: 62.8 in/s measured against 62 in/s hand-computed.
 
 ## Layout

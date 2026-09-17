@@ -78,6 +78,7 @@ lines.push('');
 K('double', 'HOOD_MIN_DEG', d(robot.hood.angleRange_deg[0]));
 K('double', 'HOOD_MAX_DEG', d(robot.hood.angleRange_deg[1]));
 K('double', 'HOOD_TOL_DEG', d(robot.hood.tolDeg ?? 2));
+K('double', 'VEL_FILTER_ALPHA', d(robot.sensors.localizer.velFilterAlpha ?? 1));
 lines.push('');
 K('double', 'FLYWHEEL_TICKS_PER_REV', d(flyTpr));
 K('double', 'FLYWHEEL_FREE_RPM', d(flyFree));

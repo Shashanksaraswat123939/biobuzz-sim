@@ -1109,3 +1109,79 @@ Did instead: Wired it into `AimController`, against the same baked calibration, 
 Costs/risks: The hub will now hold fire in places it previously shot. That is the point, but
              it makes `minLandProb` a live number on the robot rather than a simulator setting.
 Who/where:   AimController.java, Turret.java, RobotConfig.java, genconstants.mjs
+
+## 2026-09-17 — The readiness gate was a decision, not a permission
+Plan said:   Fire when the shot is good.
+Found:       `feedOne` commits about four tenths of a second before the ball leaves — the feed
+              pulse plus the climb up the tube — and that was final. Every axis keeps tracking
+              in the meantime, so the AIM at release is current; what went stale was the
+              PERMISSION. It showed up as a tail of badly wrong shots rather than as lost
+              precision, which is why every summary statistic had hidden it: shuttling fore and
+              aft the TYPICAL shot was better than a stationary one (median 1 cm off line, IQR
+              [−10, +10] downrange) while 20 of 108 landed over 60 cm out.
+Did instead: The release re-checks the two things that can go bad inside those four tenths and
+              are geometric rather than measured — the turret running out of travel, and the
+              turret falling behind under a turning chassis. NOT the full readiness latch: that
+              needs three consecutive good loops against a tachometer quantised to ~107 rpm a
+              count, and demanding an unbroken 0.19 s while the gate servo travels took the
+              stopped case from 78 shots to 3. NOT the wheel either — a floor is unmeetable for
+              a robot whose range is growing (it took strafing to zero), and re-checking P(land)
+              rides the same quantisation and flickers.
+Costs/risks: A robot spinning at 134 deg/s now refuses most shots. That is correct — the turret
+              cannot hold the goal — but it is a visible behaviour change.
+Who/where:   builtinTeleOp.ts, Transfer.java, AimController.java
+
+## 2026-09-17 — The gate could not tell an aimed turret from one on its end stop
+Plan said:   Hold fire unless the turret is on target.
+Found:       `turretErrDeg` is measured against the CLAMPED command. The turret travels ±120°;
+              when the lead asked for more the command was silently clamped and the error read a
+              fraction of a degree on an axis pinned against its stop. Over a spinning run the
+              lead asked for a bearing 17.7 ± 18.5 deg OUTSIDE the travel, the gate said
+              on-target, and the shots went out up to 50 deg wide: lateral miss −51 ± 65 cm
+              against ±11 standing still, and the largest single error term in the harness.
+Did instead: Keep what the lead ASKED for, before the clamp, and refuse the shot when the two
+              differ. `TurretTracker.canReach` on the hub has always tested this; the mirror
+              never did, and the mirror is what every tool in this repo measures.
+Costs/risks: None found. It only ever refuses shots that could not have been aimed.
+Who/where:   builtinTeleOp.ts
+
+## 2026-09-17 — The flywheel was not one a real FTC shooter would build
+Plan said:   A single bare 6000 rpm motor direct-driving a compliant wheel.
+Found:       At 1.21e-4 kg·m² — a bare 105 g grip wheel — one POLLEN takes 210 rpm out of the
+              wheel on its way past, three and a half times the 60 rpm firing window. The
+              tachometer cannot see it coming either: the hub reports velocity quantised to
+              about 107 rpm a count on a 28-tick encoder, filtered over six loops. Every wild
+              shot left in the shuttling case was that gap — fired with the true speed 367 ± 101
+              rpm under target while the filtered reading said it was fine.
+Did instead: The wheel plus a 96 × 12 mm 6061 disc behind it: 3.91e-4 kg·m², 0.34 kg on the
+              shaft, which is what a team building a shooter that works actually bolts on. The
+              dip falls to 70 rpm and spin-up goes 0.74 s → 2.0 s, which is normal. Adding
+              INERTIA rather than a second motor because the robot is already at FTC's eight-
+              motor limit (four drive, intake, transfer, flywheel, turret) and a second flywheel
+              motor would have to come out of one of those.
+Costs/risks: Slower spin-up. The shot table is unaffected — it depends on k and r_fly, not I —
+              but `flywheeltune --ff` was re-fitted and landcal re-run, because the calibration
+              is only meaningful against the shooter it was measured on.
+Who/where:   config/robot.json, tools/shootercheck.ts
+
+## 2026-09-17 — The robot had a perfect localizer, and its noise config was dead
+Plan said:   `sensors.localizer.noise` — xy_in and heading_deg.
+Found:       Both were zero and neither was read by anything: `sensors()` handed the brain
+              ground-truth position, heading AND velocity. The velocity is the one that matters,
+              because the whole motion lead is built on it — so a lead validated against a
+              perfect estimate had never been validated at all. There was not even a field for
+              velocity noise.
+Did instead: Wired the config to the sensor, added `vel_mps` and `omegaDps`, and set them from
+              a two-pod odometry puck: 0.04 m/s, which against a 2.3 m/s ball horizontal is
+              about a degree of bearing — the same order as the launch yaw scatter already
+              modelled. Drawn from the world's seeded RNG, so determinism holds.
+              It immediately stopped the robot shooting: the raw reading jitters the lead
+              azimuth, the turret chases the jitter, its tracking error never settles under the
+              gate's 3 deg, and three shoot tests fired nothing. The answer is the one a real
+              team reaches for — filter the reported velocity before aiming on it. One pole,
+              alpha 0.25, about 50 ms of lag against a quantity that moves on the timescale of
+              the robot's own acceleration.
+Costs/risks: The TARGET bearing and range are still exact, and that is now the bigger lie: on a
+              real robot they come from an AprilTag pipeline with its own noise and 50–100 ms of
+              latency. Listed in PHYSICS.md §7.
+Who/where:   world.ts, builtinTeleOp.ts, AimController.java, config/robot.json, types.ts

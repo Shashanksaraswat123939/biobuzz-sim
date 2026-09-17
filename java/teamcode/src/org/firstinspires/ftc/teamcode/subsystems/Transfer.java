@@ -46,6 +46,17 @@ public class Transfer {
 
     public void hold() { pulsing = false; }
 
+    /**
+     * THE GATE STAYS OPEN ONLY WHILE THE SHOT IS STILL GOOD.
+     *
+     * feedOne() commits about four tenths of a second before the ball actually leaves -- the
+     * feed pulse plus the climb up the tube -- and that used to be final. Every axis keeps
+     * tracking in the meantime so the AIM at release is current; what went stale was the
+     * PERMISSION, and it showed up as a small tail of badly wrong shots rather than as a loss
+     * of precision. Call this every loop with whether the shot would still be allowed now.
+     */
+    public void stillGood(boolean ok) { if (pulsing && !ok) pulsing = false; }
+
     public void setGate(boolean open) { gateOpen = open; }
 
     public void update() {

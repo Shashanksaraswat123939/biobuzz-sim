@@ -497,6 +497,33 @@ export class World {
     return out;
   }
 
+  /**
+   * What the odometry says, which is not what is true.
+   *
+   * This used to hand the brain ground truth and `sensors.localizer.noise` sat in robot.json
+   * at zero, read by nothing -- a perfect oracle for position, heading AND velocity. The
+   * velocity is the one that matters: the whole motion lead is built on it, so a lead tested
+   * against a perfect estimate has never been tested at all. A real two-pod odometry puck
+   * reports a DIFFERENTIATED velocity, and differentiating a quantised encoder is the noisiest
+   * thing on the robot.
+   *
+   * Drawn from the world's own seeded RNG so a seed still reproduces a run exactly.
+   */
+  private localizerReading(ftcP: Vec3, ftcV: Vec3, yawDeg: number, yawRate: number): SensorFrame['localizer'] {
+    const n = this.robot.spec.sensors.localizer.noise;
+    const g = (sigma: number) => (sigma > 0 ? this.rng.gauss(0, sigma) : 0);
+    const velSigma = n.vel_mps ?? 0;
+    return {
+      x: ftcP[0] + g(n.xy_in),
+      y: ftcP[1] + g(n.xy_in),
+      heading: yawDeg + g(n.heading_deg),
+      // Metres per second in, inches per second out: the frame is FTC's.
+      vx: ftcV[0] + g(velSigma) * M_TO_IN,
+      vy: ftcV[1] + g(velSigma) * M_TO_IN,
+      omega: yawRate + g(n.omegaDps ?? 0),
+    };
+  }
+
   sensors(): SensorFrame {
     const r = this.robot;
     const p = r.pos;
@@ -532,7 +559,7 @@ export class World {
       imu: { yaw: imu.yaw, pitch: 0, roll: 0, yawRate: imu.rate },
       battery: { volts: this.battery.volts + this.rng.gauss(0, r.spec.hub.voltageNoise_V) },
       distance: this.distanceReadings(),
-      localizer: { x: ftcP[0], y: ftcP[1], heading: yawDeg, vx: ftcV[0], vy: ftcV[1], omega: yawRate },
+      localizer: this.localizerReading(ftcP, ftcV, yawDeg, yawRate),
       gamepad1: this.gamepads[0],
       gamepad2: this.gamepads[1],
       game: {

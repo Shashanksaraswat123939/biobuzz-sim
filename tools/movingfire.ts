@@ -47,6 +47,8 @@ interface Run {
   landed: number; secs: number;
   /** Where the misses actually went, at the mouth plane. This is the diagnostic. */
   longs: number[]; lats: number[]; ranges: number[];
+  /** How many loops were spent holding for each reason. "Why is it not shooting" in one line. */
+  why: Record<string, number>;
 }
 
 interface Case {
@@ -141,6 +143,7 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gat
   for (let f = 0; f < 45; f++) step(hold(world.t));
 
   const fire = (t: number): GamepadState => ({ ...hold(t), right_bumper: true });
+  const why: Record<string, number> = {};
   const radial: number[] = [];
   const ranges: number[] = [];
   let prevRadial = 0;
@@ -148,6 +151,10 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gat
   const t0 = world.t;
   for (let f = 0; f < Math.round(maxSeconds * 60); f++) {
     step(fire(world.t));
+    // Collapse the numeric reasons: "P(land) 63% < 70%" and "P(land) 58% < 70%" are one answer.
+    const h = brain.state.hold;
+    const key = !h ? 'clear to fire' : h.replace(/-?[\d.]+/g, 'N');
+    why[key] = (why[key] ?? 0) + 1;
     const r = world.robot.pos;
     const dx = mouth[0] - r[0];
     const dz = mouth[2] - r[2];
@@ -181,6 +188,7 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gat
     fired: firedMoving,
     radialMps: avg(radial),
     radialAccel: avg(accels),
+    why,
     rpmErr: avg(log.map((s) => Math.abs(s.rpm - s.targetRpm))),
     landed: log.filter((s) => s.result === 'cell').length,
   };
@@ -205,6 +213,7 @@ async function pool(c: Case, seconds: number, tau?: number, gate = 0) {
   const vr: number[] = [];
   const acc: number[] = [];
   const ranges: number[] = [];
+  const why: Record<string, number> = {};
   for (let i = 0; secs < seconds && i < 24; i++) {
     const r = await pass(c, 7 + i * 18, seconds - secs, tau, gate);
     if (r.secs < 0.2) break;                          // a pass that cannot even start
@@ -217,8 +226,12 @@ async function pool(c: Case, seconds: number, tau?: number, gate = 0) {
     vr.push(r.radialMps);
     acc.push(r.radialAccel);
     ranges.push(...r.ranges);
+    for (const [k, v] of Object.entries(r.why)) why[k] = (why[k] ?? 0) + v;
   }
-  return { secs, fired, landed, rpmErr: mean(rpmErrs), longs, lats, vr: mean(vr), acc: mean(acc), range: mean(ranges) };
+  const loops = Object.values(why).reduce((a, b) => a + b, 0) || 1;
+  const top = Object.entries(why).sort((a, b) => b[1] - a[1])[0];
+  return { secs, fired, landed, rpmErr: mean(rpmErrs), longs, lats, vr: mean(vr), acc: mean(acc), range: mean(ranges),
+    why: top ? `${top[0]} ${((100 * top[1]) / loops).toFixed(0)}%` : '' };
 }
 
 /**
@@ -294,6 +307,7 @@ export async function main(argv: string[] = []): Promise<void> {
       `${r.rpmErr.toFixed(0).padStart(4)} rpm   ` +
       `long ${cm(mean(r.longs)).padStart(4)}+-${cm(sd(r.longs)).padStart(3)}   lat ${cm(mean(r.lats)).padStart(4)}+-${cm(sd(r.lats)).padStart(3)} cm`,
     );
+    console.log(`  ${''.padEnd(24)} mostly: ${r.why}`);
   }
   console.log('');
   console.log('  Every case should now land at about the stopped rate, and the long bias should be');

@@ -199,6 +199,10 @@ export interface TeleOpState {
   hoodErrDeg: number;
   /** How far the motion lead moved the aim, degrees. */
   leadDeg: number;
+  /** The bearing the lead ASKED for, before the turret's travel clamped it. */
+  leadAzDeg: number;
+  /** How far outside its travel that bearing was. Non-zero means the turret cannot take it. */
+  turretPastStopDeg: number;
   note: string;
   /** Match time of the last feed pulse, and whether one is running. Transfer.java's timers. */
   lastFeedT: number;
@@ -210,7 +214,7 @@ export interface TeleOpState {
 export const newTeleOpState = (): TeleOpState => ({
   autoAim: true, firing: false,
   turretManualDeg: 0, flywheelOn: false,
-  ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0,
+  ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
   lastFeedT: -999, pulsing: false, vRadial: 0,
 });
@@ -243,6 +247,8 @@ export class BuiltinTeleOp {
   /** Last velocity sample and the filtered acceleration built from it, for the lead. */
   private lastVel = { x: 0, y: 0, t: 0 };
   private accel = { x: 0, y: 0 };
+  /** One-pole filtered localizer velocity. The lead is only ever as good as this. */
+  private velFilt = { x: 0, y: 0 };
   /** The fixed-speed solution for this loop, or null when there is no shot from here. */
   private hoodCell: HoodCell | null = null;
 
@@ -331,8 +337,24 @@ export class BuiltinTeleOp {
     // The measurement that forced this: driving with a wobbling stick, the robot fired MORE
     // than in any other case and landed NOTHING, with the lowest rpm error at fire of the
     // lot. The wheel was exactly on its target; the target was stale.
-    const velX = s.localizer.vx * 0.0254;
-    const velY = s.localizer.vy * 0.0254;
+    // FILTER THE REPORTED VELOCITY BEFORE AIMING ON IT. The whole lead hangs off this number,
+    // and on a real robot it is a differentiated encoder rather than the ground truth the
+    // simulator used to hand over. With the odometry noise now modelled at all -- 0.04 m/s,
+    // which is a degree of bearing against a 2.3 m/s ball -- the raw reading jitters the lead
+    // azimuth, the turret chases the jitter, its tracking error never settles under the gate's
+    // 3 deg, and the robot stops shooting: three of the shoot tests fired nothing.
+    //
+    // One pole, because the thing being estimated moves on the timescale of the robot's own
+    // acceleration (tenths of a second) and the noise is per loop. alpha = 0.25 at 60 Hz is
+    // about 50 ms of lag for roughly a third of the noise, which is the trade a team makes on
+    // a real puck.
+    const rawVx = s.localizer.vx * 0.0254;
+    const rawVy = s.localizer.vy * 0.0254;
+    const a = clamp(this.spec.sensors.localizer.velFilterAlpha ?? 1, 0.01, 1);
+    this.velFilt.x += a * (rawVx - this.velFilt.x);
+    this.velFilt.y += a * (rawVy - this.velFilt.y);
+    const velX = this.velFilt.x;
+    const velY = this.velFilt.y;
     const tau = this.spec.transfer.leadLatency_s ?? 0;
     let leadVx = velX;
     let leadVy = velY;
@@ -375,6 +397,7 @@ export class BuiltinTeleOp {
       ? this.hoodTable.lookup(s.game.upCellRangeIn - cal.rangeTrim_in, vRadial)
       : null;
     st.leadDeg = wrapPi((lead.azimuthDeg - s.game.upCellAzimuthDeg) * DEG) * RAD;
+    st.leadAzDeg = lead.azimuthDeg;
     // Where the turret ACTUALLY is, from its encoder -- not where it was told to go. The
     // axis is acceleration limited, so a 137 deg swing takes most of a second, and firing
     // on the commanded angle means firing at nothing.
@@ -384,13 +407,26 @@ export class BuiltinTeleOp {
       // Lead-corrected bearing to the up CELL, relative to the robot's heading.
       // The lateral trim also absorbs a turret encoder zero that is a degree out, which
       // looks identical in the data and has the same fix.
-      turretDeg = clamp(lead.azimuthDeg - cal.turretTrim_deg, this.spec.turret.range_deg[0], this.spec.turret.range_deg[1]);
+      const want = lead.azimuthDeg - cal.turretTrim_deg;
+      turretDeg = clamp(want, this.spec.turret.range_deg[0], this.spec.turret.range_deg[1]);
+      // HOW FAR PAST THE END STOP THE SHOT WANTED TO BE, which is not the same question as
+      // how far the axis is from its command and is the one nothing was asking.
+      //
+      // `turretErrDeg` below is measured against the CLAMPED command, so an axis pinned on its
+      // stop reports a fraction of a degree of error and the readiness gate calls it aimed. A
+      // robot turning under the turret runs out of travel constantly -- measured over a
+      // spinning run, the lead asked for a bearing 17.7 +- 18.5 deg OUTSIDE +-120, the gate
+      // said on-target, and the shots went out up to 50 deg wide: lateral miss -51 +- 65 cm
+      // against +-11 standing still, and the single largest error term in the whole harness.
+      // `TurretTracker.canReach` on the hub has always tested this; the mirror never did.
+      st.turretPastStopDeg = Math.abs(want - turretDeg);
     } else {
       // Rate control, in degrees per second: the axis has its own acceleration limit, so
       // this is a request, not a teleport. 100 deg/s covers the full arc in about 2.4 s.
       const nudge = (g.dpad_right ? 1 : 0) - (g.dpad_left ? 1 : 0);
       st.turretManualDeg = clamp(st.turretManualDeg + nudge * 100 * dt, this.spec.turret.range_deg[0], this.spec.turret.range_deg[1]);
       turretDeg = st.turretManualDeg;
+      st.turretPastStopDeg = 0;
     }
     st.turretErrDeg = wrapPi((turretDeg - turretActualDeg) * DEG) * RAD;
     if (this.spec.turret.enabled) {
@@ -546,10 +582,12 @@ export class BuiltinTeleOp {
     const probOk = usingHood ? st.pLand >= minP : !haveModel || st.pLand >= minP;
     const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
     st.readyCount = atSpeed ? st.readyCount + 1 : 0;
-    st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretErrDeg) < 3 && !s.game.hiveTipping;
+    st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretErrDeg) < 3
+      && st.turretPastStopDeg < 0.5 && !s.game.hiveTipping;
 
     st.hold = !wheelOn ? ''
       : s.game.hiveTipping ? 'hive is tipping'
+      : st.turretPastStopDeg >= 0.5 ? `turret cannot reach, ${st.turretPastStopDeg.toFixed(0)} deg past its stop`
       : Math.abs(st.turretErrDeg) >= 3 ? `turret ${st.turretErrDeg.toFixed(0)} deg off`
       // No cell is a real answer, not a failure: there is no hood angle that scores from here
       // at this closing speed, and saying so beats holding with an unexplained low number.
@@ -586,7 +624,44 @@ export class BuiltinTeleOp {
       st.lastFeedT = s.t;
     }
     if (st.pulsing && s.t - st.lastFeedT >= tp.feedPulse_s) st.pulsing = false;
-    const mayFire = st.pulsing;
+    // THE GATE STAYS OPEN ONLY WHILE THE SHOT IS STILL GOOD.
+    //
+    // The decision to feed is taken about four tenths of a second before the ball actually
+    // leaves -- the feed pulse plus the climb up the tube -- and it used to be final: the
+    // pulse opened the gate for its 0.25 s whatever happened next. Every axis keeps tracking
+    // in the meantime, so the AIM at release is current; what is stale is the PERMISSION.
+    //
+    // It shows up as a small tail of badly wrong shots rather than as a loss of precision.
+    // Shuttling fore and aft at 0.5 Hz the typical shot is fine -- median 1 cm off line, IQR
+    // [-10, +10] cm downrange, better than standing still -- while 20 of 108 landed more than
+    // 60 cm out. So the release re-checks the two things that can go bad inside those four
+    // tenths and that are what make a shot WILD rather than merely imprecise: the wheel
+    // sagging under its floor, and the turret running out of travel under a turning chassis.
+    //
+    // NOT the full readiness latch. That was the first attempt and it is far too strict: it
+    // needs three consecutive good loops, the tachometer flickers in and out of a 60 rpm
+    // window, and requiring an unbroken 0.19 s while the gate servo travels took the stopped
+    // case from 78 shots to 3. These three are smooth over the pulse and do not flicker.
+    //
+    // The turret's own tracking error belongs here for the same reason as the end stop: a
+    // chassis spinning under the turret drags it off target during the four tenths, and every
+    // wild shot left in the turning case was the same picture -- 134 deg/s of yaw with the
+    // axis 10.8 deg behind, approved when it was still on target and fired when it was not.
+    //
+    // THE WHEEL IS NOT RE-CHECKED HERE, and two attempts to do it both made things worse. A
+    // floor -- `rpm > target * minRpmFrac` -- is the wrong shape, because a robot whose range
+    // is growing has a target rising ahead of the wheel the whole way, so the floor is
+    // permanently unmet: it took the strafing case from 0.28 landed per second to zero, on a
+    // run where every shot it used to take went in. Re-checking P(land) instead is the right
+    // shape and the wrong input, since it rides the tachometer's 107 rpm quantisation and
+    // flickers: stopped fell from 0.36 to 0.12 and the shuttle to zero.
+    //
+    // It does not need re-checking anyway. The shots that used to go out on a sagging wheel
+    // were the bare grip wheel's doing -- one ball took 210 rpm out of it -- and putting a
+    // real flywheel behind the wheel cut that to 70 and took the wild shots with it. The two
+    // that remain here are geometric, smooth over the pulse, and cannot be fixed by a part.
+    const stillGood = st.turretPastStopDeg < 0.5 && Math.abs(st.turretErrDeg) < 3;
+    const mayFire = st.pulsing && stillGood;
     motors.transfer = { mode: 'RUN_WITHOUT_ENCODER', power: wheelOn ? 1 : 0 };
 
     st.note = !wheelOn
@@ -622,6 +697,7 @@ export class BuiltinTeleOp {
         ['margin', `${(row.margin * 100).toFixed(1)}%`],
         ['lead deg', st.leadDeg.toFixed(1)],
         ['turret err', st.turretErrDeg.toFixed(1)],
+        ['past stop', st.turretPastStopDeg.toFixed(1)],
         ['hood err', Number.isFinite(st.hoodErrDeg) ? st.hoodErrDeg.toFixed(1) : '-'],
       ],
     };

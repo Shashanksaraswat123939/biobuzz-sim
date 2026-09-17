@@ -198,6 +198,9 @@ export class BuiltinTeleOp {
 
   /** Recent flywheel readings, for the moving average the gate compares against tolRpm. */
   private readonly rpmHistory: number[] = [];
+  /** Last velocity sample and the filtered acceleration built from it, for the lead. */
+  private lastVel = { x: 0, y: 0, t: 0 };
+  private accel = { x: 0, y: 0 };
 
   /**
    * Robot-centric mecanum drive plus the mechanisms, from one gamepad.
@@ -257,7 +260,49 @@ export class BuiltinTeleOp {
       ? this.spec.hood.angleRange_deg[0] + row.hoodPos * (this.spec.hood.angleRange_deg[1] - this.spec.hood.angleRange_deg[0])
       : this.spec.hood.fixedAngle_deg;
     const tableSpeed = this.spec.flywheel.k * this.spec.flywheel.r_fly_m * rpmToRadS(row.rpm);
-    const lead = leadShot(s.game.upCellAzimuthDeg, tableSpeed, hoodDeg, s.localizer.vx * 0.0254, s.localizer.vy * 0.0254, s.imu.yaw);
+    // LEAD ON THE VELOCITY THE ROBOT WILL HAVE WHEN THE BALL LEAVES, not the one it has now.
+    //
+    // leadShot's own note says acceleration is not worth compensating because the a*t^2 term
+    // over a one-second flight is small next to launch scatter. That is true and it is about
+    // the wrong interval: the ball does not care what the robot does after release. What
+    // matters is the gap between COMMANDING the shot and the ball LEAVING -- the feed pulse
+    // plus the wheel's own lag -- because the exit speed was chosen for the velocity at the
+    // start of it. First-order kinematics covers it: v_release = v + a*tau.
+    //
+    // The measurement that forced this: driving with a wobbling stick, the robot fired MORE
+    // than in any other case and landed NOTHING, with the lowest rpm error at fire of the
+    // lot. The wheel was exactly on its target; the target was stale.
+    const velX = s.localizer.vx * 0.0254;
+    const velY = s.localizer.vy * 0.0254;
+    const tau = this.spec.transfer.leadLatency_s ?? 0;
+    let leadVx = velX;
+    let leadVy = velY;
+    if (tau > 0) {
+      const dt = s.t - this.lastVel.t;
+      if (dt > 1e-4 && this.lastVel.t > 0) {
+        // Low-passed, because this differentiates a velocity estimate. In the sim that
+        // estimate is exact; on a robot it is odometry and the filter is what stops a single
+        // noisy sample from throwing the aim. Prefer an IMU's own accelerometer if there is
+        // one -- it measures acceleration instead of inferring it.
+        const k = 0.25;
+        this.accel.x += k * ((velX - this.lastVel.x) / dt - this.accel.x);
+        this.accel.y += k * ((velY - this.lastVel.y) / dt - this.accel.y);
+        // DEADBAND, because this differentiates a velocity and a standing robot still jitters.
+        //
+        // The correction is only worth making when it exceeds what the wheel can resolve: one
+        // encoder count over a 20 ms window is about 107 rpm, and the lead moves the target by
+        // roughly 912 rpm per m/s, so a*tau has to be worth more than 0.12 m/s to mean
+        // anything. Below that it is noise being fed into the aim -- and it cost shots: a
+        // stationary rig that had been firing three times in ten seconds fired twice.
+        const dv = Math.hypot(this.accel.x, this.accel.y) * tau;
+        if (dv > 0.12) {
+          leadVx = velX + this.accel.x * tau;
+          leadVy = velY + this.accel.y * tau;
+        }
+      }
+      this.lastVel = { x: velX, y: velY, t: s.t };
+    }
+    const lead = leadShot(s.game.upCellAzimuthDeg, tableSpeed, hoodDeg, leadVx, leadVy, s.imu.yaw);
     st.leadDeg = wrapPi((lead.azimuthDeg - s.game.upCellAzimuthDeg) * DEG) * RAD;
     // Where the turret ACTUALLY is, from its encoder -- not where it was told to go. The
     // axis is acceleration limited, so a 137 deg swing takes most of a second, and firing

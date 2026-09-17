@@ -28,13 +28,18 @@ import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src
 
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 
-interface Run { name: string; fired: number; radialMps: number; radialAccel: number; rpmErr: number; landed: number; secs: number }
+interface Run {
+  name: string; fired: number; radialMps: number; radialAccel: number; rpmErr: number;
+  landed: number; secs: number;
+  /** Where the misses actually went, at the mouth plane. This is the diagnostic. */
+  longs: number[]; lats: number[];
+}
 
 /**
  * @param drive  what the stick is held at: [strafe, forward]. Forward is toward the hive.
  * @param wobble stick amplitude of a 0.5 Hz oscillation, to spend the acceleration budget.
  */
-async function run(name: string, drive: [number, number], wobble: number, seconds: number, seed = 7): Promise<Run> {
+async function run(name: string, drive: [number, number], wobble: number, seconds: number, seed = 7, tau?: number, ramp = 0): Promise<Run> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
@@ -43,6 +48,7 @@ async function run(name: string, drive: [number, number], wobble: number, second
   // version of this test fired nothing even STANDING STILL -- the start was 2.4 m out, past
   // the range any shot clears 90% from, so every case read zero and proved nothing.
   spec.flywheel.minLandProb = 0;
+  if (tau !== undefined) spec.transfer.leadLatency_s = tau;
   const staging = Array.from({ length: 80 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
   const world = new World({ params: p, robot: spec, staging, alliance: 'red', seed });
   for (const b of world.balls.balls) world.balls.park(b);
@@ -80,7 +86,13 @@ async function run(name: string, drive: [number, number], wobble: number, second
   const hold = (t: number): GamepadState => {
     const g = emptyGamepad();
     g.left_stick_x = drive[0];
-    g.left_stick_y = -(drive[1] + wobble * Math.sin(2 * Math.PI * 0.5 * t));  // -y is forward
+    // `ramp` is a steady change of stick per second: constant acceleration, the case a
+    // first-order predictor is actually built for. `wobble` oscillates instead, and an
+    // oscillation defeats v + a*tau at exactly the moments the gate likes -- at a velocity
+    // peak the acceleration is zero, so the predictor says "it will stay here" one instant
+    // before it reverses.
+    const stick = drive[1] + ramp * t + wobble * Math.sin(2 * Math.PI * 0.5 * t);
+    g.left_stick_y = -Math.max(-1, Math.min(1, stick));                       // -y is forward
     return g;
   };
   for (let f = 0; f < 90; f++) step(hold(world.t));
@@ -111,6 +123,8 @@ async function run(name: string, drive: [number, number], wobble: number, second
   const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
   return {
     name,
+    longs: log.map((x) => x.long_in).filter(Number.isFinite),
+    lats: log.map((x) => x.lat_in).filter(Number.isFinite),
     secs: world.t - t0,
     fired: world.robot.shots,
     radialMps: mean(radial),
@@ -129,7 +143,7 @@ export async function main(argv: string[] = []): Promise<void> {
   console.log('');
   // Shots per second, not shots: a closing run crosses the usable field in a couple of
   // seconds and then has to stop, so raw counts compare a short run against a long one.
-  console.log('  case                     secs   shots/s   landed/s        landed   mean closing   rpm err');
+  console.log('  case                     secs   shots/s   landed/s        landed   rpm err   where the shots went');
   const cases: [string, [number, number], number][] = [
     ['stopped', [0, 0], 0],
     ['steady closing, slow', [0, 0.18], 0],
@@ -145,6 +159,8 @@ export async function main(argv: string[] = []): Promise<void> {
     let landed = 0;
     const rpmErrs: number[] = [];
     const radials: number[] = [];
+    const longs: number[] = [];
+    const lats: number[] = [];
     for (const seed of seeds) {
       const r = await run(name, drive, wobble, seconds, seed);
       secs += r.secs;
@@ -152,17 +168,61 @@ export async function main(argv: string[] = []): Promise<void> {
       landed += r.landed;
       if (r.fired) rpmErrs.push(r.rpmErr);
       radials.push(r.radialMps);
+      longs.push(...r.longs);
+      lats.push(...r.lats);
     }
     const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
     const rate = landed / secs;
     const se = Math.sqrt(Math.max(landed, 1)) / secs;   // Poisson on the count
+    const sd = (a: number[]) => {
+      if (a.length < 2) return NaN;
+      const m2 = mean(a);
+      return Math.sqrt(a.reduce((x, v) => x + (v - m2) ** 2, 0) / (a.length - 1));
+    };
+    const cm = (v: number) => (v * 2.54).toFixed(0);
     console.log(
       `  ${name.padEnd(24)} ${secs.toFixed(0).padStart(5)}   ${(fired / secs).toFixed(2).padStart(7)}   ` +
       `${rate.toFixed(2).padStart(5)} +-${se.toFixed(2)}   ${String(landed).padStart(6)}   ` +
-      `${mean(radials).toFixed(2).padStart(9)} m/s   ${mean(rpmErrs).toFixed(0).padStart(4)} rpm`,
+      `${mean(rpmErrs).toFixed(0).padStart(4)} rpm   ` +
+      `long ${cm(mean(longs)).padStart(4)}+-${cm(sd(longs)).padStart(3)}   lat ${cm(mean(lats)).padStart(4)}+-${cm(sd(lats)).padStart(3)} cm`,
     );
   }
   console.log('');
   console.log('  If steady motion fires like standing still and only the wobbling case starves,');
   console.log('  then "cannot shoot on the move" was never true -- the budget is acceleration.');
+  console.log('');
+
+  // THE LATENCY SWEEP. The wobbling case fires plenty and lands nothing with the wheel dead
+  // on its target, which says the target is stale rather than unreachable. If that is right,
+  // leading on v + a*tau should recover it, and the best tau should look like the feed delay
+  // rather than like a free parameter.
+  console.log('  LEADING ON THE PREDICTED RELEASE VELOCITY, accelerating case only');
+  console.log(`  (feed pulse ${(robotSpec as unknown as RobotSpec).transfer.feedPulse_s} s + transit ${(robotSpec as unknown as RobotSpec).transfer.feedTransit_s} s)`);
+  console.log('');
+  console.log('  motion        tau (s)   shots/s   landed/s        landed   rpm err   long error');
+  const accelCases: [string, number, number][] = [
+    ['wobbling', 0.30, 0],
+    ['steady ramp', 0, 0.06],
+  ];
+  for (const [label, wob, ramp] of accelCases) for (const tau of [0, 0.15, 0.3]) {
+    let secs = 0;
+    let fired = 0;
+    let landed = 0;
+    const errs: number[] = [];
+    const lg: number[] = [];
+    for (const seed of seeds) {
+      const r = await run('accel', [0, 0.18], wob, seconds, seed, tau, ramp);
+      lg.push(...r.longs);
+      secs += r.secs;
+      fired += r.fired;
+      landed += r.landed;
+      if (r.fired) errs.push(r.rpmErr);
+    }
+    const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+    console.log(
+      `  ${label.padEnd(13)} ${tau.toFixed(2).padStart(6)}   ${(fired / secs).toFixed(2).padStart(7)}   ` +
+      `${(landed / secs).toFixed(2).padStart(5)} +-${(Math.sqrt(Math.max(landed, 1)) / secs).toFixed(2)}   ` +
+      `${String(landed).padStart(6)}   ${mean(errs).toFixed(0).padStart(4)} rpm   ${(mean(lg) * 2.54).toFixed(0).padStart(4)} cm`,
+    );
+  }
 }

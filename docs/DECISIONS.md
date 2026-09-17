@@ -842,3 +842,42 @@ That is a latency fault, not a torque one, and it has a cheap fix: lead on the v
 PREDICTED at release (v + a*latency), or refuse the shot while |radial acceleration| is over
 the budget in the table above.
 
+## Shooting while ACCELERATING: the kinematics are easy, the tachometer is not
+
+The accelerating case fires more than any other and lands nothing, with the wheel dead on its
+target at release -- so the target is stale, and the fix looks like one line of kinematics:
+lead on the velocity at RELEASE rather than the velocity now, `v_release = v + a*tau`.
+
+It is one line, it works, and it is not enough.
+
+| motion | tau | landed | downrange bias |
+|---|---|---|---|
+| stick wobbling | 0 | 0 | **-57 cm** |
+| stick wobbling | 0.30 s | 0 | **-26 cm** |
+| steady ramp | 0 | 2 | -47 cm |
+| steady ramp | 0.30 s | 2 | **-24 cm** |
+
+The prediction halves the bias in both, which is what the kinematics predict. The landed rate
+barely moves, because the other half is the FIRING WINDOW: +-60 rpm is +-21 cm of range against
+a pocket 22.5 cm deep. Standing still that error is random, the group straddles the hole and
+half the shots drop in. Accelerating, a wheel chasing a falling target lags one way only, so
+the whole group goes short and none of it does.
+
+Two further things worth keeping:
+
+**An oscillation defeats a first-order predictor at exactly the wrong moment.** The gate fires
+when the wheel matches its target, which is near a velocity peak -- and at a peak the
+acceleration is zero, so `v + a*tau` says "it will stay here" one instant before it reverses.
+A steady ramp is the case the predictor is built for and it does better there.
+
+**Applied unconditionally it cost stationary shots.** It differentiates a velocity estimate and
+a standing robot jitters; a rig that fired three times in ten seconds fired twice. It is now
+deadbanded where `a*tau` stops being worth more than the encoder can resolve -- one count over
+a 20 ms window is 107 rpm, so below about 0.4 m/s^2 the correction is smaller than the
+measurement it would be based on.
+
+Which is the finding: **shooting while accelerating is limited by the flywheel tachometer, not
+by the equations of motion.** Better resolution on the flywheel shaft -- a higher-CPR encoder,
+or gearing the existing one up -- is what buys it, and it is the same fix that would let
+`tolRpm` come down from 60.
+

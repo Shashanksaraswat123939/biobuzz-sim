@@ -46,7 +46,16 @@ export interface RobotSpec {
     rollerRadius_m: number; rollerMu: number; squeeze_N: number;
   };
   hopper: { capacity: number };
-  transfer: { motor: MotorSpec; cycleTime_s: number; feedPulse_s: number; feedTransit_s: number;
+  transfer: { motor: MotorSpec;
+    /**
+     * Seconds between the lead being computed and the ball actually leaving the muzzle.
+     * The shot is set up for the velocity the robot has when the gate is commanded, and the
+     * ball leaves after the feed pulse and the wheel's own lag -- while ACCELERATING those
+     * are different velocities, and the shot carries a correction the robot has grown out of.
+     * 0 is the old behaviour: compensate velocity only.
+     */
+    leadLatency_s?: number;
+    cycleTime_s: number; feedPulse_s: number; feedTransit_s: number;
     /** Fraction of the indexer's push that acts UPWARD, as a real indexer wheel does. */
     indexLift?: number;
     /** Feed belt drive pulley radius: belt speed is motor omega times this. */

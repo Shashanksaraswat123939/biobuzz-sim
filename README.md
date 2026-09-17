@@ -89,6 +89,7 @@ npm run tool -- tools/landrate.ts          # land rate vs range
 npm run tool -- tools/leadcheck.ts         # does the motion lead land the shot? (no scatter)
 npm run tool -- tools/movingfire.ts        # shooting while moving, and while accelerating
 npm run tool -- tools/shoterror.ts         # where a moving shot's error actually comes from
+npm run tool -- tools/spincheck.ts --full  # single-wheel backspin vs a dual-wheel shooter
 npm run tool -- tools/shottable.ts         # regenerate the shot table
 npm run tool -- tools/hoodsweep.ts         # which hood range this robot needs
 npm run tool -- tools/shootercheck.ts      # turret coverage, flywheel MOI, exit speed

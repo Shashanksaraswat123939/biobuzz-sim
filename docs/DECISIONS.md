@@ -1185,3 +1185,49 @@ Costs/risks: The TARGET bearing and range are still exact, and that is now the b
               real robot they come from an AprilTag pipeline with its own noise and 50–100 ms of
               latency. Listed in PHYSICS.md §7.
 Who/where:   world.ts, builtinTeleOp.ts, AimController.java, config/robot.json, types.ts
+
+## 2026-09-17 — Backspin does not help the ball stay in the CELL; it costs about 7 points
+Plan said:   (nothing — the single-wheel layout was assumed)
+Found:       The usual intuition is that a single wheel's backspin digs into the pocket and
+              kills the ball's forward speed. Measured with no shooter and no flight in the way
+              (`tools/spincheck.ts`, which injects at the mouth with and without the spin
+              `Robot.launch` actually produces): backspin 75.2% +-1.8 against 85.1% +-1.5 with
+              none, over 576 balls a side, worse in 8 of 9 cells of the band the table arrives
+              in. Outside two standard errors. Friction at the pocket floor pushes a
+              backspinning ball back toward the mouth it came in through, which is the opening.
+              End to end, each layout given the table its own physics implies, a dual-wheel
+              shooter also solves MORE ranges (25 of 31 against 22) for 75 rpm more exit speed,
+              the Magnus lift being what it gives up.
+Did instead: NOTHING — kept the single wheel, for a reason that has nothing to do with entry.
+              The hood is the single-wheel layout's aiming surface, and the motion lead now
+              solves the HOOD: that is what made shooting on the move work at all. A dual-wheel
+              shooter has no hood, so the whole correction goes back onto the flywheel, which is
+              the design that could not track a moving target. The 7 points are cheaper than
+              that.
+Costs/risks: The entry result rests directly on `ball.e_poly` and `ball.mu`, and the flight side
+              on `ball.clSlope` -- all three are flagged guesses, and they are exactly the three
+              most worth measuring on a real ball. Re-run tools/spincheck.ts once they are, and
+              be ready for the sign to change.
+Who/where:   tools/spincheck.ts, tools/entrycheck.ts (entryRate now takes a spinFactor)
+
+## 2026-09-17 — A second flywheel motor is worth a lot, and the robot has no port for it
+Plan said:   One motor on the flywheel.
+Found:       Measured through the gate the app enforces, landed per second, heavy flywheel:
+              one motor 0.36 / 0.56 / 0.00 / 0.32 / 0.28 across stopped, closing, strafing,
+              shuttling, closing-while-wobbling; two motors 0.36 / 0.68 / 0.24 / 0.36 / 0.36.
+              The second motor is what makes the RECEDING case possible at all -- the target rpm
+              rises with the range and one motor cannot chase it. It is not a substitute for the
+              flywheel inertia and the inertia is not a substitute for it: two motors on the OLD
+              light wheel gives back the wild shuttling shots (lat 17 +-55 cm) and craters the
+              stopped case to 0.12, because inertia fixes the per-shot dip and motors fix the
+              chase. Both together is strictly best.
+Did instead: NOT SHIPPED. The robot is at FTC's eight-motor limit -- four drive, intake,
+              transfer, flywheel, turret -- so a second flywheel motor has to come out of
+              another subsystem, and which one is a design decision about someone's robot rather
+              than a config edit. The three real ways to free the port: gang the feed belt off
+              the intake shaft (the belt already runs continuously and the gate is the release,
+              so this costs almost nothing behaviourally), put the indexer on a CR servo (ten of
+              the twelve servo ports are free), or put the turret on a servo.
+Costs/risks: Two motors also double the flywheel's current draw on a 12 V pack already running
+              four drive motors, which is not modelled as a brownout risk.
+Who/where:   measured with config/robot.json flywheel.motorCount, which the physics supports

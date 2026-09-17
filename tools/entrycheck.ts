@@ -45,7 +45,15 @@ export interface EntryResult {
  * mouth rather than down one perfect line -- a shot that only works dead-centre is not a
  * shot. It deliberately does NOT jitter speed or angle: those are the axes being swept.
  */
-export async function entryRate(speed: number, descent_deg: number, n = 24, seed = 7): Promise<EntryResult> {
+export async function entryRate(
+  speed: number, descent_deg: number, n = 24, seed = 7,
+  /**
+   * How much of a single-wheel shooter's backspin the ball carries in. 1 is what
+   * `Robot.launch` gives it; 0 is a dual-wheel shooter, which imparts none. The axis matters
+   * more than the magnitude -- see the note at the release below.
+   */
+  spinFactor = 1,
+): Promise<EntryResult> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   // PIN THE ROCKER. 12 POLLEN tip the hive, and a tip empties the CELL -- so a 16-ball run
@@ -98,7 +106,7 @@ export async function entryRate(speed: number, descent_deg: number, n = 24, seed
     // which grabs the pocket floor and kicks it straight back out -- the tool then reported
     // 0% entry at speeds the real robot scores from perfectly well.
     const n = Math.hypot(dir[0], dir[2]) || 1;
-    const mag = speed / r;
+    const mag = (speed / r) * spinFactor;
     const spin: Vec3 = [(-dir[2] / n) * mag, 0, (dir[0] / n) * mag];
     world.balls.release(b, at, vel, spin, 'flight');
     fired++;

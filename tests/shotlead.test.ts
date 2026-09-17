@@ -2,13 +2,23 @@ import { describe, it, expect } from 'vitest';
 import { leadShot } from '../packages/core/src/robot/builtinTeleOp.js';
 import { DEG } from '../packages/core/src/units.js';
 
-/** Where the ball actually ends up going once the robot's own velocity is added in. */
-function resultingBearing(azimuthDeg: number, speed: number, elevDeg: number, vx: number, vy: number, headingDeg: number) {
-  const horiz = speed * Math.cos(elevDeg * DEG);
-  const a = (headingDeg + azimuthDeg) * DEG;
+type Lead = { azimuthDeg: number; speed: number; elevationDeg: number };
+
+/**
+ * The ball's velocity in the GROUND frame, once the robot's own is added in. Vertical too:
+ * the lead solves the elevation as well as the azimuth and the speed, and a check that only
+ * looks at the ground track cannot see the error that made radial motion miss entirely.
+ */
+function resulting(led: Lead, vx: number, vy: number, headingDeg: number) {
+  const horiz = led.speed * Math.cos(led.elevationDeg * DEG);
+  const a = (headingDeg + led.azimuthDeg) * DEG;
   const bx = horiz * Math.cos(a) + vx;
   const by = horiz * Math.sin(a) + vy;
-  return { bearingDeg: (Math.atan2(by, bx) * 180) / Math.PI, horiz: Math.hypot(bx, by) };
+  return {
+    bearingDeg: (Math.atan2(by, bx) * 180) / Math.PI,
+    horiz: Math.hypot(bx, by),
+    vert: led.speed * Math.sin(led.elevationDeg * DEG),
+  };
 }
 
 describe('shooting on the move', () => {
@@ -30,14 +40,45 @@ describe('shooting on the move', () => {
     const vx = -Math.sin(fieldBearing) * cross;
     const vy = Math.cos(fieldBearing) * cross;
 
-    const naive = resultingBearing(bearing, speed, elev, vx, vy, heading);
+    const naive = resulting({ azimuthDeg: bearing, speed, elevationDeg: elev }, vx, vy, heading);
     expect(Math.abs(naive.bearingDeg - (heading + bearing))).toBeGreaterThan(10); // it does miss
 
     const led = leadShot(bearing, speed, elev, vx, vy, heading);
-    const actual = resultingBearing(led.azimuthDeg, led.speed, elev, vx, vy, heading);
+    const actual = resulting(led, vx, vy, heading);
     expect(actual.bearingDeg).toBeCloseTo(heading + bearing, 4);
     // and the ball still arrives with the horizontal speed the shot table asked for
     expect(actual.horiz).toBeCloseTo(speed * Math.cos(elev * DEG), 4);
+  });
+
+  it("leaves the ball with the table's FULL launch vector, vertical included", () => {
+    // The invariant the lead exists to hold: whatever the robot is doing, the ball's
+    // ground-frame velocity is the one a stationary robot would have given it. Fixing the
+    // elevation and solving only the speed holds the horizontal and breaks the vertical --
+    // closing at 0.4 m/s that dropped the hang time enough that the ball never reached the
+    // mouth's height at all, in the sim and in tools/_lead.ts alike.
+    const fieldBearing = (heading + bearing) * DEG;
+    const wantHoriz = speed * Math.cos(elev * DEG);
+    const wantVert = speed * Math.sin(elev * DEG);
+    for (const [along, across] of [[0, 0], [2, 0], [-2, 0], [0, 2], [1.5, -1.5]] as const) {
+      const vx = Math.cos(fieldBearing) * along - Math.sin(fieldBearing) * across;
+      const vy = Math.sin(fieldBearing) * along + Math.cos(fieldBearing) * across;
+      const a = resulting(leadShot(bearing, speed, elev, vx, vy, heading), vx, vy, heading);
+      expect(a.bearingDeg).toBeCloseTo(heading + bearing, 4);
+      expect(a.horiz).toBeCloseTo(wantHoriz, 4);
+      expect(a.vert).toBeCloseTo(wantVert, 4);
+    }
+  });
+
+  it('clamps the solved elevation to the hood travel', () => {
+    // Closing almost as fast as the ball's horizontal leaves a near-vertical solution, and a
+    // hood that cannot get there must say so by stopping at its stop -- not by dividing by
+    // cos(85 deg) and asking for a speed no wheel has.
+    const fieldBearing = (heading + bearing) * DEG;
+    const v = speed * Math.cos(elev * DEG) - 0.05;
+    const r = leadShot(bearing, speed, elev, Math.cos(fieldBearing) * v, Math.sin(fieldBearing) * v, heading, [30, 85]);
+    expect(r.elevationDeg).toBeLessThanOrEqual(85);
+    expect(r.elevationDeg).toBeGreaterThanOrEqual(30);
+    expect(r.speed).toBeLessThan(speed * 1.2);
   });
 
   it('turns the turret the opposite way for the opposite drift', () => {
@@ -71,7 +112,7 @@ describe('shooting on the move', () => {
     // Both still land on the bearing.
     for (const r of [closing, away]) {
       const v = r === closing ? 2 : -2;
-      const actual = resultingBearing(r.azimuthDeg, r.speed, elev, Math.cos(fieldBearing) * v, Math.sin(fieldBearing) * v, heading);
+      const actual = resulting(r, Math.cos(fieldBearing) * v, Math.sin(fieldBearing) * v, heading);
       expect(actual.bearingDeg).toBeCloseTo(heading + bearing, 4);
     }
   });

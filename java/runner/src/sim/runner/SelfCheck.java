@@ -35,27 +35,70 @@ public class SelfCheck {
         return Math.toDegrees(Math.atan2(horiz * Math.sin(a) + vy, horiz * Math.cos(a) + vx));
     }
 
+    /** ... and how fast, horizontally and vertically. The vertical is where the bug was. */
+    private static double resultingHoriz(double azimuthDeg, double speed, double elevDeg,
+                                         double vx, double vy, double headingDeg) {
+        double horiz = speed * Math.cos(Math.toRadians(elevDeg));
+        double a = Math.toRadians(headingDeg + azimuthDeg);
+        return Math.hypot(horiz * Math.cos(a) + vx, horiz * Math.sin(a) + vy);
+    }
+
     public static void main(String[] args) {
         final double elev = 45, speed = 10, heading = 30, bearing = 20;
+        final double HOOD_LO = 0, HOOD_HI = 90;
         ShotLead lead = new ShotLead();
 
-        lead.solve(bearing, speed, elev, 0, 0, heading);
+        lead.solve(bearing, speed, elev, 0, 0, heading, HOOD_LO, HOOD_HI);
         near("stationary needs no lead", lead.azimuthDeg, bearing, 1e-6);
         near("stationary keeps the table speed", lead.speed, speed, 1e-6);
+        near("stationary keeps the table hood", lead.elevationDeg, elev, 1e-6);
 
         double fb = Math.toRadians(heading + bearing);
         double vx = -Math.sin(fb) * 2.0;
         double vy = Math.cos(fb) * 2.0;
         that("uncorrected aim actually misses",
                 Math.abs(resultingBearing(bearing, speed, elev, vx, vy, heading) - (heading + bearing)) > 10);
-        lead.solve(bearing, speed, elev, vx, vy, heading);
+        lead.solve(bearing, speed, elev, vx, vy, heading, HOOD_LO, HOOD_HI);
         near("lead puts the ball on the bearing",
-                resultingBearing(lead.azimuthDeg, lead.speed, elev, vx, vy, heading), heading + bearing, 1e-4);
+                resultingBearing(lead.azimuthDeg, lead.speed, lead.elevationDeg, vx, vy, heading),
+                heading + bearing, 1e-4);
 
-        lead.solve(bearing, speed, elev, Math.cos(fb) * 2, Math.sin(fb) * 2, heading);
+        // THE WHOLE LAUNCH VECTOR, not just the ground track. Solving speed at a fixed hood
+        // holds the horizontal and breaks the vertical, and a ball with the wrong hang time
+        // does not reach the CELL mouth's height at all. Mirrors tests/shotlead.test.ts.
+        double wantHoriz = speed * Math.cos(Math.toRadians(elev));
+        double wantVert = speed * Math.sin(Math.toRadians(elev));
+        double[][] motions = { {0, 0}, {2, 0}, {-2, 0}, {0, 2}, {1.5, -1.5} };
+        for (int i = 0; i < motions.length; i++) {
+            double along = motions[i][0], across = motions[i][1];
+            double mx = Math.cos(fb) * along - Math.sin(fb) * across;
+            double my = Math.sin(fb) * along + Math.cos(fb) * across;
+            lead.solve(bearing, speed, elev, mx, my, heading, HOOD_LO, HOOD_HI);
+            near("lead holds the bearing",
+                    resultingBearing(lead.azimuthDeg, lead.speed, lead.elevationDeg, mx, my, heading),
+                    heading + bearing, 1e-4);
+            near("lead holds the horizontal",
+                    resultingHoriz(lead.azimuthDeg, lead.speed, lead.elevationDeg, mx, my, heading),
+                    wantHoriz, 1e-4);
+            near("lead holds the VERTICAL",
+                    lead.speed * Math.sin(Math.toRadians(lead.elevationDeg)), wantVert, 1e-4);
+        }
+
+        lead.solve(bearing, speed, elev, Math.cos(fb) * 2, Math.sin(fb) * 2, heading, HOOD_LO, HOOD_HI);
         that("closing needs less speed", lead.speed < speed);
-        lead.solve(bearing, speed, elev, -Math.cos(fb) * 2, -Math.sin(fb) * 2, heading);
+        that("closing needs a steeper hood", lead.elevationDeg > elev);
+        lead.solve(bearing, speed, elev, -Math.cos(fb) * 2, -Math.sin(fb) * 2, heading, HOOD_LO, HOOD_HI);
         that("retreating needs more speed", lead.speed > speed);
+        that("retreating needs a flatter hood", lead.elevationDeg < elev);
+
+        // Closing nearly as fast as the ball's own horizontal leaves a near-vertical
+        // solution; a hood that cannot get there stops at its stop rather than asking for a
+        // speed no wheel has.
+        double vNear = speed * Math.cos(Math.toRadians(elev)) - 0.05;
+        lead.solve(bearing, speed, elev, Math.cos(fb) * vNear, Math.sin(fb) * vNear, heading, 30, 85);
+        that("the solved hood is clamped to its travel",
+                lead.elevationDeg <= 85.0001 && lead.elevationDeg >= 29.9999);
+        that("and the speed stays sane when it is", lead.speed < speed * 1.2);
 
         MecanumKinematics ik = new MecanumKinematics();
         ik.compute(1, 0, 0);

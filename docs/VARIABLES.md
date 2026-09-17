@@ -97,7 +97,7 @@ knobs worth sweeping. The **Tune** tab in the app edits the most consequential o
 | `flywheel.k` | 0.45 |  | I_fly from Gecko 96mm (cited); k/lossFactor guesses - CALIBRATE. |
 | `flywheel.lossFactor` | 2 |  | I_fly from Gecko 96mm (cited); k/lossFactor guesses - CALIBRATE. |
 | `flywheel.maxRpm` | 6000 |  | I_fly from Gecko 96mm (cited); k/lossFactor guesses - CALIBRATE. |
-| `flywheel.tolRpm` | 120 |  | the hub velocity loop settles 50-90 RPM above target at these gains, so an 80 RPM window opened only intermittently; 120 RPM is about 3% at the typical 3700 RPM target - tighten it once the loop is calibrated on the real hub |
+| `flywheel.tolRpm` | 60 |  | MEASURED by tools/trimsweep.ts against balls in the CELL. It cannot be read off a datasheet because the floor is the encoder: the flywheel runs 28 ticks a rev direct-driven, so the hub's 20 ms velocity window sees 26 counts at 2800 rpm and ONE COUNT is 107 rpm -- about 15 in of range by tools/apercheck.ts. A single reading cannot resolve 30 rpm, which is why rpmFilterFrames exists: six loops of moving average is what makes this window mean anything. 120 rpm is +-14.9 in against a hole 8.9 in deep, and measured worse than 60 at every setting tried. |
 | `flywheel.minRpmFrac` | 0.97 |  | I_fly from Gecko 96mm (cited); k/lossFactor guesses - CALIBRATE. |
 | `flywheel.readySteps` | 3 |  | I_fly from Gecko 96mm (cited); k/lossFactor guesses - CALIBRATE. |
 | `flywheel.dragQuad_Nms2` | 1.4e-8 |  | I_fly from Gecko 96mm (cited); k/lossFactor guesses - CALIBRATE. |

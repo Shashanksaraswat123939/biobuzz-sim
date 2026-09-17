@@ -988,3 +988,68 @@ The fixed-speed path is left in the code behind `BuiltinTeleOp`'s fourth argumen
 the app: it is a working implementation of a measured dead end, and cheap to re-test if the
 shooter's consistency ever changes.
 
+
+## 2026-09-17 — The motion lead never solved the hood, so no moving shot could arrive
+Plan said:   Compensate the robot's own velocity so the ball flies at the target.
+Found:       `leadShot` / `ShotLead.solve` solved the horizontal triangle only — azimuth and exit
+             speed — and left the hood at the shot table's angle. That holds the ground track
+             exactly and breaks the hang time: the ball leaves with a vertical of `mag·tan(el)`
+             instead of `S·sin(el)`. Closing at 0.4 m/s from 40 in it drops from 4.97 to 3.85 m/s
+             and the ball NEVER REACHES the mouth's 1.46 m; retreating sails over it. Three
+             commits had been spent on the flywheel's tracking lag, on a lead that could not have
+             landed a moving shot from a perfect shooter.
+Did instead: Solve all three unknowns from the table's launch VECTOR — `el = atan2(vert, mag)`,
+             `speed = hypot(mag, vert)` — clamped to the hood's travel. Exactly the arithmetic
+             `tools/hoodtable.ts:launch()` already used for the fixed-speed shooter. Wired into
+             `AimController`, which had been constructing `ShotLead` and never calling it, so the
+             hub led on nothing at all while the sim's mirror led on two axes of three.
+             `tools/leadcheck.ts` prints the landing error with no scatter, gate or feeder: 0 cm
+             everywhere against NEVER ARRIVES.
+Costs/risks: The hood now carries the correction, so it must track; measured at 8.0 deg per m/s
+             against 120 deg/s of travel, and `tools/fixedspeed.ts` prices that at 15 m/s² of
+             radial acceleration against the drivetrain's ~2. Past the hood's stops the shot is
+             clamped and degrades rather than failing — only reachable charging the goal at most
+             of top speed from close in. `transfer.leadLatency_s` is now worth nothing measurable
+             and is kept only as a knob for a real hood's lag.
+Who/where:   builtinTeleOp.ts, ShotLead.java, AimController.java, tests/shotlead.test.ts,
+             SelfCheck.java, tools/leadcheck.ts, config/robot.json
+
+## 2026-09-17 — tools/movingfire.ts was measuring a stationary robot off the end of the table
+Plan said:   (nothing — the tool is its own answer)
+Found:       Three faults compounding. It started the robot 41 in from the mouth (the wall is at
+             1.45 m and the mouth at 0.40 m), then settled for 90 frames WITH THE CASE'S STICK
+             HELD, which drove a closing run to 21 in before a single shot was judged — below the
+             shot table's first row, where every lookup returns the 30 in answer. The drive loop
+             then broke out on its first frame, and because fire is a LATCH the case took nearly
+             all of its shots during the six-second settling tail, standing still. "Closing,
+             stick wobbling lands nothing" was a stopped robot at an unsolvable range.
+Did instead: Place at a requested range on the side the CELL mouth OPENS TO (the far corner is
+             the back of the goal — placed there the stopped control landed 2 shots in 80 s);
+             spin the wheel up standing still, THEN settle the drive; count only in-band time and
+             only shots fired while driving; pool short passes until the requested seconds
+             accumulate, because a 3.59 m field with the goal in the middle sustains steady
+             motion in no direction for twenty seconds.
+Costs/risks: Rates are pooled over passes and seeds, so a case with little runway has fewer
+             independent samples than its second count suggests. The band [33, 82] in is the
+             table's coverage less the field, not a physical limit.
+Who/where:   tools/movingfire.ts
+
+## 2026-09-17 — The intake roller was spinning about the world vertical
+Plan said:   (nothing — render only)
+Found:       The roller was laid down with `rotation.z = PI/2` and then driven with `rotation.y`.
+             An Object3D's euler is XYZ, so the y term turned the laid-down cylinder about the
+             WORLD vertical: the axle swept round like a clock hand instead of the roller turning
+             on it, and on screen the intake was a bar pivoting diagonally out of the robot's
+             front corner. It could not have shown the spin even with the axis right — a smooth
+             one-colour cylinder looks identical at every angle. It was also driven from the
+             commanded POWER, so a jam still looked like a running intake, and it drew a tilted
+             scoop plate that `robot.ts` deletes in as many words ("NO RAMP").
+Did instead: Lay the roller over once at build time and turn the group about its own X, the way
+             the mecanum wheels forty lines up already did. Compliant wheels with tangential
+             treads, so the rotation reads. Driven from the shaft's measured `omega`, scaled by a
+             constant so 116 rad/s does not strobe at 60 Hz. Sized from `robot.json`'s mouth and
+             roller radius rather than four hand-tuned numbers, so the picture cannot drift from
+             what `stepIntake` sweeps.
+Costs/risks: `Scene` now takes the RobotSpec. The displayed spin rate is 0.12 of the real one —
+             proportional, so a stall still stops it, but it is not a tachometer.
+Who/where:   packages/render/src/scene.ts, packages/core/src/types.ts, physics/robot.ts, ui/main.ts

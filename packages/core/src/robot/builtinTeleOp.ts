@@ -100,15 +100,37 @@ export class ShotTable {
 /**
  * Aim that accounts for the robot's own motion.
  *
- * The ball leaves with v_exit*dir + v_robot, so a robot moving across the shot throws the
- * ball off line by exactly its own cross-track speed. Solving the triangle is both exact
- * and shorter than approximating it: the horizontal velocity the ball must leave with is
- * (wanted speed along the bearing) minus (the robot's own velocity), and the turret points
- * wherever that vector points.
+ * The ball leaves with v_exit*dir + v_robot, so the shot has to be solved for the velocity
+ * the BALL must have in the ground frame -- which is the table's answer, as a vector -- and
+ * the robot's own velocity subtracted from it.
+ *
+ *     ground horizontal   S*cos(el) along the bearing        vertical   S*sin(el)
+ *
+ * THE VERTICAL IS PART OF THE ANSWER, and leaving it out is what broke this. The first
+ * version solved the horizontal triangle only and kept the hood where the table put it, so
+ * the ball left with a vertical of mag*tan(el) instead of S*sin(el) -- the horizontal ground
+ * track was perfect and the hang time was wrong. Closing at 0.4 m/s from 40 in, the exit
+ * speed came down from 5.28 to 4.09 m/s at a fixed 70 deg, which drops the vertical from
+ * 4.97 to 3.85 and the ball NEVER REACHES the mouth's 1.46 m: not a miss, a shot that cannot
+ * arrive. Receding sailed over it the same way. tools/movingfire.ts read that as "shooting
+ * while accelerating is limited by the flywheel tachometer".
+ *
+ * Three components, three unknowns -- azimuth, ELEVATION and speed -- so solve all three:
+ *
+ *     el = atan2(vert, mag)        speed = hypot(mag, vert)
+ *
+ * Measured with no scatter and no gate (tools/_lead.ts): exact at every velocity and range,
+ * against 14-49 cm long for lateral motion and no arrival at all for radial.
+ *
+ * It also all but removes the flywheel from the problem, which is the second prize. Over
+ * +-0.8 m/s of closing speed at 40 in the old lead swung the target 1283-3388 rpm and the
+ * wheel slews 1102 rpm/s; this one asks for 2242-2477, nine times less, and gives the rest
+ * to a hood servo that is commanded rather than measured.
  *
  * Only velocity is compensated, not acceleration: over a one-second flight the a*t^2 term
  * is small next to the 1-2 deg of launch scatter, and a lead that differentiates a noisy
- * velocity is worse than no lead at all.
+ * velocity is worse than no lead at all. (`transfer.leadLatency_s` is a different thing --
+ * it predicts the velocity at RELEASE, not during the flight.)
  */
 export function leadShot(
   bearingDeg: number,
@@ -117,15 +139,19 @@ export function leadShot(
   vxField: number,
   vyField: number,
   headingDeg: number,
-): { azimuthDeg: number; speed: number } {
+  /** The hood's travel. The solved elevation is clamped into it. */
+  hoodRange: readonly [number, number] = [-90, 90],
+): { azimuthDeg: number; speed: number; elevationDeg: number } {
   const horiz = tableSpeed * Math.cos(elevationDeg * DEG);
-  if (horiz < 1e-3) return { azimuthDeg: bearingDeg, speed: tableSpeed };
+  const vert = tableSpeed * Math.sin(elevationDeg * DEG);
+  const still = { azimuthDeg: bearingDeg, speed: tableSpeed, elevationDeg };
+  if (horiz < 1e-3) return still;
 
   const bearingField = (headingDeg + bearingDeg) * DEG;
   const wantX = horiz * Math.cos(bearingField) - vxField;
   const wantY = horiz * Math.sin(bearingField) - vyField;
   const mag = Math.hypot(wantX, wantY);
-  if (mag < 1e-3) return { azimuthDeg: bearingDeg, speed: tableSpeed };
+  if (mag < 1e-3) return still;
 
   return {
     // WRAP. atan2 returns (-180, 180] and the heading is subtracted from it, so the result
@@ -133,7 +159,12 @@ export function leadShot(
     // clamped to the turret's -120 limit -- the robot aimed at its end stop and fired over
     // the wall. Every azimuth crossing the +-180 seam did this.
     azimuthDeg: wrapPi((Math.atan2(wantY, wantX) * RAD - headingDeg) * DEG) * RAD,
-    speed: mag / Math.cos(elevationDeg * DEG),
+    // Clamped, and the speed kept as the magnitude of the vector we wanted rather than
+    // re-solved for the clamped angle: past the hood's travel no launch matches the table's
+    // vector at all, and this degrades smoothly instead of dividing by cos(85 deg). It bites
+    // only when charging the goal at most of top speed from close in.
+    elevationDeg: clamp(Math.atan2(vert, mag) * RAD, hoodRange[0], hoodRange[1]),
+    speed: Math.hypot(mag, vert),
   };
 }
 
@@ -213,12 +244,13 @@ export class BuiltinTeleOp {
   /** The fixed-speed solution for this loop, or null when there is no shot from here. */
   private hoodCell: HoodCell | null = null;
 
-  /** Servo position for a hood ANGLE, which is what the fixed-speed table deals in. */
-  private hoodCommand(fallbackPos: number): number {
-    const c = this.hoodCell;
-    if (!c) return fallbackPos;
+  /** Servo position for a hood ANGLE, which is what both tables now deal in. */
+  private hoodCommand(leadElevDeg: number): number {
     const [lo, hi] = this.spec.hood.angleRange_deg;
-    return clamp((c.mid - lo) / Math.max(1e-6, hi - lo), 0, 1);
+    // The fixed-speed table owns the hood outright when it is loaded; otherwise it is the
+    // lead's solved elevation, which equals the shot table's own angle when standing still.
+    const deg = this.hoodCell ? this.hoodCell.mid : leadElevDeg;
+    return clamp((deg - lo) / Math.max(1e-6, hi - lo), 0, 1);
   }
 
   /** Hood angle the servo is actually at, from its reported position. */
@@ -327,7 +359,7 @@ export class BuiltinTeleOp {
       }
       this.lastVel = { x: velX, y: velY, t: s.t };
     }
-    const lead = leadShot(s.game.upCellAzimuthDeg, tableSpeed, hoodDeg, leadVx, leadVy, s.imu.yaw);
+    const lead = leadShot(s.game.upCellAzimuthDeg, tableSpeed, hoodDeg, leadVx, leadVy, s.imu.yaw, this.spec.hood.angleRange_deg);
 
     // ---- FIXED-SPEED PATH: the wheel holds one speed and the hood aims.
     //
@@ -427,6 +459,11 @@ export class BuiltinTeleOp {
     // amount that depends on how forgiving this particular shot is. The second is measured
     // by tools/entrycheck.ts and carried in the table.
     const exitNow = f.k * f.r_fly_m * rpmToRadS(rpm);
+    // MEASURED IN THE FRAME THE BAND WAS SOLVED IN. speedLo/speedHi thread the mouth from a
+    // STANDING robot at the table's own hood angle; the lead moves both the angle and the
+    // speed, so the band moves with it. Comparing the raw reading against a fixed band marked
+    // every moving shot as unlikely no matter how well aimed it was. Zero correction at rest.
+    const exitRel = exitNow - (lead.speed - tableSpeed);
     const haveModel = row.speedLo !== undefined && row.speedHi !== undefined
       && row.sigmaSpeed !== undefined && row.pStay !== undefined;
     // ---- AND WILL IT BE POINTING THE RIGHT WAY?
@@ -462,7 +499,7 @@ export class BuiltinTeleOp {
     const rawP = this.hoodTable && !this.hoodTable.isEmpty
       ? fixedP
       : haveModel && wheelOn
-        ? pThread(row.speedLo as number, row.speedHi as number, exitNow, row.sigmaSpeed as number) * (row.pStay as number) * pAim
+        ? pThread(row.speedLo as number, row.speedHi as number, exitRel, row.sigmaSpeed as number) * (row.pStay as number) * pAim
         : -1;
     st.pLandRaw = rawP;
     // Calibrated if a measurement is available, raw otherwise -- and `calibrated` says which,
@@ -551,7 +588,7 @@ export class BuiltinTeleOp {
       seq,
       motors,
       servos: {
-        hood: st.autoAim ? this.hoodCommand(row.hoodPos) : 0.5,
+        hood: st.autoAim ? this.hoodCommand(lead.elevationDeg) : 0.5,
         gate: mayFire ? this.spec.transfer.gate.open : this.spec.transfer.gate.closed,
       },
       telemetry: [

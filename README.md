@@ -72,13 +72,22 @@ Current results, in lockstep:
 | OpMode | Result |
 |---|---|
 | `Auto Leave + Park` | LEAVE + PARK, **8 pts** |
-| `Auto One Tip` | LEAVE + PARK + 6 shots + 1 TIP, **28 pts** |
+| `Auto One Tip` | LEAVE + PARK, **8 pts** — see below |
+
+> `Auto One Tip` **does not currently score its shots**, and this table used to claim 28 pts
+> for it. Run with `--echo` the brain is plainly working: it backs off to 31.8 in, reports
+> `status: READY`, holds the hood at 75° and the wheel at 2293 rpm, and counts its hopper down
+> from 6 to 2. The world records `shots 0` for the same run. So the Java decides to fire and
+> the ball never leaves — the gap is in the feed across the bridge, not in the aim. The same
+> aim code shooting the built-in brain's world scores normally (`tools/movingfire.ts`).
 
 ## The tools
 
 ```bash
 npm run tool -- tools/hivedrop.ts          # how many balls tip the HIVE
 npm run tool -- tools/landrate.ts          # land rate vs range
+npm run tool -- tools/leadcheck.ts         # does the motion lead land the shot? (no scatter)
+npm run tool -- tools/movingfire.ts        # shooting while moving, and while accelerating
 npm run tool -- tools/shottable.ts         # regenerate the shot table
 npm run tool -- tools/hoodsweep.ts         # which hood range this robot needs
 npm run tool -- tools/shootercheck.ts      # turret coverage, flywheel MOI, exit speed
@@ -88,7 +97,7 @@ node tools/cad2staging.mjs                 # regenerate ball staging from the CA
 node tools/genconstants.mjs                # robot.json + shot table -> Java constants
 npm run tool -- tools/drivedemo.ts         # drive around and shoot from each stop
 node tools/vars.mjs                        # regenerate docs/VARIABLES.md
-npm test                                   # 47 tests
+npm test                                   # 84 tests
 ```
 
 ## What it currently says
@@ -102,6 +111,11 @@ npm test                                   # 47 tests
   usable ranges go 19 → 25 and the best speed margin 8.0% → 14.8%.
 - **Land rate is 38–50%** from a stationary robot, limited by launch scatter and the pocket's
   restitution (`e_poly`, still a guess) — not by aiming.
+- **It shoots on the move, including while accelerating.** The lead solves the hood as well as
+  the azimuth and the speed, so the ball leaves with the table's whole launch vector whatever
+  the robot is doing. `tools/movingfire.ts`: 0.63 landed/s closing, 0.83 closing while the
+  stick wobbles, 0.38 strafing, against 0.30 standing still, with the downrange bias inside
+  ±20 cm in every case. It used to be +38 to +104 cm long, or short enough never to arrive.
 - **Top speed matches the motor curve**: 62.8 in/s measured against 62 in/s hand-computed.
 
 ## Layout
@@ -118,7 +132,7 @@ java/simsdk/     fake DcMotorEx, Servo, IMU... backed by the bridge
 java/bridge/     JSON + WebSocket, JDK-only
 java/runner/     OpMode registry and the hub's lifecycle
 tools/           experiments and generators
-tests/           47 tests: geometry, hive, drivetrain, turret, shooting, lead, determinism
+tests/           84 tests: geometry, hive, drivetrain, turret, shooting, lead, determinism
 ```
 
 ## Porting to the hub

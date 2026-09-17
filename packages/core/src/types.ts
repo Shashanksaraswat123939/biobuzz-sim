@@ -204,7 +204,8 @@ export interface Snapshot {
     ftc: { x: number; y: number; heading: number };
     wheels: WheelSnapshot[];
     battery: { volts: number; soc: number; amps: number };
-    intake: { power: number; inLine: number; transit: number[] };
+    /** `power` is what it was TOLD; `omega` is what the shaft is doing. A jam is the gap. */
+    intake: { power: number; omega: number; inLine: number; transit: number[] };
     hopper: { count: number; capacity: number; kinds: BallKind[] };
     transfer: { sinceFeed: number; cycleTime: number; ready: boolean; gate: number };
     turret: { angleDeg: number; targetDeg: number; omegaDps: number; atLimit: boolean };

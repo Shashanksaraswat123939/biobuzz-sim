@@ -1025,7 +1025,7 @@ export class Robot {
         return { name: w, cmd: m.duty, omega: m.omega, torque_Nm: m.torque, force_N: this.wheelForce[w], normal_N: this.wheelNormal[w], slip: this.wheelSlip[w], amps: m.amps };
       }),
       battery: { volts, soc, amps },
-      intake: { power: this.motors.get('intake')!.duty, inLine: this.inShaft.length, transit: [] },
+      intake: { power: this.motors.get('intake')!.duty, omega: this.motors.get('intake')!.omega, inLine: this.inShaft.length, transit: [] },
       // Everything the robot is holding, bin plus magazine. Reporting only the bin said
       // "hopper empty" while a ball was still sitting at the nip about to be fired.
       hopper: { count: this.hopper.length + this.inShaft.length, capacity: this.spec.hopper.capacity, kinds: hopperKinds },

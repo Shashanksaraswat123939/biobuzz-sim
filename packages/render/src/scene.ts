@@ -28,7 +28,7 @@ import type { FieldGeometry, BoxPiece } from '@core/field/geometry.js';
 import { inches, M_TO_IN, DEG } from '@core/units.js';
 import { pThread } from '@core/physics/ballistics.js';
 import { loadLandCal } from '@core/robot/loadCal.js';
-import type { Snapshot, Vec3 } from '@core/types.js';
+import type { RobotSpec, Snapshot, Vec3 } from '@core/types.js';
 
 const COL = {
   tile: 0x39434f,
@@ -47,6 +47,9 @@ const COL = {
 };
 
 export type CameraMode = 'orbit' | 'follow' | 'top' | 'muzzle' | 'fpv';
+
+/** How much of a shaft's real speed to show, so fast parts do not strobe. See update(). */
+const SPIN_SHOWN = 0.12;
 
 /**
  * POLLEN and NECTAR are hollow 26-hole balls, and that is most of what they look like.
@@ -161,7 +164,7 @@ export class Scene {
   private turretGroup = new THREE.Group();
   private hoodMesh!: THREE.Mesh;
   private wheelMeshes: THREE.Object3D[] = [];
-  private intakeRoller!: THREE.Mesh;
+  private intakeRoller!: THREE.Group;
   private flywheelMesh!: THREE.Mesh;
   private spin = { wheel: 0, intake: 0, fly: 0 };
   private trajLine: THREE.Mesh;
@@ -182,6 +185,8 @@ export class Scene {
     private readonly canvas: HTMLCanvasElement,
     private readonly geom: FieldGeometry,
     ballSpecs: { id: number; r: number; kind: string }[],
+    /** The same robot.json the physics builds from, so the picture cannot drift from it. */
+    private readonly robotSpec: RobotSpec,
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -825,21 +830,73 @@ export class Scene {
       }
     }
 
-    // INTAKE: a roller across the front, under a mouth you can see into
+    // INTAKE: compliant wheels on a hex shaft, across a mouth you can see into.
+    //
+    // IT SPUN ABOUT THE WRONG AXIS. The cylinder was laid down with rotation.z = PI/2 and
+    // then driven with rotation.y, and an Object3D's euler is XYZ, so the y term turned the
+    // laid-down roller about the WORLD vertical: the axle swept round like a clock hand
+    // instead of the roller turning on it. On screen the intake was a bar pivoting diagonally
+    // out of the robot's front corner. The wheels a hundred lines up had it right all along --
+    // lay the tyre over inside a hub and spin the HUB -- so this does the same, and there is
+    // now nothing to get wrong twice.
+    //
+    // IT ALSO COULD NOT HAVE SHOWN THE SPIN if the axis had been right: a smooth 12-sided
+    // cylinder of one colour looks identical at every angle. Compliant wheels with treads on
+    // them are what a real over-the-bumper intake has, and they turn visibly.
+    //
+    // Sized from robot.json rather than from four hand-tuned numbers that happened to agree
+    // with it. `stepIntake` sweeps a volume mouth.width x mouth.height x mouth.depth off the
+    // front at bin-floor height, and the roller is drawn inside that volume, so a picture that
+    // disagrees with the physics now needs the config to disagree with itself first.
+    const ip = this.robotSpec.intake;
+    const rollerR = ip.rollerRadius_m ?? 0.035;
+    const mouthW = ip.mouth.width_m;
+    const binFloorY = -c.H / 2 + 0.012;                  // robot.ts: -hh + t * 1.5
     const intake = new THREE.Group();
-    this.intakeRoller = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.30, 12), roller);
-    this.intakeRoller.rotation.z = Math.PI / 2;
-    intake.add(this.intakeRoller);
-    for (const sx of [-1, 1]) {
-      const plate = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.10, 0.10), frame);
-      plate.position.set(sx * 0.16, 0.02, -0.02);
-      intake.add(plate);
+    this.intakeRoller = new THREE.Group();
+    // Laid over ONCE, here, where nothing animates it. update() turns the group about its
+    // own X, which after this is the axle.
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, mouthW + 0.04, 6), steel);
+    shaft.rotation.z = Math.PI / 2;
+    this.intakeRoller.add(shaft);
+    const wheels = 5;
+    for (let i = 0; i < wheels; i++) {
+      const x = ((i - (wheels - 1) / 2) / Math.max(1, wheels - 1)) * (mouthW - 0.05);
+      const w = new THREE.Mesh(new THREE.CylinderGeometry(rollerR, rollerR, 0.030, 16), roller);
+      w.rotation.z = Math.PI / 2;
+      w.position.x = x;
+      this.intakeRoller.add(w);
+      // TREADS, proud of the rim. A coaxial flange was the first attempt and it is invisible
+      // for the same reason the bare cylinder was: anything with the axle for an axis of
+      // symmetry looks identical at every angle, so the part reads as dead however fast it is
+      // turning. The mecanum wheels forty lines up already had the answer -- put something
+      // off-axis on the rim -- and this is the same trick.
+      for (let k = 0; k < 3; k++) {
+        const a = (k / 3) * Math.PI * 2;
+        const tread = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.009, rollerR * 0.85), rubber);
+        tread.position.set(x, Math.cos(a) * rollerR, Math.sin(a) * rollerR);
+        // +a, not -a. Rx(a) takes the box's Y to the radial direction at this angle and its
+        // Z to the tangent, which is a tread lying ON the rim; Rx(-a) leaves the long axis
+        // pointing neither way, and three of those read as an auger rather than a wheel.
+        tread.rotation.x = a;
+        this.intakeRoller.add(tread);
+      }
     }
-    const lip = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.012, 0.07), frame);
-    lip.position.set(0, -0.032, 0.035);
-    lip.rotation.x = -0.35;
-    intake.add(lip);
-    intake.position.set(0, -c.H / 2 + 0.05, c.L / 2 + 0.03);
+    intake.add(this.intakeRoller);
+
+    // The mouth: two side cheeks, and nothing under the roller. NO RAMP -- there was a tilted
+    // plate here reaching down and forward, and `robot.ts` deletes the physical one
+    // in as many words ("a plate that reaches out to tile level to catch a ball also drags on
+    // the tile", three quarters of the robot's top speed). Drawing a plough the robot does not
+    // have is the same lie in a different medium.
+    for (const sx of [-1, 1]) {
+      const cheek = new THREE.Mesh(new THREE.BoxGeometry(0.010, ip.mouth.height_m, ip.mouth.depth_m + 0.04), frame);
+      cheek.position.set(sx * (mouthW / 2 + 0.005), ip.mouth.height_m / 2 - rollerR, -0.02);
+      intake.add(cheek);
+    }
+    // Sit the roller so it just clears the bin floor: that is the squeeze `squeeze_N` stands
+    // for, and it is why the lift term in stepIntake can carry a ball over the floor's edge.
+    intake.position.set(0, binFloorY + rollerR, c.L / 2 + ip.mouth.depth_m / 2);
     this.robotGroup.add(intake);
 
     // a nose stripe, so facing is unmistakable from the top camera
@@ -1004,8 +1061,17 @@ export class Scene {
       const hub = this.wheelMeshes[i];
       if (hub) hub.rotation.x += w.omega * dt;
     });
-    this.spin.intake += r.intake.power * 14 * dt;
-    this.intakeRoller.rotation.y = this.spin.intake;
+    // About X, which is the axle after the roller was laid over at build time -- and from the
+    // shaft's MEASURED speed, not from the power it was told to draw. A stalled roller has no
+    // surface speed and therefore no grip, which is what a jam is (robot.ts stepIntake); one
+    // drawn from the command spins merrily through a jam and hides the only symptom there is.
+    //
+    // Geared down for the eye, not for the truth: a 5203-1150 turns 116 rad/s, which is 110
+    // degrees a frame at 60 Hz -- past the strobe limit, where a spinning wheel reads as
+    // stopped or as running backwards. The factor is a constant, so half speed still looks
+    // like half speed and a stall still stops dead.
+    this.spin.intake += r.intake.omega * SPIN_SHOWN * dt;
+    this.intakeRoller.rotation.x = this.spin.intake;
     this.spin.fly += (r.flywheel.rpm / 60) * 2 * Math.PI * dt;
     this.flywheelMesh.rotation.y = this.spin.fly;
 

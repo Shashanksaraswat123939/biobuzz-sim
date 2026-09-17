@@ -137,12 +137,37 @@ release. This is the single largest cause of a wide group, and the Predictor say
 `C_d` and `clSlope` are **guesses** and labelled as such — a 26-hole hollow ball is not a
 smooth sphere.
 
-**Aim** (`builtinTeleOp.ts` / `ShotLead.java`). The turret solves for bearing to the up CELL
-with a motion lead: the ball leaves with `v_exit·d̂ + v_robot`, so the horizontal velocity it
-must leave with is (wanted speed along the bearing) minus (the robot's own velocity), and the
-turret points wherever that vector points. Only velocity is compensated, not acceleration:
-over a one-second flight the `a·t²` term is small next to 1–2° of launch scatter, and a lead
-that differentiates a noisy velocity is worse than no lead.
+**Aim** (`builtinTeleOp.ts` / `ShotLead.java`). The ball leaves with `v_exit·d̂ + v_robot`, so
+the shot is solved for the velocity the **ball** must have in the field frame — which is the
+table's answer as a *vector* — with the robot's own velocity subtracted from it. Three
+components, three unknowns, so all three are solved:
+
+```
+horiz = S·cos(el) along the bearing        vert = S·sin(el)
+mag   = |horiz·b̂ − v_robot|
+                                azimuth = ∠(horiz·b̂ − v_robot)
+                                el      = atan2(vert, mag)
+                                speed   = hypot(mag, vert)
+```
+
+> **The vertical is part of the answer.** This solved the horizontal triangle only and left
+> the hood at the table's angle, so the ball went out with a vertical of `mag·tan(el)` rather
+> than `S·sin(el)`: the ground track exact, the hang time wrong. Closing at 0.4 m/s from 40 in
+> that drops the exit speed from 5.28 to 4.09 m/s at a fixed 70° hood, the vertical from 4.97
+> to 3.85 — and the ball **never reaches** the mouth's 1.46 m. Not a miss; a shot that cannot
+> arrive. Retreating sailed over it the same way. `tools/leadcheck.ts` prints both, and the
+> corrected lead is exact to the centimetre at every velocity and range it covers.
+
+That also all but takes the flywheel out of it. Over ±0.8 m/s of closing speed at 40 in the
+old lead swung the target 1283–3388 rpm against a wheel that slews 1102 rpm/s; this one asks
+for 2241–2477, and gives the rest to a hood servo that is **commanded** rather than measured
+and tracks 15 m/s² of radial acceleration against the flywheel's 1.2.
+
+Only flight acceleration is left uncompensated: over a one-second flight the `a·t²` term is
+small next to 1–2° of launch scatter. `transfer.leadLatency_s` is a different thing — it
+predicts the velocity at *release*, and now that the wheel barely moves it is worth nothing
+either way (`tools/movingfire.ts` measures 0.33 / 0.33 / 0.30 landed per second at τ = 0,
+0.15, 0.3). It is kept because a real hood will lag in a way this one does not.
 
 > The azimuth **must** be wrapped. `atan2` returns (−180, 180] and the heading is subtracted
 > from it, so the result can land anywhere in (−540, 540). Unwrapped, a bearing of +90° came

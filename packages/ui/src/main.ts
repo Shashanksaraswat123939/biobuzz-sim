@@ -98,7 +98,7 @@ function build(): void {
   const mode0 = scene?.cameraMode ?? 'orbit';
   const traj = scene?.showTrajectory ?? true;
   const zone0 = scene?.showShotZone ?? false;
-  scene = new Scene($<HTMLCanvasElement>('#view'), world.geom, specs);
+  scene = new Scene($<HTMLCanvasElement>('#view'), world.geom, specs, robotSpec);
   scene.cameraMode = mode0;
   scene.showTrajectory = traj;
   // Off until asked for: it is a model map, and a coloured floor that is always on reads

@@ -74,6 +74,8 @@ K('double', 'TURRET_MIN_DEG', d(robot.turret.range_deg[0]));
 K('double', 'TURRET_MAX_DEG', d(robot.turret.range_deg[1]));
 K('double', 'TURRET_SPEED_DPS', d(robot.turret.speed_dps));
 K('double', 'TURRET_TICKS_PER_DEG', d(robot.turret.motor.ticksPerDeg ?? ticksPerRev(robot.turret.motor) / 360));
+K('double', 'MUZZLE_OFFSET_M', d(robot.turret.muzzleOffset_m),
+  'Muzzle distance from the turret axis along the shot line, m. The lever arm of omega x r in ShotLead.muzzleVelocity().');
 lines.push('');
 K('double', 'HOOD_MIN_DEG', d(robot.hood.angleRange_deg[0]));
 K('double', 'HOOD_MAX_DEG', d(robot.hood.angleRange_deg[1]));

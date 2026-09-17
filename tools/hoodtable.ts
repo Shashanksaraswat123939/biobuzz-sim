@@ -120,7 +120,6 @@ export function buildHoodTable(p: Params, spec: RobotSpec, rpm: number, step = 4
       // and is the wrong shape anyway: a shot one sigma off is unlikely, not forbidden. The
       // speed scatter is folded in below instead, as the amount it MOVES the band, which is
       // how the old solver handled elevation scatter and keeps everything on one axis.
-      const sig = f.scatter.speedFrac;
       const trial = (hood: number, scale: number) => {
         const L = launch(S * scale, hood, v);
         if (!L) return null;

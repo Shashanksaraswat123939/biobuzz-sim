@@ -15,5 +15,8 @@ public class SimTargetProvider implements TargetProvider {
     @Override public double getAzimuthDeg() { return Json.num(hub.read().game(), "upCellAzimuthDeg", 0); }
     @Override public double getRangeIn() { return Json.num(hub.read().game(), "upCellRangeIn", 0); }
     @Override public boolean isTipping() { return Json.bool(hub.read().game(), "hiveTipping", false); }
+    // Default 0 (square on) so an older world snapshot without the field behaves as before
+    // rather than refusing every shot.
+    @Override public double getOpenAngleDeg() { return Json.num(hub.read().game(), "upCellOpenDeg", 0); }
     @Override public boolean isValid() { return !hub.read().raw.isEmpty(); }
 }

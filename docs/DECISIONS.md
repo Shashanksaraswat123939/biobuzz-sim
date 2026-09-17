@@ -1231,3 +1231,381 @@ Did instead: NOT SHIPPED. The robot is at FTC's eight-motor limit -- four drive,
 Costs/risks: Two motors also double the flywheel's current draw on a 12 V pack already running
               four drive motors, which is not modelled as a brownout risk.
 Who/where:   measured with config/robot.json flywheel.motorCount, which the physics supports
+
+## 2026-09-17 — The ball leaves with the MUZZLE's velocity, and the aim now subtracts it
+Plan said:   docs/PHYSICS.md known-limitation 7: the muzzle's offset and the omega x r velocity
+              a turning chassis gives it are "worth a degree or two ... so left alone".
+Found:       Left alone was the wrong reading, and the reason it looked small is the
+              interesting part. Robot.launch() added body.linvel() -- the tracked point's
+              velocity -- and leadShot()/ShotLead.solve() subtracted the same thing, so the aim
+              and the flight agreed with each other. Two halves agreeing is not either half
+              being right: a real muzzle 0.12 m out on the turret swings at omega*r, which at
+              90 deg/s is 0.19 m/s and 4.7 in of lateral miss at 60 in, against 0.5 in of
+              clearance to a lip. tools/shoterror.ts had been printing a `muzzle v_lat` column
+              the whole time, correlated against a world in which that velocity was never
+              applied. Localizer.getOmegaDps() was implemented on both sides and read by nobody.
+Did instead: Both halves, in one change, because either alone is worse than neither.
+              Robot.launch() gives the ball v_cg + omega x r about the muzzle point (not
+              exitPoint(), which is a spawn offset to clear the chassis collider and not a claim
+              about where the ball leaves the hood). builtinTeleOp.muzzleVelocity() and
+              ShotLead.muzzleVelocity() compute the same vector from the localizer's omega and
+              the turret's MEASURED angle, and it feeds both consumers of the velocity: the lead
+              and the hood table's radial axis. Same seeds, tools/shoterror.ts, only those two
+              files differing:
+
+                              lat median, cm      shots taken
+                turning 50in    -7  ->  -3         31 -> 39
+                turn+drive      -3  ->  -3         52 -> 50
+                stopped          0  ->  -0         67 -> 60
+                shuttling       -0  ->   0         60 -> 60
+                closing 76in    -0  ->  -0         24 -> 24
+
+              Every case with omega = 0 is unchanged to the centimetre, which is the signature
+              this term should have; the turning case is where it lives and it halved there.
+              The simulator cannot measure the part that matters most -- that java/teamcode is
+              now correct against real hardware rather than against this world's own omission.
+Costs/risks: The lever arm assumes the turret axis sits over the tracked point, which is what
+              Robot.muzzle() builds (pivot [0, h, 0] in the body frame). Move the axis off the
+              origin there without moving it here and the aim compensates a term the flight does
+              not have -- this bug with the sign flipped. tests/shotlead.test.ts round-trips the
+              two against each other and is what fails if someone does.
+              The muzzle's POSITION is still ignored when range and bearing are taken; that half
+              really is a centimetre or two and is still open.
+Who/where:   packages/core/src/physics/robot.ts, packages/core/src/robot/builtinTeleOp.ts,
+              java/teamcode/.../control/{ShotLead,AimController}.java, tests/shotlead.test.ts,
+              java/runner/.../SelfCheck.java, docs/PHYSICS.md
+
+## 2026-09-17 — The release re-check is the two turret conditions, on BOTH sides
+Plan said:   AGENT_PROMPT.md section 4: java/teamcode is the deliverable and the mirror mirrors it.
+Found:       They had become two robots. Commit 109c21e's own message rejected both a wheel floor
+              ("unmeetable for a robot whose range is growing -- it took strafing to zero") and a
+              P(land) re-check ("rides the same quantisation and flickers, stopped 0.36 -> 0.12"),
+              and then each half kept one of them -- a different one. The mirror had since been
+              reduced to the two turret conditions; AimController still ANDed in the wheel floor.
+Did instead: AimController.update() re-checks canReach() && onTarget(3.0) and nothing else, the
+              same expression the mirror uses. cfg.flywheelMinRpmFrac is untouched and still
+              drives Flywheel's readiness gate, which is a different question from whether a feed
+              already in flight should be cancelled.
+Costs/risks: Nothing re-checks the wheel between the decision and release now. That is deliberate
+              -- it is what the readiness latch is for -- but it means a wheel that sags inside
+              those 0.4 s fires anyway.
+Who/where:   java/teamcode/.../control/AimController.java
+
+## 2026-09-17 — Three rules the config was breaking, and a test that now reads them
+Plan said:   config/robot.json limits: maxMotors 8, maxServos 12; hopper capacity 6.
+Found:       R503 caps servos at 8, not 12 -- two hubs give 12 PORTS, and ports only cap the rule
+              further. G407 caps CONTROLled SCORING ELEMENTS at 4, not 6, so every cycle time and
+              autonomous ball budget in the repository was computed for a robot that would be
+              penalised. Both numbers were in the spec type and READ BY NOTHING, which is also how
+              a nine-motor configuration (flywheel motorCount 2 on top of an eight-entry hardware
+              map) reached the working tree. Separately, the chassis block's _source had been
+              overwritten with sensors.localizer.noise._source word for word, and docs/VARIABLES.md
+              is generated from that field, so the generated documentation stated that the chassis
+              mass came from an odometry puck.
+Did instead: maxServos 8, hopper capacity 4, chassis _source restored (without the old note's
+              "at the weight limit", which cites a limit R104 says does not exist). tests/rules.test.ts
+              counts the hardware map against both limits, charging a multi-motor flywheel one port
+              per motor -- it reports 9 against the motorCount: 2 config, which is the check that
+              was missing. tools/vars.mjs now fails when two blocks share a _source longer than 80
+              characters. tools/movingfire.ts tops the hopper up to spec.hopper.capacity rather
+              than to a hard-coded 7.
+Costs/risks: Capacity 4 was thought unusable because the indexer could not feed from a nearly empty
+              bin (the OPEN entry above). Re-measured: it feeds. tests/shoot.test.ts fires 12 shots
+              in 23 s from a 4-ball bin against 11 in 67 s from a 6-ball one, so indexLift 0.6
+              closed that one; consider the OPEN entry answered.
+              The earlier entry's "ten of the twelve servo ports are free" is now six of eight.
+              Freeing the eighth motor for a second flywheel motor is still unshipped and still the
+              open design decision.
+Who/where:   config/robot.json, tests/rules.test.ts, tools/vars.mjs, tools/movingfire.ts,
+              java/teamcode/.../config/{RobotConfig,RobotConstants}.java, tools/genconstants.mjs
+
+
+## 2026-09-17 — The CELL pocket was 11 deg out, and three layers of calibration sat on it
+Plan said:   geometry.ts derived the pocket's radial direction from the CELL assembly
+              centroid: atan2(11.28, 53.77 - 43.95) = 48.96 deg from vertical, and used that
+              one angle for BOTH where the pocket sits and which way it points.
+Found:       Those are two different angles, and this rocker holds them 20 deg apart. Taking
+              one for the other put the mouth's lips at 52.5 and 62.7 in against the manual's
+              53.5 and 65.6 (Fig 9-10), the apex 2.9 in low, and the opening facing 41 deg
+              above horizontal where the real one faces 30.
+
+              The CAD settles it without reference to the manual. `up_back_skin_bbox_in` is
+              the pocket's FLOOR plate: 12.95 in of Y over 7.48 in of Z, so the plate is
+              hypot(12.95, 7.48) = 14.955 in long -- the 14 in mouth plus its skin -- and its
+              long axis is atan2(7.48, 12.95) = 30.01 deg off vertical. The pocket axis is
+              that plate's normal, 59.99 deg from vertical. Walk 12.04 in (cellDepth) up the
+              normal from the plate's centre (53.525, 5.360) and the mouth centre lands at
+              Y 59.55; step +-7 in along the plate and the lips land at 53.49 and 65.61. The
+              manual says 53.5 and 65.6. Two independent sources, 0.02 in apart.
+
+              PHYSICS 9.3 proposes a different repair -- keep one angle and re-derive the
+              radius from the lip midpoint -- and its formula does not survive the CAD: it
+              puts the pocket centre at Z 21.8 in against the CAD's 11.3, on an arm 25 in long,
+              on a frame whose half-depth is 19.5 in. The lip heights come out right and the
+              pocket ends up somewhere the rocker is not. Decoupling the two angles gets both.
+Did instead: CellGeometry carries `bodyAngle_rad` (the ARM: 70.03 deg in the body frame, at
+              radius 16.438 in) and `axisAngle_rad` (the pocket's own axis: 89.99 deg, so 60
+              deg from vertical once the rocker sits on its 30 deg stop). REST_ANGLE_DEG is
+              now the CAD's `cells.arm_tilt_deg` = 30 exactly, cited rather than derived from
+              a centroid -- it is a STOP angle, it sets the holding torque and therefore the
+              tip threshold, and tangling it with the pocket is what made this look as though
+              moving the pocket had to move the stops.
+
+              Five call sites had each inlined `(radius + u) * cos(bodyAngle)`, so each had
+              inlined the same mistake; they all go through `fromCellLocal()` now.
+              tests/geometry.test.ts asserts the manual's lip heights directly.
+Costs/risks: Everything fitted against the old pocket had to be refitted, in this order,
+              because each stage feeds the next: entry.json (tools/entrycheck.ts) -> the hood
+              range -> shottable.csv -> landcal.json -> the minLandProb sweep. Do not move the
+              pocket without re-running that chain: a shot table aimed at a pocket it was not
+              fitted to is worse than either error alone.
+Who/where:   packages/core/src/field/geometry.ts, physics/{hive,world}.ts, render/scene.ts,
+              ui/main.ts, tools/{shottable,hivedrop,cellprobe}.ts, tests/geometry.test.ts
+
+## 2026-09-17 — What the corrected pocket was worth
+Plan said:   the shot table sat at 75-85 deg of hood, lobbing balls in nearly vertically, and
+              tools/landcal.ts measured 66% settled per shot.
+Found:       Refitting the chain moved every stage of it, and the answers now agree with the
+              design table in PHYSICS 2.4 -- which was derived from the manual with no
+              simulator in the loop, so this is a cross-check and not a tautology:
+
+                                   before          after       PHYSICS 2.4 predicted
+                arrival      ~84 deg down    30 deg down              25-30 deg down
+                hood range          30-85          40-80                       47-69
+                apex                    -     64 in mean                    61-63 in
+                landcal               66%     85% standing, 89% ON THE MOVE
+                gate 0.70     unreachable     calibrated, 77% ungated
+
+              End to end, tools/movingfire.ts, 90 s of in-band time per case, landed per
+              second, against the same harness at 109c21e:
+
+                                  before   after
+                stopped             0.12    0.53
+                steady closing      0.58    0.71
+                steady strafing     0.07    0.79
+                fore/aft shuttle    0.14    0.50
+                closing, wobbling   0.51    0.43
+
+              The lateral bias went with it: stopped was +24 +-13 cm and is +2, the shuttle
+              was +37 +-54 and is -1 +-7.
+Did instead: Nothing beyond the chain itself. Two tests had encoded the OLD pocket's
+              behaviour and were rewritten rather than relaxed. The entry model's "a fast
+              steep arrival is worse than a slow one" INVERTS, and there is a mechanism for
+              it: the pocket axis is 30 deg above horizontal, so a ball arriving 45 deg down
+              comes in almost along the axis, strikes the flat floor plate square on and
+              rebounds out the way it came -- that row collapses to 0% above 6 m/s. A steeper
+              arrival hits obliquely and is trapped by the far lip. It is the same friction
+              story tools/spincheck.ts found for backspin. The shot zone map's near/far
+              ordering now holds on its own and needed no change.
+Costs/risks: The entry grid rests on e_poly, ball.mu and clSlope, all three flagged guesses
+              (PHYSICS 9.20, protocol 14.2). The winning corner of that grid is a measurement
+              and it will move when they are measured -- re-run tools/entrycheck.ts then.
+              The wobbling case is the one that did not improve; that is the known
+              release-latency fault, not a geometry one.
+Who/where:   config/{entry,landcal,robot}.json, java/teamcode/assets/shottable.csv,
+              tests/{landprob,geometry}.test.ts
+
+## 2026-09-17 — A tip swaps which way the goal faces, and nothing knew
+Plan said:   `game.hiveTipping` is enough: do not shoot at a moving goal (G417).
+Found:       It covers the tip and not the minute after it. A TIP makes the OTHER CELL the up
+              one, and the new one opens the other way: measured here, the mouth jumps from
+              Z +15.7 in to -16.1 in the instant the rocker goes over. A robot that was square
+              onto the goal is now standing behind it, and no launch can enter.
+
+              Nothing checked. The stopped control case tipped the HIVE at t=20 s and then
+              spent 70 s reporting "clear to fire" and putting 40 more balls into the back of
+              the pocket, every one scored as a miss. That is most of why the stopped case
+              read 0.12 landed per second while tools/landcal.ts, which stops before a tip,
+              measured 85% -- and why a 20 s run and a 90 s run of the same case disagreed by
+              a factor of four.
+Did instead: `game.upCellOpenDeg`: the angle between the up CELL's outward mouth normal and
+              the direction to the robot. Both brains hold fire past 75 deg (at 90 the opening
+              is exactly edge-on and has no area at all) and say why -- "mouth faces away,
+              N deg off its opening - DRIVE ROUND". On the hub it arrives through
+              TargetProvider, where a real robot would get it from the tag leaving view.
+
+              tools/movingfire.ts ends a pass at a TIP, for the same reason it ends one that
+              leaves the band: the question was "can this robot shoot from here", and after a
+              tip the premise is void. On the TIP and not on the live angle -- the rocker ROCKS
+              when a ball lands and its mouth normal swings with it, and gating the pass on the
+              instantaneous angle ended every stopped pass after 4.3 s and three shots. The
+              brain is right to hold through a rock; the harness is not right to call the pass
+              over because of one.
+Costs/risks: In the simulator this is ground truth, like the bearing and the range, so it
+              inherits PHYSICS 9.10: a real pipeline has latency and dropout and this has
+              neither. The 75 deg is geometric, not measured.
+Who/where:   packages/core/src/physics/{world,hive}.ts, robot/builtinTeleOp.ts,
+              java/teamcode/.../control/{TargetProvider,AimController}.java,
+              java/simsdk/.../SimTargetProvider.java, tools/movingfire.ts
+
+## 2026-09-17 — One bore, three findings
+Plan said:   the feed tube is sized for ONE POLLEN, 3.20 in, because a NECTAR-sized bore is
+              4.1 in and two 2.8 in POLLEN fit side by side in 4.1 in.
+Found:       The arithmetic is right and the conclusion does not follow. The number that
+              decides "single file" is the DIAGONAL of two POLLEN, 2.8*sqrt(2) = 3.96 in, not
+              5.6 in of side by side. Anything in [3.62, 3.96) takes a NECTAR and is still
+              single file.
+
+              And 3.20 in did not merely refuse NECTAR -- PHYSICS 9.12, which alone means the
+              simulator could not shoot the ball worth 2.5 points in the HIVE and the entire
+              endgame in the FLOWERS. It left a POLLEN 0.2 in of clearance a side, and with
+              that little a ball entering slightly crooked WEDGES in the doorway, below
+              `entryY`. That latches `entryBusy` true for ever: the indexer admits nothing
+              more, and the belt cannot free what is stuck. Traced on seed 43 -- one ball
+              sitting at -2.23 in for an entire run with the belt driving and the gate
+              cycling, `shots 0`. That is the README's "counts its hopper down from 6 to 2 and
+              the world records shots 0" (9.14) and the OPEN "indexer cannot feed from a
+              nearly empty bin" entry above (9.13). One number, three findings; consider that
+              OPEN entry answered.
+Did instead: `transfer.boreSize_m` = 0.0965 (3.80 in), in the middle of the legal window with
+              0.17 in of margin each side. The same seed fires normally now.
+              tests/rules.test.ts asserts the bore passes a NECTAR, refuses two POLLEN on the
+              diagonal, and leaves more than 0.3 in of clearance.
+Costs/risks: A wider bore is easier to jam two balls into if the indexer's metering ever
+              regresses; the diagonal is the guard, and it is a test now. The bore is a design
+              number, not a measured one - CALIBRATE against the real tube once it exists.
+Who/where:   packages/core/src/physics/robot.ts, types.ts, config/robot.json,
+              tests/rules.test.ts
+
+## 2026-09-17 — Three game-model errors: staged NECTAR, FLOWER ownership, the land census
+Plan said:   "A match starts with empty CELLs"; a FLOWER belongs to whoever has more NECTAR in
+              it; each tool counts landings its own way.
+Found:       All three wrong, and the first is the most consequential thing in the game model.
+
+              STAGED NECTAR (9.4). Manual 10.3.1 B.i stages "3 NECTAR in each upward-facing
+              CELL of corresponding color", and Fig 10-2 shows them. The second reason the old
+              note gave -- that staged balls rendered floating under the CAD skin -- was a
+              symptom of the pocket being 11 deg out, and went with it. Measured after the fix:
+              3 NECTAR settle at a 9.6 in lever and hold the rocker 48% of the way over,
+              against STRATEGY.md section 4.2's predicted 40-55%. So a real first tip costs
+              about six POLLEN where an empty-CELL simulator charged twelve, and every
+              autonomous plan timed here was wrong in the same direction.
+
+              FLOWER OWNERSHIP (9.5). Manual 10.5.2: "the ALLIANCE that has the TOP-MOST
+              NECTAR of its color owns that FLOWER." The scorer compared COUNTS, so an
+              alliance that caps the opponent's three with one of its own was scored the loser
+              of that flower. That made the whole endgame of STRATEGY.md section 8 -- plug
+              early, cap late, saturate the tube -- invisible, and capping look worthless.
+
+              THE LAND CENSUS (9.15). Two definitions, disagreeing. `ballsInUpCell` reads one
+              CELL of one rocker, and the rocker ROCKS, so a rotation short of a scored tip
+              carried balls into the down CELL where it read zero. The shot log's `result`
+              tested `pointInCell` over every cell of BOTH hives, so it counted the down CELL
+              and the opponent's. gatecal read 1.0% where landcal had just measured 66% on the
+              same robot and the same table.
+Did instead: World.stageCells(), called after the rockers are back on their stops -- a reset
+              from a tipped hive otherwise staged into the CELL about to swing underneath.
+              Scorer takes `flowers[].topNectar`, found by height in the sweep that already
+              located the bottom-most one.
+              World.landedInUpCell(alliance) is the single census: balls in OUR up CELL now,
+              plus whatever was in it at the instant of each TIP, sampled every step so a tip
+              is caught before the pocket empties. The shot log's `result` and
+              tools/landrate.ts both read it. landrate reports a consistent 63% at 40, 55 and
+              70 in where it used to read 1%.
+Costs/risks: landrate subtracts the three staged NECTAR as a constant; if the staging count
+              changes, that constant has to change with it.
+Who/where:   packages/core/src/physics/{world,hive}.ts, rules/scoring.ts, tools/landrate.ts,
+              tests/determinism.test.ts
+
+
+## 2026-09-17 — "The ball lands and goes under the HIVE": a parked ball is not out of play
+Plan said:   `BallSet.park()` takes a ball out of play by disabling its collider.
+Found:       It disabled the collider and left the ball exactly where it stood, which is out of
+              play to the solver and to nothing else. The CAD stages NECTAR inside the CELLs, so
+              after parkOffField() three of them sat in the up CELL at Y 49.9 in with no
+              collider -- still DRAWN (the renderer's only visibility rule is `p.y > -0.5`),
+              still labelled `cell` by trackBallStates, and still counted by endOfMatchCounts.
+
+              A live shot flew straight through them and came to rest behind them. From the
+              outside that is exactly "the ball landed and went under the HIVE", and it is why
+              chasing it in the physics found nothing: 40 balls injected at the mouth put ZERO
+              under the rocker. The ghosts were never colliding with anything.
+
+              Measured in the running app: 26 parked balls, all 26 with `meshVisible: true`.
+Did instead: park() moves the ball to y = -5 m as well as disabling it. One move, because all
+              three consumers key off position: it is under the renderer's cutoff, outside every
+              scoring volume, and inside no cell. reset() still restores every ball to its home.
+              tests/hive.test.ts asserts a parked ball is below the floor and scores nothing.
+Costs/risks: Anything that read a parked ball's coordinates now reads the bench instead. Nothing
+              did; `preload` picks by index and `reset` restores from `home`.
+Who/where:   packages/core/src/physics/balls.ts, tests/hive.test.ts
+
+## 2026-09-17 — The staged NECTAR were mirrored, so the two hives disagreed by eight inches
+Plan said:   stage 3 NECTAR against the pocket's back wall, offset to one lip.
+Found:       `t` runs ACROSS the mouth, and cell B's axis is the mirror of cell A's, so the same
+              signed offset is the low lip on one rocker and the high lip on the other. The same
+              instruction put red's NECTAR at Y 58.7 in and blue's at 50.4 -- eight inches apart
+              on two rockers that are mirror images of each other.
+Did instead: Stage centred across the mouth (t = 0) and let gravity settle them, which is also
+              the only claim the manual actually makes. Both hives now settle 3 at Y 50.3 in,
+              Z +-9.6, holding +-0.295 N.m.
+Who/where:   packages/core/src/physics/hive.ts
+
+## 2026-09-17 — Auto mode: the autonomous routine, and why it has to drive round
+Plan said:   the UI had Practice, Data and Test. The AUTO period existed on the clock and
+              nothing played it.
+Found:       Worth having on its own, and it turned up the thing a new user hits first: from the
+              default start pose the up CELL's mouth is 109 deg off its opening, because the
+              robot starts against its own alliance wall and the CELL opens toward the audience.
+              An auto that stands still and fires scores nothing however well it aims, and a
+              human pressing Fire on the start tile sees a robot that looks broken.
+Did instead: `AutoRoutine`: LEAVE -> position -> shoot -> park -> done, emitting GamepadState
+              into the same BuiltinTeleOp a human drives, so no shot takes a privileged path.
+              Nothing in it is a magic coordinate -- the shooting spot comes from where the mouth
+              is and which way it opens, the park spot from the LOADING zone in
+              buildFieldGeometry, the stand-off from the shot table's own band. Move the hive or
+              rebuild the table and the routine follows.
+
+              Measured, tools/autocheck.ts, four seeds, a full 30 s period each:
+              4.3 fired, 3.3 landed, LEAVE 4/4, PARK 4/4.
+
+              Two bugs found writing it, both worth recording. The routine first drove
+              confidently to a spot 113 deg off the opening: it was built in WORLD (x, z) and
+              steered against the localizer's FTC (x, y), which are a permutation apart -- it
+              now goes through `worldToFtc`, the one place that conversion is allowed. And the
+              stand-off was the middle of the table's band, 90 in, which is a spot that does not
+              exist on a 141 in field and got clamped into the wall; it is a quarter into the
+              band now.
+
+              AutoDriver and AutoRoutine share one `driveTo`, so there is one piece of driving
+              code to be wrong rather than two.
+Costs/risks: The routine shoots from one spot. It does not re-position after a TIP -- it goes and
+              parks instead, on the grounds that PARK is worth more than the shot it would give
+              up with seconds left. Worth revisiting if the first tip starts landing early.
+Who/where:   packages/core/src/robot/{autoRoutine,autoDriver}.ts, packages/ui/src/{main,guide}.ts,
+              index.html, tools/autocheck.ts
+
+## 2026-09-17 — A slider that cannot say its own value rewrites it
+Plan said:   the Variables panel is live sliders over the constants the simulator runs on.
+Found:       Two of them could not represent the config they shipped with, which is not cosmetic:
+              the panel writes straight into the objects the physics uses, so a slider pinned at
+              its end shows a number the simulator is not using AND rewrites the constant to the
+              nearest value it can say the moment it is touched.
+
+              `Flywheel inertia` ran 0.0005..0.01 against a config of 0.000391, so one drag moved
+              the wheel's inertia by 28% -- and inertia is what sets the per-shot dip, which is
+              what the last shooter decision turned on.
+
+              `Hopper capacity` ran to 12 under a hint reading "Rules cap this; check the
+              manual". A cap written in a hint is a suggestion, and the config it shipped with
+              (6) was already over G407's 4.
+Did instead: Ranges that contain their values, a step fine enough to land on them, and the
+              hopper capped at the rule. tests/ui.test.ts checks all four properties across
+              every slider: in range, on a step, round-trips, and never offers an illegal
+              setting.
+Who/where:   packages/ui/src/tune.ts, tests/ui.test.ts
+
+## 2026-09-17 — Dead code, and why none of it was visible
+Plan said:   tsconfig had `strict: true`.
+Found:       Strict does not include the unused checks, so seventeen dead things had accumulated
+              unseen: a private method nobody called (`Robot.mouthBox`), an unused interface
+              (`CarriedBall`), a field written twice and read never (`Hive.lastTipT`), four
+              constructor refs stored and never used, a parameter passed to `run()` in
+              shoterror that the caller already prints itself, and seven unused imports.
+Did instead: Removed all of it, and turned on `noUnusedLocals`, `noUnusedParameters` and
+              `noFallthroughCasesInSwitch` so the next one cannot accumulate quietly. `npx tsc
+              --noEmit` is the check; it is clean.
+Costs/risks: The unused-parameter rule means a genuinely-unused argument now has to be named
+              `_x` on purpose, which is the point.
+Who/where:   tsconfig.json, packages/core/src/physics/{balls,battery,hive,robot,world}.ts,
+              tools/{entrycheck,fixedspeed,hoodtable,leadcheck,shootercheck,shoterror,shotzone}.ts

@@ -14,7 +14,7 @@ import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/w
 import { BuiltinTeleOp, ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { loadLandCal } from '../packages/core/src/robot/loadCal.js';
 import { rpmToSpeed } from '../packages/core/src/physics/ballistics.js';
-import { inches, M_TO_IN, radSToRpm, rpmToRadS } from '../packages/core/src/units.js';
+import { inches, M_TO_IN, rpmToRadS } from '../packages/core/src/units.js';
 import type { ActuatorFrame, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));

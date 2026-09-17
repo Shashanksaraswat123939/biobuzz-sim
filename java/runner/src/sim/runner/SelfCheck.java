@@ -84,6 +84,23 @@ public class SelfCheck {
                     lead.speed * Math.sin(Math.toRadians(lead.elevationDeg)), wantVert, 1e-4);
         }
 
+        // THE MUZZLE'S OWN VELOCITY. Pure yaw, no translation: the muzzle 0.043 m behind the
+        // turret axis (negative offset, as on a hooded wheel where the ball leaves over the
+        // top) swings sideways at -omega*r, and nothing moves along the shot line.
+        double[] mv = ShotLead.muzzleVelocity(0, 0, 90, 0, 0, -0.043);
+        near("yaw gives the muzzle a lateral velocity", mv[1], -Math.toRadians(90) * 0.043, 1e-9);
+        near("and no forward velocity", mv[0], 0, 1e-9);
+        // A standing robot with a standing turret inherits nothing.
+        double[] still = ShotLead.muzzleVelocity(1.5, -0.5, 0, 37, 21, 0.12);
+        near("no yaw, no correction (x)", still[0], 1.5, 1e-12);
+        near("no yaw, no correction (y)", still[1], -0.5, 1e-12);
+        // The lever arm turns with the TURRET, not just the chassis: same yaw rate, turret
+        // swung 90 deg, and the correction rotates with it.
+        double[] a = ShotLead.muzzleVelocity(0, 0, 90, 0, 0, 0.12);
+        double[] b = ShotLead.muzzleVelocity(0, 0, 90, 0, 90, 0.12);
+        near("turret at 0: omega x r is +y", a[1], Math.toRadians(90) * 0.12, 1e-9);
+        near("turret at 90: omega x r is -x", b[0], -Math.toRadians(90) * 0.12, 1e-9);
+
         lead.solve(bearing, speed, elev, Math.cos(fb) * 2, Math.sin(fb) * 2, heading, HOOD_LO, HOOD_HI);
         that("closing needs less speed", lead.speed < speed);
         that("closing needs a steeper hood", lead.elevationDeg > elev);

@@ -113,6 +113,9 @@ export async function main(argv: string[] = []): Promise<void> {
   // 2800, not 3700: the shot table asks for 2293 to 3316 rpm and nothing else, so tuning at
   // a speed the robot never fires at tunes the wrong operating point.
   const targetRpm = i0 >= 0 ? Number(argv[i0 + 1]) : 2800;
+  // The MOTOR's encoder, on purpose: RUN_USING_ENCODER is the hub's own velocity PID and a
+  // real hub runs it off the built-in encoder. The wheel's Through Bore
+  // (flywheel.encoderTicksPerRev) is a separate reading, closed by the team's own loop.
   const ticksPerRev = 28;
 
   console.log(`target ${targetRpm} RPM`);

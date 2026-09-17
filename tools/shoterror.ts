@@ -38,7 +38,7 @@ const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/sh
 
 interface S { rpmErr: number; long: number; lat: number; vr: number; hoodErr: number; sincePrev: number; range: number; omega: number; turretErr: number; aimErr: number; muzzleLat: number; clampedBy: number }
 
-async function run(name: string, drive: [number, number], wobble: number, startIn: number, secs: number, seed: number, tau?: number, turn = 0): Promise<S[]> {
+async function run(drive: [number, number], wobble: number, startIn: number, secs: number, seed: number, tau?: number, turn = 0): Promise<S[]> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
@@ -115,6 +115,9 @@ async function run(name: string, drive: [number, number], wobble: number, startI
   const t1 = world.t;
   const hold = (): GamepadState => {
     const g = emptyGamepad();
+    // Robot-centric: these cases are written relative to the nose of a robot placed facing
+    // the hive, not to the field. The driver's default is field-centric.
+    g.y = true;
     g.left_stick_x = drive[0];
     g.left_stick_y = -Math.max(-1, Math.min(1, drive[1] + wobble * Math.sin(2 * Math.PI * 0.5 * (world.t - t1))));
     // A driver swinging the robot while the turret holds the goal: the most ordinary way to
@@ -163,7 +166,7 @@ export async function main(argv: string[] = []): Promise<void> {
     console.log('  tau     n   ground aim err      lateral miss        downrange');
     for (const t of [0, 0.075, 0.15, 0.3]) {
       const all: S[] = [];
-      for (let i = 0; i < 8; i++) all.push(...await run('shuttle', [0, 0], 0.35, 50, 25, 7 + i * 18, t));
+      for (let i = 0; i < 8; i++) all.push(...await run([0, 0], 0.35, 50, 25, 7 + i * 18, t));
       const a = all.map((s) => s.aimErr);
       const l = all.map((s) => s.lat);
       const g = all.map((s) => s.long);
@@ -179,8 +182,8 @@ export async function main(argv: string[] = []): Promise<void> {
     const turning = argv.includes('--turn');
     for (let i = 0; i < 8; i++) {
       all.push(...(turning
-        ? await run('turning', [0, 0], 0, 50, 25, 7 + i * 18, undefined, 0.5)
-        : await run('shuttle', [0, 0], 0.35, 50, 25, 7 + i * 18, undefined, 0)));
+        ? await run([0, 0], 0, 50, 25, 7 + i * 18, undefined, 0.5)
+        : await run([0, 0], 0.35, 50, 25, 7 + i * 18, undefined, 0)));
     }
     const wild = all.filter((x) => Math.abs(x.long) > 60 || Math.abs(x.lat) > 60);
     console.log(`WILD ${turning ? 'TURNING' : 'SHUTTLING'} SHOTS: ${wild.length} of ${all.length}`);
@@ -211,7 +214,7 @@ export async function main(argv: string[] = []): Promise<void> {
   console.log('  case              n   rpm err at release   long cm     long vs rpm err     residual');
   for (const [name, drive, wobble, start, turn] of cases) {
     const all: S[] = [];
-    for (let i = 0; i < 8; i++) all.push(...await run(name, drive, wobble, start, 25, 7 + i * 18, undefined, turn));
+    for (let i = 0; i < 8; i++) all.push(...await run(drive, wobble, start, 25, 7 + i * 18, undefined, turn));
     if (all.length < 4) { console.log(`  ${name.padEnd(16)} ${String(all.length).padStart(3)}  (too few shots)`); continue; }
     const lng = all.map((s) => s.long);
     const lat = all.map((s) => s.lat);

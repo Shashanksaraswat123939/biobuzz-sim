@@ -15,7 +15,7 @@
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { DEG, RAD, M_TO_IN } from '../units.js';
 import type { Alliance, BallKind, HiveSnapshot, Params, Vec3 } from '../types.js';
-import { type FieldGeometry, type CellGeometry, pointInCell } from '../field/geometry.js';
+import { type FieldGeometry, type CellGeometry, pointInCell, cellMouthCentre, fromCellLocal } from '../field/geometry.js';
 import { GROUPS } from './groups.js';
 
 type RAPIER = typeof RAPIER_NS;
@@ -39,7 +39,6 @@ export class Hive {
   /** Which side of centre the rocker last settled on: -1 => CELL A up, +1 => CELL B up. */
   private side: -1 | 1;
   private armed = false;
-  private lastTipT = -1;
   perBallTorque: HiveSnapshot['perBallTorque'] = [];
   ballTorque = 0;
   gravityTorque = 0;
@@ -50,7 +49,7 @@ export class Hive {
   ballsInCells: { A: number[]; B: number[] } = { A: [], B: [] };
 
   constructor(
-    private readonly R: RAPIER,
+    R: RAPIER,
     world: RAPIER_NS.World,
     private readonly params: Params,
     private readonly geom: FieldGeometry,
@@ -162,10 +161,45 @@ export class Hive {
 
   /** Mouth centre of the up-facing CELL, in world coordinates. Aim here. */
   upCellMouthWorld(): Vec3 {
+    return this.toWorld(cellMouthCentre(this.upCell));
+  }
+
+  /**
+   * Unit vector out of the up CELL's mouth, world frame. A shooter has to be on this side of
+   * the mouth plane; after a TIP the up CELL is the other one and this points the other way.
+   *
+   * Taken as mouth-centre minus pocket-centre so it goes through the same body-to-world
+   * transform as every other point, rather than needing a separate direction transform that
+   * could pick up the mirror for blue and lose it here.
+   */
+  /**
+   * Where to stage one ball in the up CELL, world frame: against the pocket's back wall, per
+   * manual 10.3.1 B.i. `slot` spaces them along the pivot axis, the mouth's 20 in dimension.
+   *
+   * Returns a position rather than placing the ball, so the hive does not have to know about
+   * BallSet -- World owns the balls and does the release.
+   */
+  upCellStagePos(slot: number, radius: number): Vec3 {
     const cell = this.upCell;
-    const r = cell.radius_m + cell.halfInterior[1];
-    const phi = cell.bodyAngle_rad;
-    return this.toWorld([0, r * Math.cos(phi), r * Math.sin(phi)]);
+    const h = cell.halfInterior;
+    // Against the floor plate, which is what the manual says, and CENTRED across the mouth.
+    //
+    // Not offset toward one lip: `t` runs across the mouth and cell B's axis is the mirror of
+    // cell A's, so the same signed offset is the LOW lip on one rocker and the HIGH lip on the
+    // other. Staging with it put red's NECTAR at Y 58.7 in and blue's at 50.4 -- the same
+    // instruction, eight inches apart, on two rockers that are mirror images. Centred, gravity
+    // settles both to the same place, which is also the only claim the manual actually makes.
+    const u = -h[1] + radius + 0.004;
+    return this.toWorld(fromCellLocal(cell, (slot - 1) * (radius * 2 + 0.01), u, 0));
+  }
+
+  upCellMouthNormalWorld(): Vec3 {
+    const cell = this.upCell;
+    const a = this.toWorld(cellMouthCentre(cell));
+    const b = this.toWorld(fromCellLocal(cell, 0, 0, 0));
+    const d: Vec3 = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const n = Math.hypot(d[0], d[1], d[2]) || 1;
+    return [d[0] / n, d[1] / n, d[2] / n];
   }
 
   /**
@@ -234,10 +268,9 @@ export class Hive {
   }
 
   /** A tip that happened since the last call, for the scorer to consume. */
-  takeTip(t: number): boolean {
+  takeTip(): boolean {
     if (!this.armed) return false;
     this.armed = false;
-    this.lastTipT = t;
     return true;
   }
 
@@ -265,7 +298,6 @@ export class Hive {
     this.armed = false;
     this.tips = 0;
     this.tipping = false;
-    this.lastTipT = -1;
   }
 }
 

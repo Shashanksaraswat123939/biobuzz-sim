@@ -11,6 +11,7 @@ import params from '../config/params.json' with { type: 'json' };
 import robotSpec from '../config/robot.json' with { type: 'json' };
 import { World, initPhysics } from '../packages/core/src/physics/world.js';
 import { M_TO_IN, inches, RAD } from '../packages/core/src/units.js';
+import { fromCellLocal } from '../packages/core/src/field/geometry.js';
 import type { Params, RobotSpec, Vec3, BallKind } from '../packages/core/src/types.js';
 
 export interface DropResult {
@@ -47,8 +48,8 @@ export async function dropTest(over: Partial<Params['hive']> = {}, kind: BallKin
   const at = (x: number, u: number, t: number): Vec3 =>
     hive.toWorld([
       x,
-      (cell.radius_m + u) * Math.cos(cell.bodyAngle_rad) - t * Math.sin(cell.bodyAngle_rad),
-      (cell.radius_m + u) * Math.sin(cell.bodyAngle_rad) + t * Math.cos(cell.bodyAngle_rad),
+      fromCellLocal(cell, 0, u, t)[1],
+      fromCellLocal(cell, 0, u, t)[2],
     ]);
 
   const r0 = world.balls.balls[0].radius;

@@ -24,7 +24,7 @@ const CAD_URLS = import.meta.glob('../../../assets/field.glb', {
   eager: true,
 }) as Record<string, string>;
 const fieldUrl: string | undefined = Object.values(CAD_URLS)[0];
-import type { FieldGeometry, BoxPiece } from '@core/field/geometry.js';
+import { type FieldGeometry, type BoxPiece, fromCellLocal } from '@core/field/geometry.js';
 import { inches, M_TO_IN, DEG } from '@core/units.js';
 import { pThread } from '@core/physics/ballistics.js';
 import { loadLandCal } from '@core/robot/loadCal.js';
@@ -707,15 +707,8 @@ export class Scene {
           this.colliderMeshes.push(box);
         }
 
-        const phi = cell.bodyAngle_rad;
-        const c = Math.cos(phi);
-        const sn = Math.sin(phi);
         /** pocket-local (x, u, t) -> rocker body frame */
-        const at = (x: number, u: number, t: number): Vec3 => [
-          x,
-          (cell.radius_m + u) * c - t * sn,
-          (cell.radius_m + u) * sn + t * c,
-        ];
+        const at = (x: number, u: number, t: number): Vec3 => fromCellLocal(cell, x, u, t);
         const hu = cell.halfInterior[1];
         const ht = cell.halfInterior[2];
         const hx = cell.halfInterior[0];
@@ -735,8 +728,9 @@ export class Scene {
           rib.position.set(sx * hx, 0, 0);
           const holder = new THREE.Group();
           holder.add(rib);
-          holder.position.set(0, cell.radius_m * c, cell.radius_m * sn);
-          holder.rotation.x = phi;
+          const hub = fromCellLocal(cell, 0, 0, 0);
+          holder.position.set(0, hub[1], hub[2]);
+          holder.rotation.x = cell.axisAngle_rad;
           g.add(holder);
           this.proceduralMeshes.push(holder);
         }
@@ -760,7 +754,7 @@ export class Scene {
         );
         const tagPos = at(0, -hu + inches(0.4), -ht * 0.55);
         tag.position.set(tagPos[0], tagPos[1], tagPos[2]);
-        tag.rotation.x = phi + Math.PI / 2;
+        tag.rotation.x = cell.axisAngle_rad + Math.PI / 2;
         g.add(tag);
         this.proceduralMeshes.push(tag);
       }
@@ -1157,9 +1151,13 @@ export class Scene {
     this.canvas.addEventListener('pointerdown', (e) => {
       lx = e.clientX;
       ly = e.clientY;
-      // Either button orbits. Right-drag used to turn the ROBOT as well, which made the
-      // chassis chase the camera every time you looked around -- fine in a shooter, awful
-      // when you are trying to hold a firing position.
+      // LEFT ORBITS, RIGHT AND MIDDLE PAN, which is what every other 3D view does and what
+      // a hand reaches for without being told. Panning was shift-drag only: it worked, and
+      // nobody found it, so the camera could orbit and zoom but never look at a different
+      // part of the field. Shift-drag still pans for anyone who learned it that way.
+      //
+      // (Right-drag used to turn the ROBOT, which made the chassis chase the camera every
+      // time you looked around -- fine in a shooter, awful when holding a firing position.)
       dragging = true;
       this.canvas.setPointerCapture(e.pointerId);
     });
@@ -1174,7 +1172,8 @@ export class Scene {
       if (!dragging || this.cameraMode !== 'orbit') return;
       const dx = e.clientX - lx;
       const dy = e.clientY - ly;
-      if (e.shiftKey || e.buttons === 4) {
+      const panning = e.shiftKey || e.buttons === 2 || e.buttons === 4;
+      if (panning) {
         // Shift-drag pans: slide the orbit target across the camera's own screen plane, so
         // it follows the mouse whichever way the camera happens to be facing.
         const scale = this.orbit.dist * 0.0016;

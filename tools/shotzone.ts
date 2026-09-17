@@ -33,7 +33,7 @@ import { ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { loadLandCal } from '../packages/core/src/robot/loadCal.js';
 import { DEG, M_TO_IN, inches, rpmToRadS } from '../packages/core/src/units.js';
 import { loadEntry, mouthLips } from './shottable.js';
-import { cmBare, m as fm } from './_units.js';
+import { m as fm } from './_units.js';
 import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 export interface ZoneCell {

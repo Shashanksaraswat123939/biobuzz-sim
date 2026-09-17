@@ -109,7 +109,7 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gat
   const brain = new BuiltinTeleOp(spec, table, loadLandCal());
   let loaded = 0;
   const step = (g: GamepadState) => {
-    while (world.robot.heldBalls().length < 7 && loaded < staging.length) {
+    while (world.robot.heldBalls().length < spec.hopper.capacity && loaded < staging.length) {
       if (!world.robot.preload(world.balls, world.balls.balls[loaded])) break;
       loaded++;
     }
@@ -130,6 +130,9 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gat
   const t1 = world.t;
   const hold = (t: number): GamepadState => {
     const g = emptyGamepad();
+    // Robot-centric: these cases are written relative to the nose of a robot placed facing
+    // the hive. The driver's default is field-centric.
+    g.y = true;
     g.left_stick_x = c.drive[0];
     // `ramp` is a steady change of stick per second: constant acceleration, the case a
     // first-order predictor is actually built for. `wobble` oscillates instead, and an
@@ -149,6 +152,7 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gat
   let prevRadial = 0;
   const accels: number[] = [];
   const t0 = world.t;
+  const tips0 = world.hives.red.tips;
   for (let f = 0; f < Math.round(maxSeconds * 60); f++) {
     step(fire(world.t));
     // Collapse the numeric reasons: "P(land) 63% < 70%" and "P(land) 58% < 70%" are one answer.
@@ -165,9 +169,13 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gat
     ranges.push(n * M_TO_IN);
     if (f > 0) accels.push(Math.abs(vr - prevRadial) * 60);
     prevRadial = vr;
+    // A TIP ends the pass, like leaving the band: the up CELL becomes the other one and its
+    // mouth opens the other way, so the question "can this robot shoot from here" is void.
+    // On the TIP and not on the live facing angle -- the rocker ROCKS when a ball lands.
+    const tipped = world.hives.red.tips > tips0;
     const inBand = n * M_TO_IN > BAND_IN[0] && n * M_TO_IN < BAND_IN[1]
       && Math.abs(r[0]) < wall && Math.abs(r[2]) < wall;
-    if (!inBand) break;
+    if (!inBand || tipped) break;
   }
   // WHAT COUNTS IS WHAT WAS FIRED WHILE DRIVING. Fire is a latch, so leaving it set through
   // the settling tail let a closing pass take nearly all of its shots standing still after

@@ -85,4 +85,29 @@ public class ShotLead {
         correctionDeg = Units.wrapDeg(azimuthDeg - bearingDeg);
         return this;
     }
+
+    /**
+     * Velocity of the ball's EXIT POINT in the FTC field frame, m/s: v_cg + omega x r.
+     *
+     * solve() subtracts the velocity the ball inherits from the robot. The velocity it
+     * inherits is the MUZZLE's, and on a yawing robot that is not the chassis's: the muzzle
+     * sits muzzleOffsetM out along the shot line from the turret axis, so it swings at
+     * omega*r of its own. At 0.12 m and 90 deg/s that is 0.19 m/s, which puts a 60 in shot
+     * 4.7 in sideways -- wider than the clearance to the lip, and Localizer.getOmegaDps()
+     * had been implemented on both sides and read by nobody.
+     *
+     * @param turretActualDeg the turret's MEASURED angle, not its target: the muzzle is where
+     *                        the turret IS, and the axis is acceleration limited.
+     * @param muzzleOffsetM   signed along the shot line: + ahead of the turret axis, - behind.
+     * @return {vx, vy} in the FTC field frame.
+     */
+    public static double[] muzzleVelocity(double vxField, double vyField, double omegaDps,
+                                          double headingDeg, double turretActualDeg,
+                                          double muzzleOffsetM) {
+        double w = Math.toRadians(omegaDps);
+        double shot = Math.toRadians(headingDeg + turretActualDeg);
+        double rx = muzzleOffsetM * Math.cos(shot);
+        double ry = muzzleOffsetM * Math.sin(shot);
+        return new double[] { vxField - w * ry, vyField + w * rx };
+    }
 }

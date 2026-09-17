@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/world.js';
 import { BuiltinTeleOp, ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { loadLandCal } from '../packages/core/src/robot/loadCal.js';
-import { CAD } from '../packages/core/src/field/geometry.js';
+import { CAD, CELL_RADIUS_IN } from '../packages/core/src/field/geometry.js';
 import { inches, M_TO_IN, RAD } from '../packages/core/src/units.js';
 import params from '../config/params.json' with { type: 'json' };
 import robotJson from '../config/robot.json' with { type: 'json' };
@@ -36,8 +36,8 @@ export async function main(): Promise<void> {
   const world = new World({ params: p, robot: spec, staging: stage, alliance: 'red', seed: 9, preload: 6 });
   const brain = new BuiltinTeleOp(spec, table, loadLandCal());
 
-  const floor_in = (CAD.cellRadius_in - CAD.cellDepth_in / 2);
-  const mouth_in = (CAD.cellRadius_in + CAD.cellDepth_in / 2);
+  const floor_in = (CELL_RADIUS_IN - CAD.cellDepth_in / 2);
+  const mouth_in = (CELL_RADIUS_IN + CAD.cellDepth_in / 2);
   console.log('the pocket the SOLVER uses, from the pivot axis:');
   console.log(`   floor ${floor_in.toFixed(2)} in   rim ${mouth_in.toFixed(2)} in   half-width ${(CAD.mouthWidth_in / 2).toFixed(1)} in   half-depth ${(CAD.mouthDepth_in / 2).toFixed(1)} in`);
   console.log('the pocket the CAD DRAWS (probed from assets/field.glb):');

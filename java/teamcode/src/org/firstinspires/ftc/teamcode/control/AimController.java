@@ -69,8 +69,16 @@ public class AimController {
         double a = Units.clamp(robot.cfg.velFilterAlpha, 0.01, 1);
         velX += a * (rawVx - velX);
         velY += a * (rawVy - velY);
+        // THE BALL INHERITS THE MUZZLE'S VELOCITY, NOT THE CHASSIS'S: v_cg + omega x r. The
+        // turret's MEASURED angle, because that is where the muzzle is. With no localizer
+        // omega is 0 and this returns the chassis velocity unchanged.
+        double[] mv = ShotLead.muzzleVelocity(velX, velY,
+            loc == null ? 0 : loc.getOmegaDps(),
+            loc == null ? 0 : loc.getHeadingDeg(),
+            robot.turret.getAngleDeg(),
+            robot.cfg.muzzleOffsetM);
         lead.solve(
-            bearing, tableSpeed, tableElev, velX, velY,
+            bearing, tableSpeed, tableElev, mv[0], mv[1],
             loc == null ? 0 : loc.getHeadingDeg(),
             robot.cfg.hoodMinDeg, robot.cfg.hoodMaxDeg);
         lastLeadDeg = lead.correctionDeg;
@@ -119,20 +127,33 @@ public class AimController {
         // rather than refusing every shot forever.
         boolean likely = lastPLand < 0 || lastPLand >= robot.cfg.flywheelMinLandProb;
 
+        // IS THE MOUTH STILL OPEN TOWARDS US? A TIP swaps which CELL is up and the new one
+        // opens the other way, so a robot that was square onto the goal is now behind it and
+        // no launch can enter. 75 deg rather than 90 because at 90 the opening is exactly
+        // edge-on and has no area at all. The mirror gates on the same number.
+        boolean mouthOpen = tp.getOpenAngleDeg() <= 75.0;
+
         // G417: only a shot into the up CELL may move the HIVE, and a hive already
         // tipping is not a target. Hold fire.
-        aimed = pointing && inRange && hoodThere && likely && robot.flywheel.isReady() && !tp.isTipping();
+        aimed = pointing && inRange && hoodThere && likely && robot.flywheel.isReady()
+                && !tp.isTipping() && mouthOpen;
 
         // AND KEEP CHECKING AFTER THE DECISION. A feed already in flight is cancelled if the
-        // things that can go bad inside those four tenths do: the turret running out of travel
-        // or falling behind under a turning chassis, and the wheel sagging under its floor.
-        // Not the full readiness latch -- that needs three consecutive good loops against a
-        // tachometer quantised to about 107 rpm a count, and demanding an unbroken run of them
-        // while the gate servo travels stops the robot shooting almost entirely.
+        // things that can go bad inside those four tenths do: the turret running out of travel,
+        // or falling behind under a turning chassis.
+        //
+        // THE TWO TURRET CONDITIONS AND NOTHING ELSE, which is also what the mirror re-checks
+        // (builtinTeleOp: turretPastStopDeg < 0.5 && |turretErrDeg| < 3). The two halves had
+        // drifted apart, each keeping a different term that the measurement rejects: a WHEEL
+        // FLOOR here, and P(land) in the mirror. The floor is unmeetable for a robot whose
+        // range is growing -- it took the strafing case to zero -- and re-checking P(land)
+        // rides the tachometer's quantisation and flickers (stopped 0.36 -> 0.12). Not the
+        // full readiness latch either: that needs three consecutive good loops, and demanding
+        // an unbroken run of them while the gate servo travels stops the robot shooting almost
+        // entirely. tests/shotlead.test.ts asserts the two expressions agree.
         robot.transfer.stillGood(
                 robot.turret.tracker().canReach(lead.azimuthDeg)
-                && robot.turret.onTarget(3.0)
-                && robot.flywheel.getRpm() > robot.flywheel.gate().getTargetRpm() * robot.cfg.flywheelMinRpmFrac);
+                && robot.turret.onTarget(3.0));
         return aimed;
     }
 

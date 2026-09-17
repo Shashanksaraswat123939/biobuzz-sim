@@ -49,11 +49,6 @@ interface ServoRuntime {
   speed: number; // units of position per second
 }
 
-interface CarriedBall {
-  ball: Ball;
-  /** 0..1 along the intake line, or a countdown for the feed transit. */
-  progress: number;
-}
 
 export class Robot {
   readonly body: RAPIER_NS.RigidBody;
@@ -109,7 +104,7 @@ export class Robot {
   private readonly startPose: { p: Vec3; yaw: number };
 
   constructor(
-    private readonly R: RAPIER,
+    R: RAPIER,
     world: RAPIER_NS.World,
     private readonly params: Params,
     readonly spec: RobotSpec,
@@ -283,6 +278,7 @@ export class Robot {
     void aimTarget;
 
     for (const m of this.motors.values()) m.loop.updateReportedVelocity(t, radToTicks(m.model, m.rad));
+    this.sampleFlywheelEncoder(t);
     return amps;
   }
 
@@ -534,16 +530,27 @@ export class Robot {
     void R;
     void world;
     const t = 0.006;
-    // Sized for ONE POLLEN, not for the largest game element.
+    // SINGLE FILE, AND WIDE ENOUGH FOR A NECTAR. Both, which the old note said was
+    // impossible -- and the arithmetic it argued from was right while its conclusion was not.
     //
-    // Sizing it to take NECTAR as well made the bore 4.1 in wide -- and two 2.8 in POLLEN
-    // fit side by side in 4.1 in. They wedged against each other and the walls, the belt
-    // pushed them both into the wedge, and the robot fired one ball and then jammed solid
-    // for the rest of the match. A single-file magazine is single file or it is not a
-    // magazine. NECTAR is 3.62 in and simply will not enter, which is correct: this robot
-    // shoots POLLEN.
+    // It read: a bore that takes a 3.62 in NECTAR is 4.1 in, and two 2.8 in POLLEN fit side
+    // by side in 4.1 in, so they wedge and the magazine jams solid. True. But the binding
+    // number is not 2 x 2.8 = 5.6 in of side-by-side, it is the DIAGONAL, 2.8 x sqrt(2) =
+    // 3.96 in: below that no two POLLEN can sit in the bore in any orientation. So anything
+    // in [3.62, 3.96) takes a NECTAR and is still single file, and 3.80 in sits in the
+    // middle of that window with 0.17 in of margin each side.
+    //
+    // The 3.20 in bore this used to have was not merely conservative, it JAMMED. A POLLEN
+    // has 0.2 in of clearance in it, and with that little a ball that enters slightly
+    // crooked wedges in the doorway, below `entryY` -- which leaves `entryBusy` true for
+    // ever, so the indexer admits nothing more while the belt cannot free what is stuck.
+    // Measured with tools/_feed-style tracing: on seed 43 one ball sat at -2.23 in for the
+    // whole run with the belt driving and the gate cycling, `shots 0`. That is the README's
+    // "counts its hopper down from 6 to 2 and the world records shots 0" (PHYSICS 9.14) and
+    // the "indexer cannot feed from a nearly empty bin" entry in docs/DECISIONS.md (9.13):
+    // one bore, three findings.
     const r = this.params.ball.pollen.d_m / 2;
-    const half = r + 0.005;
+    const half = (this.spec.transfer.boreSize_m ?? 0.0965) / 2;
     const topY = this.spec.turret.muzzleHeight_m - this.spec.chassis.height_m / 2 - this.spec.chassis.clearance_m;
     const capY = topY + r + t * 2;
     const z = -0.02;
@@ -589,15 +596,6 @@ export class Robot {
 
   // ------------------------------------------------------------ mechanisms
 
-  /** Front mouth as a box in robot-local coordinates. */
-  private mouthBox(): { centre: Vec3; half: Vec3 } {
-    const c = this.spec.chassis;
-    const mo = this.spec.intake.mouth;
-    return {
-      centre: [0, mo.height_m / 2 + c.clearance_m - c.height_m / 2, c.length_m / 2 + mo.depth_m / 2],
-      half: [mo.width_m / 2, mo.height_m / 2, mo.depth_m / 2],
-    };
-  }
 
   /**
    * The intake, as traction rather than as a trigger volume.
@@ -937,8 +935,24 @@ export class Robot {
     const el = mz.elevation + dEl;
     const dir: Vec3 = [Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)];
 
+    // THE BALL LEAVES WITH THE MUZZLE'S VELOCITY, NOT THE CHASSIS'S: v_muzzle = v_cg + omega x r.
+    // This used to add body.linvel() alone, which is the velocity of the tracked point at the
+    // centre of the chassis. The muzzle sits muzzleOffset_m out from the turret axis, so a robot
+    // yawing at 90 deg/s swings it at omega*r = 0.19 m/s of its own -- 4.7 in of lateral miss at
+    // 60 in, and NOT a miss any aiming code could correct, because the physics the shot was aimed
+    // at was not the physics the ball got. builtinTeleOp.muzzleVelocity() / ShotLead.muzzleVelocity()
+    // are the other half of this and have to move with it.
+    //
+    // The lever arm is the MUZZLE, not exitPoint() below: that offset exists to spawn the ball
+    // clear of the chassis collider and is not a claim about where it leaves the hood.
     const cv = this.body.linvel();
-    const vel: Vec3 = [dir[0] * vExit + cv.x, dir[1] * vExit + cv.y, dir[2] * vExit + cv.z];
+    const w = this.body.angvel();
+    const p0 = this.pos;
+    const rx = mz.pos[0] - p0[0], ry = mz.pos[1] - p0[1], rz = mz.pos[2] - p0[2];
+    const mvx = cv.x + (w.y * rz - w.z * ry);
+    const mvy = cv.y + (w.z * rx - w.x * rz);
+    const mvz = cv.z + (w.x * ry - w.y * rx);
+    const vel: Vec3 = [dir[0] * vExit + mvx, dir[1] * vExit + mvy, dir[2] * vExit + mvz];
 
     // Backspin for a single-wheel shooter: axis horizontal and left of the shot, so the
     // Magnus force in aero.ts (w_hat x v) points up.
@@ -998,7 +1012,42 @@ export class Robot {
   get reportedFlywheelRpm(): number {
     const m = this.motors.get('flywheel');
     if (!m) return 0;
-    return (m.loop.reportedVel * 60) / m.model.ticksPerRev;
+    const cpr = this.spec.flywheel.encoderTicksPerRev;
+    if (!cpr) return (m.loop.reportedVel * 60) / m.model.ticksPerRev;
+    return (this.flyEnc.vel * 60) / cpr;
+  }
+
+  /**
+   * The flywheel's OWN encoder, which is not the one the hub's velocity PID reads.
+   *
+   * Two different measurements that used to be one. A REV hub runs RUN_USING_ENCODER off the
+   * motor's built-in encoder and nothing else -- so that loop, its PIDF gains and its
+   * `maxTicksPerSec` scaling all stay on the 5202's 28 ticks a rev, and pointing them at an
+   * external encoder makes the hub's own `f` term 73x too strong (measured: the wheel settled
+   * at 5926 rpm against a 2800 target).
+   *
+   * A Through Bore on the WHEEL shaft is wired to a spare encoder port and read by the team's
+   * code, which is what `BuiltinTeleOp` does: RUN_WITHOUT_ENCODER plus its own feedforward and
+   * P term, closed on this number. That is the reading the readiness gate tests, and it is the
+   * one worth making fine: 28 ticks a rev is a 107 rpm lattice over the hub's 20 ms window,
+   * which is wider than the whole 60 rpm readiness window.
+   */
+  private flyEnc = { hist: [] as { t: number; ticks: number }[], vel: 0 };
+
+  private sampleFlywheelEncoder(t: number): void {
+    const cpr = this.spec.flywheel.encoderTicksPerRev;
+    if (!cpr) return;
+    const m = this.motors.get('flywheel');
+    if (!m) return;
+    // Same whole-count-over-a-window model as the hub's, because that is how any quadrature
+    // count is read; only the resolution differs.
+    const raw = (m.rad / (2 * Math.PI)) * cpr;
+    this.flyEnc.hist.push({ t, ticks: Math.floor(raw) });
+    const window = this.spec.hub.encoderVelocityWindowMs / 1000;
+    while (this.flyEnc.hist.length > 2 && t - this.flyEnc.hist[0].t > window) this.flyEnc.hist.shift();
+    const first = this.flyEnc.hist[0];
+    const dt = t - first.t;
+    if (dt > 1e-6) this.flyEnc.vel = Math.round((raw - first.ticks) / dt);
   }
 
   targetFlywheelRpm(act: ActuatorFrame): number {
@@ -1046,6 +1095,13 @@ export class Robot {
    * and the refusal comes from the geometry rather than from a capacity check.
    */
   preload(balls: BallSet, b: Ball): boolean {
+    // NOT guarded on isEnabled() on purpose. Parking is how a harness clears the field, and
+    // `park everything, then preload N` is the standard rig in tests/shoot.test.ts and half
+    // the tools -- preload's whole job there is to bring a benched ball back into play.
+    //
+    // The thing that must not pick up a parked ball is a positional SEARCH for a loose ball
+    // on the tiles: park() benches them below the floor, so `state === 'free'` plus a low Y
+    // matches the entire bench. Those call sites check isEnabled(); this one must not.
     if (this.hopper.length + this.inShaft.length >= this.spec.hopper.capacity) return false;
     const sh = this.shaft;
     // Six slots around the tube on the bin floor, then a second layer on top of them: a

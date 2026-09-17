@@ -19,7 +19,8 @@ public class RobotConfig {
     public final String BR = RobotConstants.HW_BR;
     public final String INTAKE = RobotConstants.HW_INTAKE;
     public final String TRANSFER = RobotConstants.HW_TRANSFER;
-    public final String FLYWHEEL = RobotConstants.HW_FLYWHEEL;
+    public final String FLYWHEEL_A = RobotConstants.HW_FLYWHEELA;
+    public final String FLYWHEEL_B = RobotConstants.HW_FLYWHEELB;
     public final String TURRET = RobotConstants.HW_TURRET;
     public final String HOOD = RobotConstants.HW_HOOD;
     public final String GATE = RobotConstants.HW_GATE;
@@ -45,6 +46,7 @@ public class RobotConfig {
     public final double turretMaxDeg = RobotConstants.TURRET_MAX_DEG;
     public final double turretSpeedDps = RobotConstants.TURRET_SPEED_DPS;
     public final double turretTicksPerDeg = RobotConstants.TURRET_TICKS_PER_DEG;
+    public final double muzzleOffsetM = RobotConstants.MUZZLE_OFFSET_M;
 
     public final double hoodMinDeg = RobotConstants.HOOD_MIN_DEG;
     public final double hoodMaxDeg = RobotConstants.HOOD_MAX_DEG;

@@ -11,7 +11,8 @@
  * can tell them apart. Poses come from a seeded RNG, so a run is repeatable.
  */
 import { emptyGamepad } from '../physics/world.js';
-import { clamp, DEG, RAD, M_TO_IN, wrapPi } from '../units.js';
+import { DEG, M_TO_IN } from '../units.js';
+import { driveTo } from './autoRoutine.js';
 import type { GamepadState, SensorFrame } from '../types.js';
 
 export type Phase = 'drive' | 'settle' | 'shoot' | 'done';
@@ -135,26 +136,13 @@ export class AutoDriver {
       return g;
     }
 
-    const ex = this.target[0] - s.localizer.x;
-    const ey = this.target[1] - s.localizer.y;
-    const dist = Math.hypot(ex, ey);
+    const dist = Math.hypot(this.target[0] - s.localizer.x, this.target[1] - s.localizer.y);
 
     if (this.phase === 'drive') {
       this.note = `driving to sample ${this.shotsAsked + 1}/${this.plan.shots} (${dist.toFixed(0)} in away)`;
-      // Field-relative error rotated into the robot's own frame, then straight onto the
-      // sticks: the drivetrain is holonomic, so there is nothing to turn toward.
-      const c = Math.cos(s.imu.yaw * DEG);
-      const sn = Math.sin(s.imu.yaw * DEG);
-      const fwd = ex * c + ey * sn;
-      const left = -ex * sn + ey * c;
-      // Taper inside 24 in so it arrives stopped instead of overshooting and hunting.
-      const gain = clamp(dist / 24, 0.18, 1) / Math.max(1, dist);
-      g.left_stick_y = clamp(-fwd * gain, -1, 1);
-      g.left_stick_x = clamp(-left * gain, -1, 1);
-      // Face the CELL, so the turret is not asked to sit on its end stop all run.
-      const want = Math.atan2(this.mouth[1] * M_TO_IN - s.localizer.y, this.mouth[0] * M_TO_IN - s.localizer.x) * RAD;
-      const yawErr = wrapPi((want - s.imu.yaw) * DEG) * RAD;
-      g.right_stick_x = clamp(-yawErr * 0.02, -0.6, 0.6);
+      // One piece of driving code, shared with AutoRoutine. Facing the CELL keeps the turret
+      // off its end stop for the whole run.
+      driveTo(g, s, this.target[0], this.target[1], this.mouth[0] * M_TO_IN, this.mouth[1] * M_TO_IN);
       if (dist < 4 || this.since > 8) {
         this.phase = this.plan.onTheMove ? 'shoot' : 'settle';
         this.since = 0;

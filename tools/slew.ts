@@ -31,6 +31,9 @@ async function slewRate(from: number, to: number, motorCount = 1): Promise<numbe
   spec.flywheel.motorCount = motorCount;
   const staging: { kind: 'pollen'; pos: Vec3 }[] = [];
   const world = new World({ params: p, robot: spec, staging, alliance: 'red', seed: 1 });
+  // The MOTOR's encoder, on purpose: RUN_USING_ENCODER is the hub's own velocity PID and a
+  // real hub runs it off the built-in encoder. The wheel's Through Bore
+  // (flywheel.encoderTicksPerRev) is a separate reading, closed by the team's own loop.
   const ticksPerRev = 28;
   const cmd = (rpm: number): ActuatorFrame => ({
     seq: 0,

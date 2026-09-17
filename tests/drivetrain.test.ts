@@ -4,7 +4,7 @@ import robotSpec from '../config/robot.json';
 import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/world.js';
 import { BuiltinTeleOp, ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { M_TO_IN } from '../packages/core/src/units.js';
-import type { ActuatorFrame, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
+import type { ActuatorFrame, GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 beforeAll(async () => {
   await initPhysics();
@@ -79,22 +79,46 @@ describe('drivetrain (PLAN.md phase 2)', () => {
     expect(Math.abs(spin.snapshot().robot.omegaDps)).toBeGreaterThan(30);
   });
 
-  it('robot-centric is the default: the stick drives the robot, not the field', () => {
-    const spec = robotSpec as unknown as RobotSpec;
-    const table = new ShotTable([]);
-    // Facing +X (yaw 90 deg): forward must move along +X, strafe along Z. If the drive were
-    // field-centric these would be swapped, which is what made W feel like it strafed.
-    const fwd = rig();
-    fwd.robot.place([0, 0.17, 0], Math.PI / 2 * (180 / Math.PI));
-    const brainF = new BuiltinTeleOp(spec, table);
+  /**
+   * FIELD-CENTRIC IS THE DEFAULT, and this test used to assert the opposite.
+   *
+   * The old contract was robot-centric, on the argument that a turret means the chassis never
+   * has to face the goal. That is true of the shot and false of the driver: with a turret the
+   * chassis ends up pointing wherever it was last going, so 'forward' becomes a direction the
+   * driver has to track in their head and cannot see. Push up, robot goes sideways, correct,
+   * over-correct. Field-centric rotates the stick by the reported heading so up is always away
+   * from the driver station.
+   */
+  const drive = (yawDeg: number, g: GamepadState) => {
+    const w = rig();
+    w.robot.place([0, 0.17, 0], yawDeg);
+    const brain = new BuiltinTeleOp(robotSpec as unknown as RobotSpec, new ShotTable([]));
+    for (let f = 0; f < 60; f++) {
+      w.setGamepads(g, emptyGamepad());
+      w.step(brain.update(w.sensors(), g, w.seq));
+    }
+    return w.robot.pos;
+  };
+
+  it('field-centric by default: the stick drives the FIELD, whatever way the robot points', () => {
+    const g = emptyGamepad();
+    g.left_stick_y = -1;          // stick up
+    // Yaw 0 and yaw 90 must go the SAME way in the world. That is the whole property.
+    const at0 = drive(0, g);
+    const at90 = drive(90, g);
+    expect(at0[2]).toBeGreaterThan(0.3);            // +Z, away from the driver station
+    expect(at90[2]).toBeGreaterThan(0.3);            // and the same, nose sideways
+    expect(Math.abs(at90[0])).toBeLessThan(0.15);    // not along its own nose
+  });
+
+  it('holding Y gives robot-centric back, for a drifted IMU', () => {
     const g = emptyGamepad();
     g.left_stick_y = -1;
-    for (let f = 0; f < 60; f++) {
-      fwd.setGamepads(g, emptyGamepad());
-      fwd.step(brainF.update(fwd.sensors(), g, fwd.seq));
-    }
-    expect(fwd.robot.pos[0]).toBeGreaterThan(0.3); // moved along its own nose
-    expect(Math.abs(fwd.robot.pos[2])).toBeLessThan(0.15);
+    g.y = true;
+    // Facing +X (yaw 90): robot-centric forward is along its own nose, +X.
+    const p = drive(90, g);
+    expect(p[0]).toBeGreaterThan(0.3);
+    expect(Math.abs(p[2])).toBeLessThan(0.15);
   });
 
   it('strafing left and right are mirror images', () => {

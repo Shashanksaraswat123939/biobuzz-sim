@@ -58,7 +58,11 @@ describe('determinism (PLAN.md section 12)', () => {
     const p = structuredClone(params) as unknown as Params;
     const world = new World({ params: p, robot: robotSpec as unknown as RobotSpec, staging: balls, alliance: 'red', seed: 3 });
     const idle = { seq: 0, motors: {}, servos: {} };
-    const home = balls.map((b) => b.pos);
+    // THE WORLD'S OWN START STATE, not the raw CAD staging list. The constructor clears the
+    // CAD's display staging and then places 3 NECTAR in each upward-facing CELL per manual
+    // 10.3.1 B.i, so six balls legitimately do not start where the staging file put them.
+    // What reset has to reproduce is the state a match starts in.
+    const home = world.balls.balls.map((b) => [...world.balls.pos(b)]);
 
     world.clock.start();
     for (let f = 0; f < 240; f++) world.step(idle);
@@ -79,5 +83,8 @@ describe('determinism (PLAN.md section 12)', () => {
       const q = world.balls.pos(b);
       for (let k = 0; k < 3; k++) expect(q[k]).toBeCloseTo(home[i][k], 6);
     });
+    // And the staged NECTAR really are staged: 3 in each hive's up CELL (manual 10.3.1 B.i).
+    expect(world.balls.balls.filter((b) => b.kind === 'nectarRed' && b.state === 'cell').length).toBe(3);
+    expect(world.balls.balls.filter((b) => b.kind === 'nectarBlue' && b.state === 'cell').length).toBe(3);
   }, 60000);
 });

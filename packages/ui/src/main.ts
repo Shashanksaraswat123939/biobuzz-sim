@@ -14,6 +14,7 @@
  * here it is wired to something; there is nothing that only looks like a control.
  */
 import paramsJson from '../../../config/params.json';
+import { fromCellLocal } from '@core/field/geometry.js';
 import robotJson from '../../../config/robot.json';
 import stagingJson from '../../../assets/staging.json';
 import shotCsv from '../../../java/teamcode/assets/shottable.csv?raw';
@@ -23,11 +24,12 @@ import { World, initPhysics, emptyGamepad } from '@core/physics/world.js';
 import { BuiltinTeleOp, ShotTable } from '@core/robot/builtinTeleOp.js';
 import { loadLandCal } from '@core/robot/loadCal.js';
 import { AutoDriver, defaultPlan, type AutoPlan } from '@core/robot/autoDriver.js';
+import { AutoRoutine } from '@core/robot/autoRoutine.js';
 import { simulateShot, rpmToSpeed } from '@core/physics/ballistics.js';
 import { knobs, predict, type Prediction } from '@core/analysis/sensitivity.js';
 import { analyse, toCsv, type Report } from '@core/analysis/report.js';
 import { Trace } from '@core/analysis/trace.js';
-import { M_TO_IN, DEG, inches } from '@core/units.js';
+import { M_TO_IN, DEG, RAD, inches } from '@core/units.js';
 import { Scene, type CameraMode, type ZonePayload } from '@render/scene.js';
 import type { ActuatorFrame, Alliance, BallKind, GamepadState, Params, RobotSpec, Snapshot, Vec3 } from '@core/types.js';
 import { readKeyboard, installKeyboard, type Keys } from './input.js';
@@ -41,7 +43,7 @@ import { groupPlot, errorVsRange, histogram } from './charts.js';
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const $$ = <T extends HTMLElement = HTMLElement>(sel: string) => Array.from(document.querySelectorAll<T>(sel));
 
-type Mode = 'practice' | 'collect' | 'test';
+type Mode = 'practice' | 'auto' | 'collect' | 'test';
 
 const baseParams = paramsJson as unknown as Params;
 const baseRobot = robotJson as unknown as RobotSpec;
@@ -56,6 +58,8 @@ let scene: Scene;
 let sticks: Joysticks;
 let brain: BuiltinTeleOp;
 let auto: AutoDriver | null = null;
+/** The match autonomous, as opposed to the data sweep. Only one of the two ever runs. */
+let routine: AutoRoutine | null = null;
 let plan: AutoPlan = defaultPlan();
 let alliance: Alliance = 'red';
 let mode: Mode = 'practice';
@@ -76,6 +80,8 @@ const bridge = new WorldBridge();
  * "before" away every time.
  */
 const trace = new Trace();
+/** The best land rate the calibration in config/landcal.json actually reached. */
+const landCalCeiling: number | undefined = loadLandCal()?.ceiling;
 
 // ---------------------------------------------------------------- setup
 
@@ -93,11 +99,28 @@ async function boot(): Promise<void> {
 function build(): void {
   world = new World({ params, robot: robotSpec, staging, alliance, seed: params.sim.seed, preload: 4 });
   brain = new BuiltinTeleOp(robotSpec, shotTable, loadLandCal());
+  // ZERO THE FIELD FRAME ON THE DRIVER, not on the world's axes.
+  //
+  // Field-centric rotates the stick by (yaw - headingZero). With headingZero at 0 that makes
+  // "up" mean world +Z -- an axis with no relationship to where anyone is standing. The
+  // alliance stations are on the +-X walls, so for a red driver "away from me" is +X, and
+  // up-stick would have crabbed the robot sideways across their view from the first frame.
+  //
+  // The robot starts on its own wall facing down-field, so its starting heading IS the
+  // driver's "away". Backspace re-zeros it to wherever the robot faces now.
+  brain.state.headingZero = world.robot.yaw * RAD;
   auto = null;
+  routine = null;
   const specs = world.balls.balls.map((b) => ({ id: b.id, r: b.radius, kind: b.kind as string }));
   const mode0 = scene?.cameraMode ?? 'orbit';
   const traj = scene?.showTrajectory ?? true;
-  const zone0 = scene?.showShotZone ?? false;
+  // ON BY DEFAULT. The up CELL opens toward the audience, so the whole alliance-wall side
+  // of the field is behind the mouth and no launch from there can enter -- and the first
+  // thing a driver does is press Fire from the start tile and watch nothing happen. The map
+  // answers that before it is asked: it is green only where a perfectly aimed shot clears
+  // the gate, and it already models the facing (a shooter behind the pocket gets a negative
+  // near range, so those squares read zero).
+  const zone0 = scene?.showShotZone ?? true;
   scene = new Scene($<HTMLCanvasElement>('#view'), world.geom, specs, robotSpec);
   scene.cameraMode = mode0;
   scene.showTrajectory = traj;
@@ -123,10 +146,44 @@ function onTune(t: Tunable): void {
 
 // ---------------------------------------------------------------- input
 
+/**
+ * SLEW THE STICKS. A key is on or off, so a keyboard asks for 0% or 100% of a 1.2 m/s
+ * drivetrain with nothing in between -- tap W and the robot leaves. That is what "it moves
+ * way too fast" is: not the top speed, which is what a 435 rpm goBILDA on 96 mm wheels
+ * actually does, but the fact that every input is a step.
+ *
+ * Ramping to full over about a fifth of a second gives the thumb something to aim with and
+ * costs nothing real: a physical stick has the same travel, and the drivetrain cannot follow
+ * a step anyway. Release is deliberately faster than push, because stopping should not have
+ * to be planned. A real analog stick is passed through untouched -- it is already analog.
+ */
+const SLEW_UP = 5.0;    // full deflection in 0.2 s
+const SLEW_DOWN = 12.0; // and back to nothing in 0.08 s
+const slewed = { lx: 0, ly: 0, rx: 0 };
+let lastFrameDt = 1 / 60;
+function slew(now: number, want: number, dt: number): number {
+  const rate = Math.abs(want) > Math.abs(now) ? SLEW_UP : SLEW_DOWN;
+  const step = rate * dt;
+  return Math.abs(want - now) <= step ? want : now + Math.sign(want - now) * step;
+}
+
+/**
+ * Apply the slew to a digital (keyboard or on-screen) stick frame. The on-screen joystick is
+ * analog in principle, but a thumb on a touch screen snaps to the edge much as a key does, so
+ * it gets the same treatment; a real gamepad stick does not.
+ */
+function rampDigital(s: GamepadState): GamepadState {
+  const dt = Math.min(0.05, lastFrameDt);
+  slewed.lx = slew(slewed.lx, s.left_stick_x, dt);
+  slewed.ly = slew(slewed.ly, s.left_stick_y, dt);
+  slewed.rx = slew(slewed.rx, s.right_stick_x, dt);
+  return { ...s, left_stick_x: slewed.lx, left_stick_y: slewed.ly, right_stick_x: slewed.rx };
+}
+
 function gamepadState(): GamepadState {
   const g = navigator.getGamepads?.().find((p) => p);
   const k = readKeyboard(keys);
-  if (!g) return sticks.merge(k);
+  if (!g) return rampDigital(sticks.merge(k));
   const dz = (v: number) => (Math.abs(v) < 0.09 ? 0 : v);
   const merged: GamepadState = {
     left_stick_x: dz(g.axes[0] ?? 0) || k.left_stick_x,
@@ -181,6 +238,7 @@ let last = performance.now();
 function loop(now: number): void {
   requestAnimationFrame(loop);
   const dtReal = Math.min(0.1, (now - last) / 1000);
+  lastFrameDt = dtReal;
   last = now;
 
   const human = gamepadState();
@@ -199,7 +257,9 @@ function loop(now: number): void {
       // a gamepad, and the same TeleOp code path flies the shot.
       const g = auto && auto.phase !== 'done'
         ? auto.update(sensors, frame, world.robot.shots)
-        : first ? human : neutralEdges(human);
+        : routine && routine.phase !== 'done'
+          ? routine.update(sensors, frame, world.robot.shots, world.clock.remaining)
+          : first ? human : neutralEdges(human);
       world.setGamepads(g, emptyGamepad());
       lastAct = useJavaBrain ? bridge.exchange(sensors) : brain.update(sensors, g, world.seq, frame);
       world.telemetry = lastAct.telemetry ?? [];
@@ -234,11 +294,20 @@ let trajAge = 0;
  * that the sim ran at well under real time.
  */
 function predictShot(s: Snapshot): Vec3[] | null {
-  if (!scene.showTrajectory || s.robot.flywheel.rpm < 200) return null;
+  if (!scene.showTrajectory) return null;
+  if (s.robot.flywheel.rpm < 200 && brain.state.targetRpm <= 0) return null;
   if (trajAge-- > 0 && trajCache) return trajCache;
   trajAge = 4;
   const mz = world.robot.muzzle();
-  const speed = rpmToSpeed(s.robot.flywheel.rpm, robotSpec.flywheel.k, robotSpec.flywheel.r_fly_m);
+  // THE SHOT THE AIM IS SOLVING FOR, not the one the wheel could take this instant.
+  //
+  // This used to integrate the LIVE rpm and the live hood, so while the wheel spun up the arc
+  // crawled out of the muzzle and fell short of everything -- it only agreed with the aim in
+  // the moment the shot actually went. As an aiming aid that is backwards: what you want to
+  // see is where the ball WILL go when the gate opens, so you can put it on the mouth and
+  // wait. Once the wheel is at speed and the hood has arrived the two are the same curve.
+  const targetRpm = brain.state.targetRpm > 0 ? brain.state.targetRpm : s.robot.flywheel.rpm;
+  const speed = rpmToSpeed(targetRpm, robotSpec.flywheel.k, robotSpec.flywheel.r_fly_m);
   const traj = simulateShot(params, {
     from: mz.pos, azimuth: mz.azimuth, elevation: mz.elevation, speed,
     radius: params.ball.pollen.d_m / 2,
@@ -263,7 +332,11 @@ function paint(s: Snapshot): void {
   $('#blue-total').textContent = String(s.score.blue.total);
 
   const rangeIn = Math.hypot(world.aimPoint()[0] - r.p[0], world.aimPoint()[2] - r.p[2]) * M_TO_IN;
-  set('#st-note', auto && auto.phase !== 'done' ? auto.note : brain.state.note, brain.state.ready ? 'on' : 'off');
+  // Whichever autonomous holds the sticks says what it is doing; otherwise the brain does.
+  const autoNote = auto && auto.phase !== 'done' ? auto.note
+    : routine && routine.phase !== 'done' ? `${routine.phase.toUpperCase()}: ${routine.note}`
+    : null;
+  set('#st-note', autoNote ?? brain.state.note, brain.state.ready ? 'on' : 'off');
   set('#st-range', m(rangeIn));
   set('#st-turret', `${r.turret.angleDeg.toFixed(0)}°`, r.turret.atLimit ? 'off' : '');
   set('#st-rpm', `${r.flywheel.rpm.toFixed(0)}`, brain.state.ready ? 'on' : '');
@@ -422,7 +495,68 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 let chartedAt = -1;
 
+/**
+ * THE MATCH, in the terms it is scored in, plus what the shooter actually did.
+ *
+ * Live rather than only at the buzzer, because "how am I doing" is a question you ask while
+ * driving; the header says FINAL once the clock has stopped, so a number you are reading is
+ * never ambiguous about whether it is still moving.
+ *
+ * Accuracy is landed over settled, from the shot log, and a shot counts as landed only when
+ * it ends up in our OWN up CELL -- not when it passes through the volume, and not when it
+ * lands in the down CELL or the opponent's hive, both of which the old census counted.
+ *
+ * The odds line is the other half. Accuracy is what happened; the odds are what the robot
+ * believes about the shot it is lining up now, through the measured curve in
+ * config/landcal.json, against the ceiling that curve actually reached. A gate set above
+ * that ceiling cannot be met by any shot this shooter can take, and the honest thing is to
+ * say so rather than leave the driver wondering why it will not fire.
+ */
+function paintMatch(s: Snapshot): void {
+  const sc = s.score[alliance];
+  const settled = s.shots.filter((x) => x.result !== 'flight');
+  const landed = settled.filter((x) => x.result === 'cell').length;
+  const acc = settled.length ? landed / settled.length : 0;
+  const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+  const sd = (a: number[]) => {
+    if (a.length < 2) return NaN;
+    const mu = mean(a);
+    return Math.sqrt(a.reduce((x, v) => x + (v - mu) ** 2, 0) / (a.length - 1));
+  };
+  const lng = settled.map((x) => x.long_in).filter(Number.isFinite);
+  const lat = settled.map((x) => x.lat_in).filter(Number.isFinite);
+  const done = s.period === 'FINISHED';
+
+  $('#a-match-h').textContent = done ? 'Match — FINAL' : `Match — ${s.period}`;
+  $('#a-match').innerHTML = [
+    row('score', String(sc.total), done ? 'good' : ''),
+    row('LEAVE / PARK', `${sc.leave ? 3 : 0} + ${sc.park ? 5 : 0}`, sc.leave || sc.park ? 'good' : ''),
+    row('TIPS', `${sc.tips} × 20`, sc.tips ? 'good' : ''),
+    row('in our up CELL', String(world.landedInUpCell(alliance))),
+    row('shots fired', String(s.shots.length)),
+    row('landed', `${landed} of ${settled.length}`),
+    row('accuracy', settled.length ? `${(acc * 100).toFixed(0)}%` : '—',
+      !settled.length ? '' : acc > 0.6 ? 'good' : acc > 0.3 ? 'bad' : 'err'),
+    row('group, downrange', lng.length > 1 ? `${cmSigned(mean(lng))} ± ${cm(sd(lng))}` : '—',
+      lng.length > 1 ? (Math.abs(mean(lng)) < 6 ? 'good' : 'bad') : ''),
+    row('group, lateral', lat.length > 1 ? `${cmSigned(mean(lat))} ± ${cm(sd(lat))}` : '—',
+      lat.length > 1 ? (Math.abs(mean(lat)) < 5 ? 'good' : 'bad') : ''),
+  ].join('');
+
+  const p = brain.state.pLand;
+  const ceiling = landCalCeiling;
+  const gate = robotSpec.flywheel.minLandProb ?? 0;
+  $('#a-odds').textContent = p < 0
+    ? 'Odds: this shot table predates the columns the land model needs, so the gate falls through to the rpm window.'
+    : `Odds on the shot now: ${(p * 100).toFixed(0)}%`
+      + (brain.state.calibrated ? ' (calibrated)' : ' (raw model)')
+      + `, gate at ${(gate * 100).toFixed(0)}%`
+      + (ceiling !== undefined ? `, best measured ${(ceiling * 100).toFixed(0)}%` : '')
+      + (ceiling !== undefined && gate > ceiling ? ' — THE GATE IS ABOVE THE CEILING: no shot can meet it.' : '');
+}
+
 function paintAnalysis(s: Snapshot): void {
+  paintMatch(s);
   const running = !!auto && auto.phase !== 'done';
   $('#a-plan').innerHTML = [
     row('shots to collect', String(plan.shots)),
@@ -505,6 +639,12 @@ const DECK: Record<Mode, Action[]> = {
     { label: 'Pause', title: 'Freeze the physics. The view still moves.', run: () => togglePause(), on: () => paused },
     { label: 'Reset', title: 'Rebuild the match: robot back on its start tile, balls re-staged, score and shot log cleared.', run: () => build() },
   ],
+  auto: [
+    { label: 'Shot zone', title: 'Green where a perfectly aimed shot clears the land-probability gate. Worth leaving on here: it shows you the sector the routine is driving to, and why it cannot shoot from the start tile.', run: () => (scene.showShotZone = !scene.showShotZone), on: () => scene.showShotZone },
+    { label: 'Speed: 1x', title: 'Sim seconds per real second. The step size never changes, so a 4x run flies exactly the same trajectories.', run: () => cycleTurbo(), on: () => turbo > 1 },
+    { label: 'Pause', title: 'Freeze the physics mid-routine. Resuming continues from where it stopped.', run: () => togglePause(), on: () => paused },
+    { label: 'Reset', title: 'Rebuild the match and clear the routine.', run: () => build() },
+  ],
   collect: [
     { label: 'Shots: 20', title: 'How many samples this run collects. Below about 20 the statistics are noise.', run: () => { plan.shots = plan.shots >= 80 ? 20 : plan.shots + 20; }, },
     { label: 'Moving', title: 'Fire while still rolling instead of settling first. This is what the motion lead exists for, and the difference between the two runs tells you whether it works.', run: () => (plan.onTheMove = !plan.onTheMove), on: () => plan.onTheMove },
@@ -551,13 +691,18 @@ function paintDeck(): void {
     if (a.label.startsWith('Speed:')) b.textContent = `Speed: ${turbo}x`;
   }
   const running = !!auto && auto.phase !== 'done';
+  const autoRunning = !!routine && routine.phase !== 'done';
   const p = $<HTMLButtonElement>('#primary');
   p.textContent = mode === 'collect'
     ? running ? 'Stop collection' : 'Run collection'
-    : world.clock.period === 'STAGING' ? 'Start match' : paused ? 'Resume' : 'Pause';
+    : mode === 'auto'
+      ? autoRunning ? 'Stop autonomous' : 'Run autonomous'
+      : world.clock.period === 'STAGING' ? 'Start match' : paused ? 'Resume' : 'Pause';
   p.title = mode === 'collect'
     ? 'Start the autonomous sweep described in the Analysis tab.'
-    : 'Start the 2:38 match clock, or pause it once it is running.';
+    : mode === 'auto'
+      ? 'Restart the match and hand the sticks to the 30-second autonomous routine.'
+      : 'Start the 2:38 match clock, or pause it once it is running.';
 }
 
 function setMode(m: Mode): void {
@@ -567,7 +712,13 @@ function setMode(m: Mode): void {
   // Each mode opens on the tab it exists for.
   showTab(m === 'collect' ? 'analysis' : m === 'test' ? 'predict' : 'robot');
   if (m !== 'collect' && auto) auto = null;
+  if (m !== 'auto' && routine) routine = null;
   if (m !== 'collect') turbo = 1;   // never fast-forward while a human is driving
+  if (m === 'auto') {
+    autoLoad = false;               // the whole question is what it does with ONE preload
+    scene.cameraMode = 'follow';
+    $<HTMLSelectElement>('#camera').value = 'follow';
+  }
   if (m === 'collect') {
     autoLoad = true;                 // a 40-shot sweep needs more balls than the robot holds
     scene.cameraMode = 'follow';
@@ -579,7 +730,7 @@ function setMode(m: Mode): void {
 const TURBO = [1, 4, 16];
 const cycleTurbo = () => { turbo = TURBO[(TURBO.indexOf(turbo) + 1) % TURBO.length]; };
 
-const MODES: Mode[] = ['practice', 'collect', 'test'];
+const MODES: Mode[] = ['practice', 'auto', 'collect', 'test'];
 const cycleMode = () => setMode(MODES[(MODES.indexOf(mode) + 1) % MODES.length]);
 
 const CAMERAS: CameraMode[] = ['orbit', 'follow', 'fpv', 'top', 'muzzle'];
@@ -589,8 +740,37 @@ function cycleCamera(d: number): void {
   $<HTMLSelectElement>('#camera').value = CAMERAS[i];
 }
 
+/**
+ * Build the match autonomous from the world as it stands: where the mouth is, which way it
+ * opens, where our LOADING zone is, and what range band the shot table actually solves. All
+ * four are read out of the live world, so none of them is a number written into the routine.
+ */
+function makeRoutine(): AutoRoutine {
+  const hive = world.hives[alliance];
+  const zone = world.geom.zones.find((z) => z.name === 'LOADING' && z.alliance === alliance)!;
+  const ranges = shotTable.rows.map((r) => r.range_in);
+  return new AutoRoutine({
+    mouth: hive.upCellMouthWorld(),
+    mouthNormal: hive.upCellMouthNormalWorld(),
+    loading: [zone.min[0], zone.min[2], zone.max[0], zone.max[2]],
+    halfWidth_m: world.geom.halfWidth_m,
+    band_in: [Math.min(...ranges), Math.max(...ranges)],
+  });
+}
+
 /** The green button: whatever the current mode's main verb is. */
 function primary(): void {
+  if (mode === 'auto') {
+    if (routine && routine.phase !== 'done') { routine = null; return paintDeck(); }
+    // Always from the top of AUTO: the routine is written against a 30 s period and a full
+    // preload, and running it from the middle of TELEOP would be measuring something else.
+    build();
+    routine = makeRoutine();
+    world.clock.start();
+    paused = false;
+    paintDeck();
+    return;
+  }
   if (mode === 'collect') {
     if (auto && auto.phase !== 'done') { auto = null; }
     else {
@@ -723,9 +903,18 @@ function setAutoLoad(on: boolean): void {
 }
 
 /**
- * Practice aid: keep the hopper topped up from balls lying on the floor, so aiming can be
- * worked on without driving a collection lap first. Not a game rule — it takes real balls
- * off the real field, and the field runs out.
+ * Practice aid: keep the hopper topped up, so aiming can be worked on without driving a
+ * collection lap first. Not a game rule.
+ *
+ * IT MUST NOT RUN DRY, which it did. It only ever took POLLEN lying loose on the tiles, and
+ * the field holds forty: once they were in the CELL, in a FLOWER, or benched, there was
+ * nothing left to pick up. The robot fired for ten or fifteen seconds and then sat there
+ * with an empty hopper, which reads exactly like the feed breaking.
+ *
+ * So it falls back, in order: a POLLEN on the floor (nearest first, which is what a real
+ * intake would get), then any POLLEN out of play at all -- benched, or sitting in a CELL
+ * that has already been counted. This is a cheat either way; a cheat that stops working
+ * after fifteen seconds is just a bug wearing a disclaimer.
  */
 function topUpHopper(): void {
   const r = world.robot;
@@ -733,14 +922,23 @@ function topUpHopper(): void {
   const p = r.pos;
   let best: (typeof world.balls.balls)[number] | null = null;
   let bestD = Infinity;
+  let spare: (typeof world.balls.balls)[number] | null = null;
   for (const b of world.balls.balls) {
-    if (b.kind !== 'pollen' || b.state !== 'free') continue;
-    const q = world.balls.pos(b);
-    if (q[1] > inches(8)) continue; // only what is lying on the floor
-    const d = Math.hypot(q[0] - p[0], q[2] - p[2]);
-    if (d < bestD) { bestD = d; best = b; }
+    if (b.kind !== 'pollen') continue;
+    if (b.state === 'hopper' || b.state === 'intake' || b.state === 'flight') continue;
+    if (b.state === 'free' && b.body.isEnabled()) {
+      const q = world.balls.pos(b);
+      if (q[1] <= inches(8)) {            // lying on the tiles, where an intake could reach it
+        const d = Math.hypot(q[0] - p[0], q[2] - p[2]);
+        if (d < bestD) { bestD = d; best = b; }
+        continue;
+      }
+    }
+    // Out of play: benched by park(), or resting in a CELL. Recyclable rather than lost.
+    if (!spare) spare = b;
   }
-  if (best) world.robot.preload(world.balls, best);
+  const take = best ?? spare;
+  if (take) world.robot.preload(world.balls, take);
 }
 
 function paintBrain(): void {
@@ -762,17 +960,12 @@ function togglePause(): void {
 /** Hand-drop a POLLEN into the up CELL: the quickest way to watch a tip happen. */
 function dropBall(): void {
   const hive = world.hives[alliance];
-  const free = world.balls.balls.find((b) => b.state === 'free' && b.kind === 'pollen' && world.balls.pos(b)[1] < inches(6));
+  const free = world.balls.balls.find((b) => b.state === 'free' && b.kind === 'pollen' && b.body.isEnabled() && world.balls.pos(b)[1] < inches(6));
   if (!free) return;
   const cell = hive.upCell;
-  const phi = cell.bodyAngle_rad;
   const u = -cell.halfInterior[1] + free.radius + 0.02;
   const t = cell.halfInterior[2] - free.radius - 0.02 - Math.random() * 0.06;
-  const local: Vec3 = [
-    (Math.random() - 0.5) * inches(14),
-    (cell.radius_m + u) * Math.cos(phi) - t * Math.sin(phi),
-    (cell.radius_m + u) * Math.sin(phi) + t * Math.cos(phi),
-  ];
+  const local: Vec3 = fromCellLocal(cell, (Math.random() - 0.5) * inches(14), u, t);
   world.balls.release(free, hive.toWorld(local), [0, 0, 0], [0, 0, 0], 'cell');
 }
 

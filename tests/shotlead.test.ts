@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { leadShot } from '../packages/core/src/robot/builtinTeleOp.js';
+import { leadShot, muzzleVelocity } from '../packages/core/src/robot/builtinTeleOp.js';
 import { DEG } from '../packages/core/src/units.js';
 
 type Lead = { azimuthDeg: number; speed: number; elevationDeg: number };
@@ -115,5 +115,82 @@ describe('shooting on the move', () => {
       const actual = resulting(r, Math.cos(fieldBearing) * v, Math.sin(fieldBearing) * v, heading);
       expect(actual.bearingDeg).toBeCloseTo(heading + bearing, 4);
     }
+  });
+});
+
+/**
+ * THE INVARIANT THE TWO HALVES EXIST TO HOLD. Robot.launch() gives the ball
+ * v_exit*dir + v_cg + omega x r; muzzleVelocity() + leadShot() subtract the same
+ * v_cg + omega x r before solving. So the ball's GROUND-frame launch vector is the one a
+ * standing robot would have given it, whatever the chassis and the turret are doing.
+ *
+ * It is a round trip on purpose. Each half is separately plausible and wrong: leading on the
+ * chassis velocity while the flight also uses the chassis velocity is self-consistent and
+ * models a robot that does not exist, and fixing either half alone puts 4.7 in of lateral
+ * error at 60 in straight into the shot. If someone moves the turret axis off the tracked
+ * point in Robot.muzzle() and not here, this test is what fails.
+ */
+describe('the muzzle velocity, not the chassis velocity', () => {
+  const OFFSET = 0.12;
+
+  it('is the chassis velocity when nothing is rotating', () => {
+    const mv = muzzleVelocity(1.5, -0.5, 0, 37, 21, OFFSET);
+    expect(mv.vx).toBeCloseTo(1.5, 12);
+    expect(mv.vy).toBeCloseTo(-0.5, 12);
+  });
+
+  it('swings with omega x r, and the lever arm turns with the TURRET', () => {
+    const w = 90; // deg/s CCW
+    const rate = (w * Math.PI) / 180;
+    // heading 0, turret 0: r is +x, so omega x r is +y
+    const a = muzzleVelocity(0, 0, w, 0, 0, OFFSET);
+    expect(a.vx).toBeCloseTo(0, 12);
+    expect(a.vy).toBeCloseTo(rate * OFFSET, 12);
+    // same chassis, turret swung 90 deg: r is +y, so omega x r is -x
+    const b = muzzleVelocity(0, 0, w, 0, 90, OFFSET);
+    expect(b.vx).toBeCloseTo(-rate * OFFSET, 12);
+    expect(b.vy).toBeCloseTo(0, 12);
+    // a muzzle BEHIND the axis swings the other way
+    const back = muzzleVelocity(0, 0, w, 0, 0, -0.043);
+    expect(back.vy).toBeCloseTo(-rate * 0.043, 12);
+  });
+
+  it('leaves the ball with the table launch vector while the robot yaws', () => {
+    const elev = 45;
+    const speed = 10;
+    const heading = 30;
+    const bearing = 20;
+    const wantHoriz = speed * Math.cos(elev * DEG);
+    const wantVert = speed * Math.sin(elev * DEG);
+
+    for (const omega of [-134, -90, -30, 0, 30, 90, 134]) {
+      for (const [vx, vy] of [[0, 0], [1.2, 0], [0, -0.8], [0.9, 1.1]] as const) {
+        // What the aim believes the muzzle is doing...
+        const mv = muzzleVelocity(vx, vy, omega, heading, bearing, OFFSET);
+        const led = leadShot(bearing, speed, elev, mv.vx, mv.vy, heading, [0, 90]);
+        // ...and what Robot.launch() then adds to the ball: the SAME vector.
+        const got = resulting(led, mv.vx, mv.vy, heading);
+        expect(got.bearingDeg).toBeCloseTo(heading + bearing, 4);
+        expect(got.horiz).toBeCloseTo(wantHoriz, 4);
+        expect(got.vert).toBeCloseTo(wantVert, 4);
+      }
+    }
+  });
+
+  it('a yaw the aim ignores is a real miss: the term is worth inches, not rounding', () => {
+    // The regression guard. Aiming on the chassis velocity while the ball leaves with the
+    // muzzle's is the pre-fix behaviour; price it at the doc's own case.
+    const elev = 45;
+    const speed = 10;
+    const heading = 0;
+    const bearing = 0;
+    const omega = 90;
+    const mv = muzzleVelocity(0, 0, omega, heading, bearing, OFFSET);
+    const naive = leadShot(bearing, speed, elev, 0, 0, heading, [0, 90]); // ignores it
+    const off = resulting(naive, mv.vx, mv.vy, heading);
+    const driftDeg = Math.abs(off.bearingDeg - (heading + bearing));
+    expect(driftDeg).toBeGreaterThan(1.0);
+    // 60 in of range, in inches across the mouth: the mouth gives 0.5 in of clearance a lip.
+    expect(60 * Math.tan(driftDeg * DEG)).toBeGreaterThan(1.5);
   });
 });

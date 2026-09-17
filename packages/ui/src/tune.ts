@@ -36,7 +36,11 @@ export const TUNABLES: Tunable[] = [
     get: (_p, r) => r.flywheel.k, set: (_p, r, v) => (r.flywheel.k = v) },
   { group: 'Shooter', label: 'Flywheel inertia (kg·m²)', fmt: (v) => v.toExponential(2),
     hint: 'Sets how far the wheel dips when a ball goes through, and so how fast you can cycle.',
-    min: 0.0005, max: 0.01, step: 0.0001,
+    // The range has to CONTAIN the configured value, or the slider renders pinned at its end
+    // showing a number the physics is not using -- and the first drag silently rewrites the
+    // constant to the nearest thing the slider can say. This one read 0.0005 against a config
+    // of 0.000391, so touching it moved the wheel's inertia by 28%. tests/ui.test.ts locks it.
+    min: 0.0001, max: 0.01, step: 0.00001,
     get: (_p, r) => r.flywheel.I_fly_kgm2, set: (_p, r, v) => (r.flywheel.I_fly_kgm2 = v) },
   { group: 'Shooter', label: 'Flywheel radius (mm)', fmt: f0,
     hint: 'Rim radius. Exit speed is linear in it.',
@@ -149,8 +153,11 @@ export const TUNABLES: Tunable[] = [
     min: 0.2, max: 3.0, step: 0.05,
     get: (_p, r) => r.transfer.cycleTime_s, set: (_p, r, v) => (r.transfer.cycleTime_s = v) },
   { group: 'Cycle', label: 'Hopper capacity', fmt: f0, rebuild: true,
-    hint: 'How many game elements the robot can hold. Rules cap this; check the manual.',
-    min: 1, max: 12, step: 1,
+    // Capped at the RULE, not at what a bin could physically hold. It used to go to 12 under
+    // a hint that said "rules cap this; check the manual", which is a constraint written as a
+    // suggestion -- and the config it shipped with (6) was already illegal.
+    hint: 'How many SCORING ELEMENTS the robot may control at once. G407 caps this at 4.',
+    min: 1, max: 4, step: 1,
     get: (_p, r) => r.hopper.capacity, set: (_p, r, v) => (r.hopper.capacity = Math.round(v)) },
 ];
 

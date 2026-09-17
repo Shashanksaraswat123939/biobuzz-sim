@@ -24,7 +24,7 @@
  */
 import { writeFileSync } from 'node:fs';
 import { World, initPhysics } from '../packages/core/src/physics/world.js';
-import { M_TO_IN, DEG, inches } from '../packages/core/src/units.js';
+import { DEG, inches } from '../packages/core/src/units.js';
 import params from '../config/params.json' with { type: 'json' };
 import robotJson from '../config/robot.json' with { type: 'json' };
 import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';

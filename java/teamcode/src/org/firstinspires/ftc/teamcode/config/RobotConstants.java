@@ -16,8 +16,9 @@ public final class RobotConstants {
     public static final String HW_BR = "motor3";
     public static final String HW_INTAKE = "motor4";
     public static final String HW_TRANSFER = "motor5";
-    public static final String HW_FLYWHEEL = "motor6";
-    public static final String HW_TURRET = "motor7";
+    public static final String HW_FLYWHEELA = "motor6";
+    public static final String HW_FLYWHEELB = "motor7";
+    public static final String HW_TURRET = "servo2";
     public static final String HW_HOOD = "servo0";
     public static final String HW_GATE = "servo1";
     public static final String HW_IMU = "imu";
@@ -37,15 +38,17 @@ public final class RobotConstants {
     public static final boolean GATE_ENABLED = true;
     public static final double GATE_OPEN = 1;
     public static final double GATE_CLOSED = 0;
-    public static final int HOPPER_CAPACITY = 6;
+    public static final int HOPPER_CAPACITY = 4;
 
-    public static final double TURRET_MIN_DEG = -120;
-    public static final double TURRET_MAX_DEG = 120;
+    public static final double TURRET_MIN_DEG = -175;
+    public static final double TURRET_MAX_DEG = 175;
     public static final double TURRET_SPEED_DPS = 180;
     public static final double TURRET_TICKS_PER_DEG = 8;
+    /** Muzzle distance from the turret axis along the shot line, m. The lever arm of omega x r in ShotLead.muzzleVelocity(). */
+    public static final double MUZZLE_OFFSET_M = 0.12;
 
-    public static final double HOOD_MIN_DEG = 30;
-    public static final double HOOD_MAX_DEG = 85;
+    public static final double HOOD_MIN_DEG = 40;
+    public static final double HOOD_MAX_DEG = 80;
     public static final double HOOD_TOL_DEG = 2;
     public static final double VEL_FILTER_ALPHA = 0.25;
 

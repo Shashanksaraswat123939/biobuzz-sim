@@ -168,10 +168,52 @@ export function leadShot(
   };
 }
 
+/**
+ * Velocity of the ball's EXIT POINT in the FTC field frame, m/s: v_cg + omega x r.
+ *
+ * leadShot() subtracts the velocity the ball inherits from the robot. The velocity it
+ * inherits is the MUZZLE's, and on a yawing robot that is not the chassis's: the muzzle sits
+ * muzzleOffset_m out along the shot line from the turret axis, so it swings at omega*r of its
+ * own. At the 0.12 m of this robot and 90 deg/s that is 0.19 m/s, which puts a 60 in shot 4.7 in
+ * sideways -- wider than the clearance to the lip. Reading the chassis velocity alone made the
+ * error invisible to the aim AND (Robot.launch) absent from the flight, so the two agreed with
+ * each other and neither agreed with a real robot.
+ *
+ * THE TURRET'S ACTUAL ANGLE, not its target: the muzzle is where the turret IS. The axis is
+ * acceleration limited and a big swing takes most of a second, so on the commanded angle r
+ * points somewhere the hardware has not reached.
+ *
+ * The turret axis is taken to sit over the tracked point, which is what Robot.muzzle() builds
+ * (its pivot is [0, h, 0] in the body frame). Move the axis off the origin there and this has
+ * to gain the same offset in the same commit, or the aim compensates a term the flight does
+ * not have -- which is the bug this function exists to fix, with the sign flipped.
+ */
+export function muzzleVelocity(
+  vxField: number,
+  vyField: number,
+  /** Yaw rate, deg/s, CCW positive -- the localizer's, noise and all. */
+  omegaDps: number,
+  headingDeg: number,
+  turretActualDeg: number,
+  /** Signed along the shot line: + ahead of the turret axis, - behind it. */
+  muzzleOffset_m: number,
+): { vx: number; vy: number } {
+  const w = omegaDps * DEG;
+  const shot = (headingDeg + turretActualDeg) * DEG;
+  const rx = muzzleOffset_m * Math.cos(shot);
+  const ry = muzzleOffset_m * Math.sin(shot);
+  return { vx: vxField - w * ry, vy: vyField + w * rx };
+}
+
 export interface TeleOpState {
   autoAim: boolean;
   /** Fire is a latch, not a trigger you hold: the cycle time paces it, not your thumb. */
   firing: boolean;
+  /**
+   * Heading the field frame is measured from, degrees. Field-centric drive rotates the stick
+   * by (yaw - this), so tapping the re-zero makes 'up' mean whichever way the robot faces now.
+   */
+  headingZero: number;
   /** Manual turret command when auto-aim is off. */
   turretManualDeg: number;
   /**
@@ -197,6 +239,11 @@ export interface TeleOpState {
   turretErrDeg: number;
   /** Hood angle minus the angle this shot needs, degrees. The lead moves it every loop. */
   hoodErrDeg: number;
+  /**
+   * How much of this shot's speed band the robot's own acceleration will eat before the
+   * ball leaves, as a fraction. Above 1 the shot is refused.
+   */
+  accelBudget: number;
   /** How far the motion lead moved the aim, degrees. */
   leadDeg: number;
   /** The bearing the lead ASKED for, before the turret's travel clamped it. */
@@ -216,7 +263,7 @@ export const newTeleOpState = (): TeleOpState => ({
   turretManualDeg: 0, flywheelOn: false,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
-  lastFeedT: -999, pulsing: false, vRadial: 0,
+  lastFeedT: -999, pulsing: false, vRadial: 0, headingZero: 0, accelBudget: 0,
 });
 
 const edge = (now: boolean, was: boolean) => now && !was;
@@ -278,22 +325,36 @@ export class BuiltinTeleOp {
     if (p) {
       if (edge(g.a, p.a)) st.flywheelOn = !st.flywheelOn;
       if (edge(g.x, p.x)) st.autoAim = !st.autoAim;
+      // RE-ZERO THE FIELD FRAME. Field-centric is only as good as the heading it rotates by,
+      // and a real IMU drifts; every driver wants a "forward is where I am pointing now"
+      // button. Square the robot up to the field and tap it.
+      if (edge(g.back, p.back)) st.headingZero = s.imu.yaw;
       if (edge(g.right_bumper, p.right_bumper)) st.firing = !st.firing;
     }
     this.prev = { ...g };
 
     // ---- drive
-    // Robot-centric, full stop. Pushing the stick forward drives the robot forward, which
-    // is what everyone expects the first time they pick it up, and it is what the turret
-    // makes possible: the chassis never has to face the goal, so there is nothing a
-    // field-centric mode would buy.
+    // FIELD-CENTRIC by default: the stick points at the FIELD, not at the robot's nose.
+    //
+    // This was robot-centric, on the argument that the turret means the chassis never has to
+    // face the goal so field-centric buys nothing. That is true of the SHOT and false of the
+    // driver. With a turret the chassis spends the match pointing wherever it was last going,
+    // so "forward" on the stick is a direction the driver has to keep track of and cannot
+    // see -- push up, robot goes sideways, correct, over-correct. It is the single thing that
+    // makes this hard to drive, and it has nothing to do with speed.
+    //
+    // Field-centric rotates the stick into the field frame by the heading the robot reports,
+    // so up on the stick is away from the driver station whatever the robot is doing. Hold
+    // the right bumper for robot-centric if you want the old behaviour (or the IMU drifts).
     const slow = g.left_bumper ? 0.35 : 1;
-    const fwdF = -g.left_stick_y * slow;
-    const leftF = -g.left_stick_x * slow;
+    const sx = -g.left_stick_y * slow;   // stick up
+    const sy = -g.left_stick_x * slow;   // stick left
     const om = -g.right_stick_x * slow;
 
-    const vx = fwdF; // robot forward
-    const vy = leftF; // robot left
+    const robotCentric = g.y;   // hold Y: robot-centric, for when the IMU has drifted
+    const h = (s.imu.yaw - st.headingZero) * DEG;
+    const vx = robotCentric ? sx : sx * Math.cos(h) + sy * Math.sin(h);   // robot forward
+    const vy = robotCentric ? sy : -sx * Math.sin(h) + sy * Math.cos(h);  // robot left
 
     // The wire carries what the motor is actually told, so a reversed motor is negated
     // here exactly as the Java does with setDirection(REVERSE). The world then applies the
@@ -383,7 +444,17 @@ export class BuiltinTeleOp {
       }
       this.lastVel = { x: velX, y: velY, t: s.t };
     }
-    const lead = leadShot(s.game.upCellAzimuthDeg, tableSpeed, hoodDeg, leadVx, leadVy, s.imu.yaw, this.spec.hood.angleRange_deg);
+    // Where the turret ACTUALLY is, from its encoder -- not where it was told to go. The
+    // axis is acceleration limited, so a 137 deg swing takes most of a second, and firing
+    // on the commanded angle means firing at nothing.
+    const turretActualDeg = s.motors.turret ? s.motors.turret.pos / ticksPerDeg : 0;
+    // THE BALL INHERITS THE MUZZLE'S VELOCITY, NOT THE CHASSIS'S. omega x r, added to both
+    // consumers of the velocity below: the lead that cancels it and the radial axis of the
+    // hood table. Robot.launch() applies the matching term to the flight.
+    const mv = muzzleVelocity(leadVx, leadVy, s.localizer.omega, s.imu.yaw, turretActualDeg, this.spec.turret.muzzleOffset_m);
+    const muzzleDvx = mv.vx - leadVx;
+    const muzzleDvy = mv.vy - leadVy;
+    const lead = leadShot(s.game.upCellAzimuthDeg, tableSpeed, hoodDeg, mv.vx, mv.vy, s.imu.yaw, this.spec.hood.angleRange_deg);
 
     // ---- FIXED-SPEED PATH: the wheel holds one speed and the hood aims.
     //
@@ -391,17 +462,13 @@ export class BuiltinTeleOp {
     // second axis rather than something to cancel. Positive is closing. Lateral motion barely
     // moves the answer, which is why this is the only component that has to be known.
     const bearingField = (s.imu.yaw + s.game.upCellAzimuthDeg) * DEG;
-    const vRadial = velX * Math.cos(bearingField) + velY * Math.sin(bearingField);
+    const vRadial = (velX + muzzleDvx) * Math.cos(bearingField) + (velY + muzzleDvy) * Math.sin(bearingField);
     st.vRadial = vRadial;
     this.hoodCell = this.hoodTable && !this.hoodTable.isEmpty
       ? this.hoodTable.lookup(s.game.upCellRangeIn - cal.rangeTrim_in, vRadial)
       : null;
     st.leadDeg = wrapPi((lead.azimuthDeg - s.game.upCellAzimuthDeg) * DEG) * RAD;
     st.leadAzDeg = lead.azimuthDeg;
-    // Where the turret ACTUALLY is, from its encoder -- not where it was told to go. The
-    // axis is acceleration limited, so a 137 deg swing takes most of a second, and firing
-    // on the commanded angle means firing at nothing.
-    const turretActualDeg = s.motors.turret ? s.motors.turret.pos / ticksPerDeg : 0;
     let turretDeg: number;
     if (st.autoAim) {
       // Lead-corrected bearing to the up CELL, relative to the robot's heading.
@@ -580,13 +647,49 @@ export class BuiltinTeleOp {
       : Math.abs(st.hoodErrDeg) <= (this.spec.hood.tolDeg ?? 2);
     const haveShot = !usingHood || !!cell;
     const probOk = usingHood ? st.pLand >= minP : !haveModel || st.pLand >= minP;
+    // IS THE MOUTH STILL OPEN TOWARDS US? A TIP swaps which CELL is up and the new one opens
+    // the other way, so a robot that was square onto the goal is suddenly behind it. Nothing
+    // checked this: the stopped control case tipped the hive at t=20 s and then spent 70 s
+    // firing 40 more balls into the back of the pocket, all counted as misses, which is most
+    // of why it read 0.12 landed per second against tools/landcal.ts's 85%.
+    //
+    // 75 deg rather than 90: at 90 the mouth is exactly edge-on and its opening has no area
+    // at all, so the last few degrees are shots that cannot geometrically enter.
+    const mouthOpen = s.game.upCellOpenDeg <= 75;
+
+    // ACCELERATING OUT OF THE BAND BEFORE THE BALL LEAVES.
+    //
+    // The lead cancels the velocity the robot HAS. The feed commits about `leadLatency_s`
+    // before the ball is actually gone, and in that time an accelerating robot grows a
+    // velocity the shot was never solved for. Velocity itself is free -- a steady 1.5 m/s
+    // holds the required exit speed perfectly still -- so this is an ACCELERATION budget,
+    // and docs/DECISIONS.md names the wobble case as the one that spends it: it fires more
+    // than any other case, with the LOWEST rpm error at release, and lands least. The wheel
+    // really is on its target; the target is wrong by the time the ball goes.
+    //
+    // THE BUDGET COMES FROM THE TABLE, not from a tuned constant. speedLo..speedHi is the
+    // exit-speed band that threads the mouth at this range, so half its width is the speed
+    // error this particular shot tolerates -- six times wider at 30 in than at 130. A change
+    // dv in radial velocity moves the required exit speed by about cos(elevation)*dv, so the
+    // shot is refused when what the robot will have grown by release is worth more than the
+    // band can absorb. Nothing here needs re-tuning when the shooter changes.
+    const tauFeed = this.spec.transfer.leadLatency_s ?? 0;
+    const aRad = Math.hypot(this.accel.x, this.accel.y);
+    const dSpeedByRelease = Math.abs(Math.cos(lead.elevationDeg * DEG)) * aRad * tauFeed;
+    const halfBand = row.speedLo !== undefined && row.speedHi !== undefined
+      ? (row.speedHi - row.speedLo) / 2
+      : Infinity;
+    const accelOk = dSpeedByRelease <= halfBand;
+    st.accelBudget = Number.isFinite(halfBand) && halfBand > 0 ? dSpeedByRelease / halfBand : 0;
     const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
     st.readyCount = atSpeed ? st.readyCount + 1 : 0;
     st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretErrDeg) < 3
-      && st.turretPastStopDeg < 0.5 && !s.game.hiveTipping;
+      && st.turretPastStopDeg < 0.5 && !s.game.hiveTipping && mouthOpen && accelOk;
 
     st.hold = !wheelOn ? ''
       : s.game.hiveTipping ? 'hive is tipping'
+      : !mouthOpen ? `mouth faces away, ${s.game.upCellOpenDeg.toFixed(0)} deg off its opening - DRIVE ROUND`
+      : !accelOk ? `accelerating out of the band: ${(st.accelBudget * 100).toFixed(0)}% of it before the ball leaves`
       : st.turretPastStopDeg >= 0.5 ? `turret cannot reach, ${st.turretPastStopDeg.toFixed(0)} deg past its stop`
       : Math.abs(st.turretErrDeg) >= 3 ? `turret ${st.turretErrDeg.toFixed(0)} deg off`
       // No cell is a real answer, not a failure: there is no hood angle that scores from here

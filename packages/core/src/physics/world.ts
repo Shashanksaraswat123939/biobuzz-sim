@@ -66,7 +66,6 @@ export class World {
   private leftStart: Record<Alliance, boolean> = { red: false, blue: false };
   private nectarEntitlement: Record<Alliance, number> = { red: 0, blue: 0 };
   private finalised = false;
-  private flowerBodies: RAPIER.RigidBody;
 
   constructor(opts: WorldOptions) {
     this.params = opts.params;
@@ -81,7 +80,6 @@ export class World {
     this.physics.numSolverIterations = opts.params.sim.solverIterations;
 
     const statics = this.physics.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-    this.flowerBodies = statics;
     this.buildStatics(statics);
 
     this.balls = new BallSet(RAPIER, this.physics, opts.params, this.rng.fork(11), opts.staging);
@@ -90,6 +88,8 @@ export class World {
       red: new Hive(RAPIER, this.physics, opts.params, this.geom, 'red', statics),
       blue: new Hive(RAPIER, this.physics, opts.params, this.geom, 'blue', statics),
     };
+    // After the hives exist: staging asks each one where its up CELL is.
+    this.stageCells();
 
     const start = opts.start ?? this.defaultStart(opts.alliance, opts.robot);
     this.robot = new Robot(RAPIER, this.physics, opts.params, opts.robot, this.rng.fork(23), {
@@ -101,6 +101,10 @@ export class World {
   }
 
   private readonly preload: number;
+  /** Balls credited by a TIP emptying our own up CELL, per alliance. See landedInUpCell(). */
+  private dumpedAtTips: Record<Alliance, number> = { red: 0, blue: 0 };
+  private tipsSeen: Record<Alliance, number> = { red: 0, blue: 0 };
+  private inUpCellPrev: Record<Alliance, number> = { red: 0, blue: 0 };
 
   /**
    * The STEP stages 16 POLLEN and 10 NECTAR OUTSIDE the glass -- those are the human
@@ -115,11 +119,23 @@ export class World {
    * Two groups. Balls beyond the glass are the alliance's supply in the human-player area,
    * and they sit on the floor of the venue rather than on the field.
    *
-   * The other group is the six NECTAR the STEP stages INSIDE the two CELLs. That is the
-   * CAD's display state, not a match start: leaving them there began every match with the
-   * HIVE 57% of the way to tipping, and they rendered as balls floating under the CAD skin
-   * because the reconstructed pocket and the CAD skin do not agree to better than a few
-   * inches. A match starts with empty CELLs.
+   * The other group is the six NECTAR the STEP stages INSIDE the two CELLs. Those are cleared
+   * here and then RE-STAGED properly by stageCells(), because the CAD's display state is not
+   * a match start -- it fills both CELLs of both hives, and the manual fills only the
+   * upward-facing one of each.
+   *
+   * This used to clear them and stop there, on the grounds that "a match starts with empty
+   * CELLs". It does not: manual 10.3.1 B.i stages "3 NECTAR in each upward-facing CELL of
+   * corresponding color", and Fig 10-2 shows them. The second reason given -- that staged
+   * balls rendered floating under the CAD skin -- was a symptom of the pocket being 11 deg
+   * out (PHYSICS 9.3); the reconstructed pocket now matches the manual's lip heights to
+   * better than half an inch, so they sit where they should.
+   *
+   * It matters more than any other game-model error here, because the FIRST TIP is the one
+   * both alliances race for and this changes its price: three NECTAR at a 10 in lever arm are
+   * roughly half way over, so a real first tip costs 5-7 POLLEN and an empty-CELL simulator
+   * charges 12. Every autonomous plan timed in this simulator was wrong in the same
+   * direction.
    */
   private parkOffField(): void {
     const hw = this.geom.halfWidth_m;
@@ -134,12 +150,74 @@ export class World {
     }
   }
 
+  /**
+   * Manual 10.3.1 B.i: "3 NECTAR in each upward-facing CELL of corresponding color", placed
+   * against the back wall. Fig 10-2 shows them.
+   *
+   * Called after parkOffField(), which has just cleared the CAD's own display staging (it
+   * fills all four CELLs; the manual fills two). Doing it explicitly rather than trusting the
+   * CAD keeps the start deterministic and the count right.
+   */
+  private stageCells(): void {
+    for (const alliance of ['red', 'blue'] as const) {
+      const hive = this.hives[alliance];
+      const kind: BallKind = alliance === 'red' ? 'nectarRed' : 'nectarBlue';
+      this.balls.balls
+        .filter((b) => b.kind === kind)
+        .slice(0, 3)
+        .forEach((b, i) => this.balls.release(b, hive.upCellStagePos(i, b.radius), [0, 0, 0], [0, 0, 0], 'cell'));
+    }
+  }
+
+  /**
+   * Sampled every step so a TIP is caught at the instant it happens: once the rocker goes
+   * over, its CELL is empty and the balls it dumped are gone from any later count.
+   */
+  private censusUpCells(): void {
+    for (const a of ['red', 'blue'] as const) {
+      if (this.hives[a].tips > this.tipsSeen[a]) {
+        this.dumpedAtTips[a] += this.inUpCellPrev[a];
+        this.tipsSeen[a] = this.hives[a].tips;
+      }
+      this.inUpCellPrev[a] = this.balls.balls.filter((b) => this.inOwnUpCell(a, b)).length;
+    }
+  }
+
+  /** Is this ball inside the alliance's OWN upward-facing CELL right now? */
+  private inOwnUpCell(alliance: Alliance, b: { radius: number; id: number }): boolean {
+    const h = this.hives[alliance];
+    const local = h.toBody(this.balls.pos(this.balls.balls[b.id]));
+    return pointInCell(h.upCell, local, (b as { radius: number }).radius);
+  }
+
+  /**
+   * ONE LAND-RATE CENSUS, which every tool reads instead of rolling its own (PHYSICS 9.15).
+   *
+   * What scores is what is sitting in our own up CELL when it matters: at the buzzer, plus
+   * whatever was in there at the instant of each TIP, because a tip is the CELL doing its job
+   * and emptying itself. A ball that only visits is counted by neither.
+   *
+   * The two homegrown versions this replaces were wrong in opposite directions and their
+   * disagreement is how the problem was found -- tools/gatecal.ts read 1.0% where
+   * tools/landcal.ts had just measured 66% on the same robot and table:
+   *
+   *   `hives.red.ballsInUpCell` counts one CELL of one rocker, and the rocker ROCKS. A
+   *   rotation short of a scored tip carries balls into the down CELL, where it reads zero,
+   *   so a run could score all afternoon and report nothing.
+   *
+   *   The shot log's `result === 'cell'` tested every cell of both hives, so it counted the
+   *   down CELL and the opponent's hive.
+   */
+  landedInUpCell(alliance: Alliance): number {
+    return this.dumpedAtTips[alliance] + this.balls.balls.filter((b) => this.inOwnUpCell(alliance, b)).length;
+  }
+
   /** Take the POLLEN nearest the robot off the field and into its hopper. */
   private loadPreload(): void {
     if (this.preload <= 0) return;
     const p = this.robot.pos;
     const free = this.balls.balls
-      .filter((b) => b.kind === 'pollen' && b.state === 'free')
+      .filter((b) => b.kind === 'pollen' && b.state === 'free' && b.body.isEnabled())
       .map((b) => ({ b, d: Math.hypot(...(this.balls.pos(b).map((v, i) => v - p[i]) as Vec3)) }))
       .sort((a, c) => a.d - c.d);
     for (let i = 0; i < this.preload && i < free.length; i++) this.robot.preload(this.balls, free[i].b);
@@ -246,13 +324,14 @@ export class World {
     this.t += dt;
 
     for (const a of ['red', 'blue'] as const) {
-      if (this.hives[a].takeTip(this.t)) {
+      if (this.hives[a].takeTip()) {
         this.scorer.tip(a, this.clock.period, this.t);
         this.nectarEntitlement[a]++;
       }
     }
     this.recordShot();
     this.trackBallStates();
+    this.censusUpCells();
     this.retireOutOfBounds();
     this.settleShots();
     this.trackLeave();
@@ -265,6 +344,7 @@ export class World {
   private trackBallStates(): void {
     for (const b of this.balls.balls) {
       if (b.state === 'hopper' || b.state === 'intake') continue;
+      if (!b.body.isEnabled()) continue;   // parked: out of play, and not in any volume
       const p = this.balls.pos(b);
       let state: Ball['state'] = 'free';
       for (const a of ['red', 'blue'] as const) {
@@ -400,7 +480,11 @@ export class World {
         rec.long_in = (ex * ux + ez * uz) * M_TO_IN;
         rec.lat_in = (ex * uz - ez * ux) * M_TO_IN;
       }
-      rec.result = b.state === 'cell' ? 'cell' : 'miss';
+      // OUR OWN UP CELL, not `b.state === 'cell'`. That flag is set by trackBallStates over
+      // EVERY cell of BOTH hives, so it credited a ball that fell into the DOWN cell and a
+      // ball that landed in the OPPONENT's hive. It is the right answer to "is this ball in a
+      // pocket" and the wrong one to "did this shot score" (PHYSICS 9.15).
+      rec.result = this.inOwnUpCell(this.alliance, b) ? 'cell' : 'miss';
       this.pendingShots.splice(i, 1);
     }
   }
@@ -441,8 +525,11 @@ export class World {
     const up = h.upCell.id;
     const upCell = h.ballsInCells[up].length;
 
-    const flowers = this.geom.flowers.map(() => ({ elements: 0, redNectar: 0, blueNectar: 0 }));
+    const flowers = this.geom.flowers.map(() => ({ elements: 0, redNectar: 0, blueNectar: 0, topNectar: null as Alliance | null }));
     const bottoms: { flower: number; alliance: Alliance | null; y: number }[] = this.geom.flowers.map((_, i) => ({ flower: i, alliance: null, y: Infinity }));
+    // OWNERSHIP IS THE TOP-MOST NECTAR, NOT THE COUNT (manual 10.5.2). Same sweep as the
+    // bottom-most one below it, opposite comparison.
+    const tops: { alliance: Alliance | null; y: number }[] = this.geom.flowers.map(() => ({ alliance: null, y: -Infinity }));
     let garden = 0;
 
     for (const b of this.balls.balls) {
@@ -457,12 +544,18 @@ export class World {
           bottoms[i].y = p[1];
           bottoms[i].alliance = na;
         }
+        if (na && p[1] > tops[i].y) {
+          tops[i].y = p[1];
+          tops[i].alliance = na;
+        }
       });
       for (const z of this.geom.zones) {
         if (z.name !== 'GARDEN' || z.alliance !== alliance) continue;
         if (p[0] > z.min[0] && p[0] < z.max[0] && p[2] > z.min[2] && p[2] < z.max[2] && p[1] < z.max[1]) garden++;
       }
     }
+
+    flowers.forEach((f, i) => { f.topNectar = tops[i].alliance; });
 
     return {
       upCell,
@@ -509,6 +602,24 @@ export class World {
    *
    * Drawn from the world's own seeded RNG so a seed still reproduces a run exactly.
    */
+  /**
+   * Angle between the up CELL's outward mouth normal and the direction from the mouth to the
+   * robot, in the horizontal plane. 0 is square onto the opening; past 90 the robot is behind
+   * the mouth plane and no launch can enter.
+   */
+  private upCellOpenAngleDeg(): number {
+    const hive = this.hives[this.alliance];
+    const m = hive.upCellMouthWorld();
+    const n = hive.upCellMouthNormalWorld();
+    const p = this.robot.pos;
+    const dx = p[0] - m[0];
+    const dz = p[2] - m[2];
+    const dn = Math.hypot(dx, dz) || 1;
+    const nn = Math.hypot(n[0], n[2]) || 1;
+    const cos = (dx * n[0] + dz * n[2]) / (dn * nn);
+    return Math.acos(Math.max(-1, Math.min(1, cos))) * RAD;
+  }
+
   private localizerReading(ftcP: Vec3, ftcV: Vec3, yawDeg: number, yawRate: number): SensorFrame['localizer'] {
     const n = this.robot.spec.sensors.localizer.noise;
     const g = (sigma: number) => (sigma > 0 ? this.rng.gauss(0, sigma) : 0);
@@ -566,6 +677,17 @@ export class World {
         upCellAzimuthDeg: wrapPi((bearing - yawDeg) * DEG) * RAD,
         upCellRangeIn: Math.hypot(dx, dz) * M_TO_IN,
         hiveTipping: this.hives[this.alliance].tipping,
+        // IS THE MOUTH OPEN TOWARDS ME? 0 deg is square onto the opening, 90 is edge-on to
+        // the mouth plane, 180 is behind the goal looking at the back of the pocket.
+        //
+        // A TIP SWAPS WHICH FACE IS UP, and the new up CELL opens the other way: measured
+        // here, the mouth jumps from Z +15.7 in to -16.1 in the instant the rocker goes over.
+        // Nothing in the robot knew that. It stood where it was, kept reporting "clear to
+        // fire", and put 40 more balls into the back of the goal -- which is most of why the
+        // stopped control case read 0.12 landed per second while tools/landcal.ts, which
+        // stops before a tip, measured 85%. On a real robot this is the AprilTag going out
+        // of view; here it is ground truth, like the bearing and the range (PHYSICS 9.10).
+        upCellOpenDeg: this.upCellOpenAngleDeg(),
         // Bin plus magazine: a ball waiting at the nip is still a ball you can fire.
         hopper: r.heldBalls().length,
         flywheelRpm: r.reportedFlywheelRpm,
@@ -630,10 +752,17 @@ export class World {
     this.pendingShots.length = 0;
     this.lastBallPos = {};
     this.nectarEntitlement = { red: 0, blue: 0 };
+    this.dumpedAtTips = { red: 0, blue: 0 };
+    this.tipsSeen = { red: 0, blue: 0 };
+    this.inUpCellPrev = { red: 0, blue: 0 };
     this.balls.reset();
     this.parkOffField();
     this.hives.red.reset();
     this.hives.blue.reset();
+    // AFTER the rockers are back on their starting stops: which CELL is up is what
+    // decides where the staged NECTAR go, and a reset from a tipped hive staged them
+    // into the CELL that was about to swing underneath.
+    this.stageCells();
     this.robot.reset();
     this.loadPreload();
     this.battery.reset();

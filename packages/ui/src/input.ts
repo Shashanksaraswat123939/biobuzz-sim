@@ -42,6 +42,9 @@ export function readKeyboard(keys: Keys): GamepadState {
   g.left_stick_x = (on('d') ? 1 : 0) - (on('a') ? 1 : 0);
   g.right_stick_x = (on('e') ? 1 : 0) - (on('q') ? 1 : 0);
   g.left_bumper = on('shift'); // slow mode
+  // Held: fall back to robot-centric driving. The default is field-centric, and this is the
+  // escape hatch for a drifted heading.
+  g.y = on('y');
   // Manual turret slew. Arrow keys, because that is where a hand already is.
   g.dpad_left = on('arrowleft');
   g.dpad_right = on('arrowright');
@@ -49,5 +52,6 @@ export function readKeyboard(keys: Keys): GamepadState {
   g.a = keys.pressed.has('f'); // pre-spin the flywheel
   g.x = keys.pressed.has('t'); // auto-aim
   g.right_bumper = keys.pressed.has(' '); // fire latch
+  g.back = keys.pressed.has('backspace'); // re-zero the field frame
   return g;
 }

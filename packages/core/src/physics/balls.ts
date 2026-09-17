@@ -27,12 +27,15 @@ export interface Ball {
   home: Vec3;
 }
 
+/** Where parked balls wait: below the floor, out of every volume, under the render cutoff. */
+const BENCH_Y = -5;
+
 export class BallSet {
   readonly balls: Ball[] = [];
 
   constructor(
-    private readonly R: RAPIER,
-    private readonly world: RAPIER_NS.World,
+    R: RAPIER,
+    world: RAPIER_NS.World,
     private readonly params: Params,
     rng: Rng,
     staging: { kind: BallKind; pos: Vec3 }[],
@@ -92,10 +95,27 @@ export class BallSet {
    * Coincident enabled spheres generate huge separation impulses and rocket across the
    * field, so anything not in play must be disabled, not just moved somewhere unused.
    */
+  /**
+   * Take a ball out of play: no collider, and MOVED OFF THE FIELD.
+   *
+   * It used to disable the body and leave it where it stood, which is not out of play in any
+   * sense but the solver's. A parked ball kept its coordinates, so:
+   *
+   *   - the renderer still drew it (its only visibility rule is `p.y > -0.5`), and the three
+   *     NECTAR the CAD stages inside the up CELL sat there as solid-looking balls with no
+   *     collider. A live shot flew straight through them and came to rest behind them, which
+   *     reads exactly as "the ball landed and went under the HIVE";
+   *   - trackBallStates still labelled it `cell` or `flower`;
+   *   - and endOfMatchCounts still SCORED it, because it walks every ball in the set.
+   *
+   * The bench is below the floor, outside every scoring volume and below the renderer's own
+   * cutoff, so all three follow from one move. `reset()` puts everything back on its home.
+   */
   park(b: Ball): void {
-    b.state = 'free';
+    b.state = 'parked';
     b.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     b.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    b.body.setTranslation({ x: b.home[0], y: BENCH_Y, z: b.home[2] }, true);
     b.body.setEnabled(false);
   }
 

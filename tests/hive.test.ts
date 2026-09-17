@@ -94,3 +94,40 @@ describe('the hinge (PLAN.md phase 1)', () => {
     expect(light.ballsToTip!).toBeLessThan(heavy.ballsToTip!);
   }, 60000);
 });
+
+describe('out of play means out of play', () => {
+  // THE BUG: park() disabled the collider and left the ball where it stood. The CAD stages
+  // NECTAR inside the CELLs, so three of them sat in the up CELL with no collider, still
+  // drawn (the renderer's only rule is p.y > -0.5), still labelled `cell` by
+  // trackBallStates, and still counted by endOfMatchCounts. A live shot flew straight
+  // through them and came to rest behind them -- which is what "the ball landed and went
+  // under the HIVE" looks like from the outside.
+  //
+  // All three followed from the ball not being moved, so the check is on the position.
+  it('parks balls below the floor, out of every volume and under the render cutoff', () => {
+    const p = structuredClone(params) as unknown as Params;
+    // Stage one ball where the CAD puts them: inside the up CELL.
+    const staging: { kind: 'pollen'; pos: Vec3 }[] = [{ kind: 'pollen', pos: [-0.32, 1.37, 0.27] }];
+    const w = new World({ params: p, robot: robotSpec as unknown as RobotSpec, staging, alliance: 'red', seed: 7 });
+    const b = w.balls.balls[0];
+    w.balls.park(b);
+    const q = w.balls.pos(b);
+    expect(b.body.isEnabled()).toBe(false);
+    // Below the renderer's -0.5 m cutoff, so nothing draws it.
+    expect(q[1]).toBeLessThan(-0.5);
+    // And below the floor, so it is inside no CELL, no FLOWER and no GARDEN.
+    expect(q[1]).toBeLessThan(0);
+  });
+
+  it('does not score a parked ball', () => {
+    const p = structuredClone(params) as unknown as Params;
+    const staging: { kind: 'pollen'; pos: Vec3 }[] = [{ kind: 'pollen', pos: [-0.32, 1.37, 0.27] }];
+    const w = new World({ params: p, robot: robotSpec as unknown as RobotSpec, staging, alliance: 'red', seed: 7 });
+    w.step(idle);
+    const before = w.endOfMatchCounts('red').upCell;
+    for (const b of w.balls.balls) w.balls.park(b);
+    w.step(idle);
+    expect(w.endOfMatchCounts('red').upCell).toBeLessThan(before + 1);
+    expect(w.endOfMatchCounts('red').upCell).toBe(0);
+  });
+});

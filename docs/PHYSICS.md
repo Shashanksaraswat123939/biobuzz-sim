@@ -237,9 +237,17 @@ the torque balance that produces it, per ball, with each ball's lever arm.
 
 Measured onset: **12 POLLEN** or **8 NECTAR**, pooling at a 9–10 in lever arm.
 
-A match starts with **empty CELLs**. The STEP stages six NECTAR inside them, which is the
-CAD's display state and not a match start — left in, every match began with the HIVE 57% of
-the way to tipping.
+A match starts with **3 NECTAR in each upward-facing CELL** — manual §10.3.1 B.i, Fig 10-2.
+`World.stageCells()` places them against the back wall after the rockers settle on their
+stops. Measured there, they sit at a 9.6 in lever and hold the rocker **48% of the way over**,
+against STRATEGY.md §4.2's predicted 40–55%: so the first tip, the one both alliances race
+for, costs about **six** POLLEN, not twelve.
+
+This used to read "a match starts with empty CELLs", on two grounds. The first — that the
+STEP's own six NECTAR are the CAD's display state — is true, and they are still cleared: the
+CAD fills all four CELLs and the manual fills two, so the staging is done explicitly rather
+than inherited. The second — that staged balls rendered floating under the CAD skin — was a
+symptom of the pocket being 11° out (item 3 below) and went with it.
 
 ---
 
@@ -277,11 +285,19 @@ fine.
 2. **`ball.Cd`, `ball.clSlope`, `ball.e_poly` are guesses.** They own about 40% of the
    predicted shot spread between them. These are the three numbers most worth measuring on a
    real ball.
-3. **The CELL pocket is a reconstruction**, built from convex boxes around the CAD's CELL
-   centroid. The CAD skin and the physics pocket agree to a few inches, not exactly. Deriving
-   the pocket from the STEP's own faces instead of from summary bounding boxes is the fix, and
-   it has not been done — an attempt using `up_floor_bbox_in` failed because that is the
-   axis-aligned box of a plate tilted 30°, so its centre is not the plate's radial position.
+3. **The CELL pocket is a reconstruction**, but it is no longer keyed off the assembly
+   centroid, and the 11° error that came from doing so is fixed. The pocket's PLACEMENT (an
+   arm 16.44 in long at 70.03° in the body frame) and its ORIENTATION (89.99°, so 30° above
+   horizontal at the 30° stop) are two separate angles; sharing one for both tilted the mouth
+   11° too steep and put the lips at 52.5/62.7 in against the manual's 53.5/65.6.
+
+   Both now come from `up_back_skin_bbox_in`, the pocket's floor plate. The earlier attempt
+   that "failed" used `up_floor_bbox_in` as a POSITION, which it is not — an axis-aligned box
+   of a tilted plate does not give its centre. It does give the plate's EXTENT, and that is
+   all that is needed: 12.95 in of Y over 7.48 in of Z is a plate 14.955 in long at 30.01°
+   off vertical, and stepping 12.04 in up its normal puts the lips at 53.49 and 65.61 in. The
+   manual and the CAD agree to 0.02 in. Still a box reconstruction, still not the STEP's own
+   faces, but no longer wrong about where the opening is. See docs/DECISIONS.md.
 4. **Chassis rotations are locked in roll and pitch.** The tyre model applies forces at the
    CG, so there is no roll moment to resolve, and leaving the axes free let solver noise tip
    the box over.
@@ -291,8 +307,18 @@ fine.
    is built on — but `game.upCellAzimuthDeg` and `upCellRangeIn` still come straight off the
    truth. On a robot they come from an AprilTag pipeline with its own noise and 50–100 ms of
    latency, and that latency would matter to a moving shot the way the feed delay does.
-7. **The muzzle is aimed as though it were at the robot's tracked point.** It is 0.12 m out on a
-   rotating turret, so while the lead is holding the aim off the bearing the muzzle sits a
-   centimetre or two off the shot line, and a turning chassis gives it a velocity of its own
-   (ω × r) that the lead does not subtract. Both are worth a degree or two; measured as small
-   next to what has been fixed (`tools/shoterror.ts` prints them), so left alone.
+7. **The muzzle's POSITION is still the robot's tracked point; its VELOCITY no longer is.**
+   While the lead holds the aim off the bearing, a muzzle 0.12 m out on the turret sits a
+   centimetre or two off the shot line, and that offset is still ignored when the range and
+   bearing are taken. Its *velocity* was ignored too, and that half was not small: a chassis
+   yawing at 90°/s swings the muzzle at ω r = 0.19 m/s, which is 4.7 in of lateral miss at
+   60 in — wider than the 0.5 in of clearance to a lip. `Robot.launch()` now gives the ball
+   v_cg + ω × r and `muzzleVelocity()` / `ShotLead.muzzleVelocity()` subtract the same term
+   before solving, so the two agree. On the same seeds that took the turning case's median
+   lateral error from −7 cm to −3 cm and let it fire 39 shots where it had fired 31; every
+   case with ω = 0 is unchanged to the centimetre, which is the expected signature.
+
+   The earlier reading here — "worth a degree or two … so left alone" — was wrong because it
+   priced the term against a simulator that did not have it either. Aim and flight agreeing
+   with each other is not the same as either agreeing with a robot, and `tools/shoterror.ts`
+   printed a `muzzle v_lat` column against a world in which that velocity was never applied.

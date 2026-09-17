@@ -94,13 +94,30 @@ describe('the measured entry model', () => {
     }
   });
 
-  it('says a fast steep arrival is worse than a slow one — the finding this exists for', () => {
-    // The margin-only table asked for ~6.2 m/s at 75 deg. The point of measuring entry at
-    // all is that this is a bad arrival and nothing in the old objective could see it.
-    const fastSteep = model.lookup(6.2, 75);
-    const slowMid = model.lookup(3.0, 45);
-    expect(fastSteep).toBeLessThan(slowMid);
-    expect(fastSteep).toBeLessThan(0.55);
+  it('says retention is a live axis, not a constant — the finding this exists for', () => {
+    // WHY THIS TEST CHANGED. It used to assert the specific pair the margin-only table
+    // picked: ~6.2 m/s at 75 deg down is bad, and worse than 3.0 m/s at 45. Re-measured
+    // against the CORRECTED pocket (PHYSICS 9.3 -- the mouth used to sit 11 deg too steep)
+    // that pair INVERTS: 6.2 at 75 now retains ~0.73 and 3.0 at 45 ~0.54.
+    //
+    // There is a mechanism, not just a number. The pocket axis is 30 deg above horizontal, so
+    // a ball arriving 45 deg down is coming in almost straight along the axis: it hits the flat
+    // floor plate square on and rebounds back out the way it came, and that row collapses to 0%
+    // above 6 m/s. A steeper arrival strikes the floor obliquely, keeps less of its speed along
+    // the normal, and is trapped by the far lip. It is the same mechanism tools/spincheck.ts
+    // found for backspin -- floor friction pushing the ball back toward the opening.
+    //
+    // So the ASSERTION here is now the durable one, which is what the tool exists to prove:
+    // retention varies enormously with how the ball arrives, so an objective blind to it is
+    // choosing shots on half the problem. The specific winning corner is a measurement, and it
+    // rests on e_poly, ball.mu and clSlope, all three flagged guesses (PHYSICS 9.20, 14.2).
+    // Re-run tools/entrycheck.ts when they are measured and expect this to move again.
+    const flat = model.table.rate.flat();
+    expect(Math.max(...flat) - Math.min(...flat)).toBeGreaterThan(0.4);
+    // The 'clean' entry straight down the pocket axis is NOT free: fast and on-axis is the
+    // worst corner of the grid, which is the specific thing a margin-only objective cannot see.
+    expect(model.lookup(6.5, 45)).toBeLessThan(0.35);
+    expect(model.lookup(6.5, 45)).toBeLessThan(model.lookup(6.5, 85));
   });
 });
 

@@ -55,6 +55,8 @@ export interface RobotSpec {
      * 0 is the old behaviour: compensate velocity only.
      */
     leadLatency_s?: number;
+    /** Inside width of the feed tube, m. Must pass a NECTAR and refuse two POLLEN on the diagonal. */
+    boreSize_m?: number;
     cycleTime_s: number; feedPulse_s: number; feedTransit_s: number;
     /** Fraction of the indexer's push that acts UPWARD, as a real indexer wheel does. */
     indexLift?: number;
@@ -64,7 +66,10 @@ export interface RobotSpec {
   hood: { enabled: boolean; servo: string; angleRange_deg: [number, number]; fixedAngle_deg: number; speed_dps: number;
     /** How close the hood must be to the angle the shot needs before firing, degrees. */
     tolDeg?: number };
-  flywheel: { type: 'single' | 'dual'; motor: MotorSpec; I_fly_kgm2: number; r_fly_m: number; k: number; lossFactor: number; minRpmFrac: number; readySteps: number;
+  flywheel: { type: 'single' | 'dual'; motor: MotorSpec;
+    /** Ticks per WHEEL revolution the brain reads. Defaults to the motor's own encoder. */
+    encoderTicksPerRev?: number;
+    I_fly_kgm2: number; r_fly_m: number; k: number; lossFactor: number; minRpmFrac: number; readySteps: number;
     /** Do not fire unless P(land) is at least this. Replaces tolRpm as the speed gate. */
     minLandProb?: number;
     /**
@@ -152,12 +157,21 @@ export interface SensorFrame {
   localizer: { x: number; y: number; heading: number; vx: number; vy: number; omega: number };
   gamepad1: GamepadState;
   gamepad2: GamepadState;
-  game: { upCellAzimuthDeg: number; upCellRangeIn: number; hiveTipping: boolean; hopper: number; flywheelRpm: number };
+  game: { upCellAzimuthDeg: number; upCellRangeIn: number; hiveTipping: boolean; upCellOpenDeg: number; hopper: number; flywheelRpm: number };
 }
 
 // ---------------------------------------------------------------- snapshot
 
-export interface BallSnapshot { id: number; kind: BallKind; p: Vec3; r: number; state: 'free' | 'intake' | 'hopper' | 'flight' | 'cell' | 'flower' }
+export interface BallSnapshot { id: number; kind: BallKind; p: Vec3; r: number;
+  /**
+   * `parked` is OUT OF PLAY: benched below the floor with its collider off. It is a state of
+   * its own rather than a flavour of `free` because every "find a loose ball on the tiles"
+   * search in the repo filters on `state === 'free'` and a low Y -- and a benched ball passes
+   * both. Loading one puts a disabled body in the hopper: the count goes up, the indexer
+   * cannot move it, and the robot sits on a full hopper reporting FIRING and never fires.
+   * Making it a distinct state fixes every one of those searches at once.
+   */
+  state: 'free' | 'parked' | 'intake' | 'hopper' | 'flight' | 'cell' | 'flower' }
 
 export interface HiveSnapshot {
   alliance: Alliance;

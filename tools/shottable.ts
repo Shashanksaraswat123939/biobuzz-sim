@@ -11,7 +11,7 @@
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import params from '../config/params.json' with { type: 'json' };
 import robotSpec from '../config/robot.json' with { type: 'json' };
-import { buildFieldGeometry } from '../packages/core/src/field/geometry.js';
+import { buildFieldGeometry, cellMouthCentre } from '../packages/core/src/field/geometry.js';
 import { bestShot, type Aperture, type ShotTableRow } from '../packages/core/src/physics/ballistics.js';
 import { inches, M_TO_IN } from '../packages/core/src/units.js';
 import { EntryModel, type EntryTable } from '../packages/core/src/robot/entryModel.js';
@@ -47,12 +47,18 @@ export function mouthLips(
   const theta = side * g.restAngle_rad;
   // The same test Hive.upCell uses: the cell whose radius points up at this angle.
   const cell = Math.cos(g.cells[0].bodyAngle_rad + theta) > 0 ? g.cells[0] : g.cells[1];
-  const phi = cell.bodyAngle_rad + theta;
-  const r = cell.radius_m + cell.halfInterior[1];
+  // THE ARM PLACES THE MOUTH; THE AXIS TILTS IT. They are 20 deg apart on this rocker, and
+  // using the arm for both is what put the lips at 52.5/62.7 instead of the manual's
+  // 53.5/65.6 -- an 11 deg error in the pocket that hoodsweep, the shot table, entry.json
+  // and landcal.json were then all fitted on top of.
+  const phi = cell.axisAngle_rad + theta;
+  const mouth = cellMouthCentre(cell);
+  const my = g.pivotY_m + mouth[1] * Math.cos(theta) - mouth[2] * Math.sin(theta);
+  const mz = mouth[1] * Math.sin(theta) + mouth[2] * Math.cos(theta);
   const ht = cell.halfInterior[2];
   const lip = (sign: number) => ({
-    y: g.pivotY_m + r * Math.cos(phi) - sign * ht * Math.sin(phi),
-    z: r * Math.sin(phi) + sign * ht * Math.cos(phi),
+    y: my - sign * ht * Math.sin(phi),
+    z: mz + sign * ht * Math.cos(phi),
   });
   const a = lip(+1);
   const b = lip(-1);
@@ -105,7 +111,29 @@ export function buildTable(
       rFly: spec.flywheel.r_fly_m,
       maxRpm: spec.flywheel.maxRpm,
       range_in: rIn,
-      minDescentDeg: 15,
+      // ARRIVE STEEPLY ENOUGH TO CLEAR THE PILE. MEASURED, tools/movingtune.ts, 6 seeds:
+      //
+      //   minDescent   arrival    stopped  closing  receding  strafing  wobbling   wild
+      //     15 deg     30 down      95%      100%     100%      100%       93%       4
+      //     25 deg     37 down      95%      100%     100%      100%      100%       0
+      //     35 deg     47 down      95%       83%     100%      100%       96%       2
+      //
+      // The wild shots at 15 were not aiming errors -- launch azimuth was within 0.63 deg of
+      // the true bearing, the chassis was not yawing, and the muzzle had no lateral velocity
+      // of its own. They were balls CLIPPING THE ONES ALREADY IN THE POCKET: every one of
+      // them went out with 3, 4 or 6 balls already in the up CELL. A 30 deg arrival settles
+      // near the mouth, so the fourth ball meets the third on its way in.
+      //
+      // Steeper puts them further down the pocket, and 35 overdoes it: the apex climbs to 74
+      // in and the flight to 1.18 s, and a longer hang time is more sensitive to a closing
+      // robot -- the closing case drops to 83% with a 22 cm spread. 25 is the setting where
+      // every moving case lands 100% and nothing goes wild.
+      //
+      // tools/entrycheck.ts cannot see this: it pins the rocker at 200 kg so the count is not
+      // spoiled by a tip, which also means its pocket never recoils when a ball lands. The
+      // grid it produces is still right about how a ball enters; it is blind to what the
+      // pocket does afterwards with several already in it.
+      minDescentDeg: 25,
       maxApex_m: 3.6,
       maxFlight_s: 2.0,
       preferHoodPos: prevHood,

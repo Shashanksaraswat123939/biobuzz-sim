@@ -17,6 +17,7 @@
 
         <div class="seg" id="mode" role="tablist">
           <button data-mode="practice" class="on" title="Drive the robot yourself. Nothing is scripted; the clock and scoring run as they would in a match.">Practice</button>
+          <button data-mode="auto" title="Watch the 30-second autonomous routine: LEAVE, drive round into the shooting sector, empty the preload into the up CELL, and PARK before the buzzer. The robot drives itself through the same gamepad a human would use.">Auto</button>
           <button data-mode="collect" title="The robot drives and shoots on its own across a range sweep, logging every shot, then reports what it got wrong.">Data</button>
           <button data-mode="test" title="Sandbox. Change any physical constant, see what it does to the shot before you fire, and fire by hand or on a timer.">Test</button>
         </div>
@@ -99,6 +100,10 @@
         </section>
 
         <section data-panel="analysis">
+          <h4 id="a-match-h">Match</h4>
+          <div class="rows" id="a-match"></div>
+          <p class="cap" id="a-odds"></p>
+          <h4>Collection plan</h4>
           <div class="rows" id="a-plan"></div>
           <div class="btnrow">
             <button id="a-start" class="go" title="Run the collection plan above. The robot drives to each sample pose, settles, and fires one shot.">Start collection</button>

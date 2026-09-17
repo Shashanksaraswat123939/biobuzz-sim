@@ -21,7 +21,7 @@ export interface EndOfMatchCounts {
   upCell: number;
   garden: number;
   /** Per FLOWER: how many of each alliance's NECTAR, and the total element count. */
-  flowers: { elements: number; redNectar: number; blueNectar: number }[];
+  flowers: { elements: number; redNectar: number; blueNectar: number; topNectar: Alliance | null }[];
   /** The lowest-sitting NECTAR in each FLOWER, by alliance. */
   bottomNectar: { flower: number; alliance: Alliance | null }[];
   parked: boolean;
@@ -66,11 +66,17 @@ export class Scorer {
     s.park = c.parked;
 
     let flowerElements = 0;
-    c.flowers.forEach((f, i) => {
-      const mine = alliance === 'red' ? f.redNectar : f.blueNectar;
-      const theirs = alliance === 'red' ? f.blueNectar : f.redNectar;
-      if (mine > theirs) flowerElements += f.elements; // owner takes everything in it
-      void i;
+    // THE TOP-MOST NECTAR OWNS THE FLOWER, not the most of them.
+    //
+    // Manual 10.5.2, FLOWER Owner: "The ALLIANCE that has the TOP-MOST NECTAR of its color ...
+    // owns that FLOWER." This used to compare counts, which gives the flower to whoever put
+    // more in -- so an alliance that caps the opponent's three with one of its own was scored
+    // as the LOSER of that flower. That made the whole endgame of STRATEGY.md section 8 --
+    // plug early, cap late, saturate the tube -- invisible to the scorer, and capping looked
+    // worthless. The FLOWER is a vertical tube; height is the criterion and it is the one
+    // thing a late ball can still change.
+    c.flowers.forEach((f) => {
+      if (f.topNectar === alliance) flowerElements += f.elements; // owner takes everything in it
     });
     s.flower = flowerElements;
 

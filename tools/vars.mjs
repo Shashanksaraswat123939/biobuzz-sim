@@ -138,5 +138,33 @@ out.push(section('Battery', rows(params.battery, ['capacity_Ah', 'Rint_ohm'], 'b
 out.push(section('Simulation', rows(params.sim, ['dt', 'substepsPerFrame', 'solverIterations', 'ccdOnBalls', 'seed'], 'sim')));
 out.push(section('Match', rows(params.match, ['auto_s', 'transition_s', 'teleop_s', 'flowerUnlock_s'], 'match')));
 
+// ---------------------------------------------------------------- provenance guard
+//
+// TWO BLOCKS MUST NOT SHARE A PROVENANCE NOTE. The chassis block's `_source` was once
+// overwritten with the localizer's, word for word, so the chassis mass, inertia and CG lost
+// their origin -- and this file is generated from those fields, so the generated
+// documentation went on to state that the chassis mass came from an odometry puck. Nothing
+// about the value looks wrong; only the duplication gives it away.
+//
+// ponytail: exact match on notes longer than 80 chars. Short boilerplate ('design parameter')
+// is legitimately shared and is skipped; a near-duplicate with one word changed still slips
+// through. Reach for a similarity measure only if one ever actually does.
+const notes = new Map();
+const dupes = [];
+(function walk(node, path) {
+  if (!node || typeof node !== 'object') return;
+  for (const [k, v] of Object.entries(node)) {
+    const at = path ? `${path}.${k}` : k;
+    if (typeof v === 'string' && /[sS]ource$/.test(k) && v.length > 80) {
+      if (notes.has(v)) dupes.push([notes.get(v), at]);
+      else notes.set(v, at);
+    } else if (v && typeof v === 'object') walk(v, at);
+  }
+})({ robot, params }, '');
+if (dupes.length) {
+  for (const [a, b] of dupes) console.error('duplicate _source: ' + a + '  AND  ' + b);
+  throw new Error(dupes.length + ' provenance note(s) shared by two blocks -- one of them has lost its origin');
+}
+
 writeFileSync(here('../docs/VARIABLES.md'), out.join('\n'));
 console.log('docs/VARIABLES.md written');

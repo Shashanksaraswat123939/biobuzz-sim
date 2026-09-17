@@ -3,6 +3,18 @@
  * shot from the robot's own state. Nothing is teleported: every move is the drivetrain.
  *
  *   npm run tool -- tools/drivedemo.ts
+ *
+ * IT STARTS IN THE SHOOTING SECTOR, which is not where a match starts. The up CELL opens
+ * toward the audience, so the whole of the alliance-wall side of the field is BEHIND the
+ * mouth -- from the match start pose it is 109 deg off its opening, and from the corners this
+ * demo used to visit, up to 171 deg. No launch from there can enter.
+ *
+ * This demo used to start at the match pose and report "fired" from every one of those spots,
+ * because nothing checked which way the mouth faced (PHYSICS 9.3 note in docs/DECISIONS.md);
+ * the balls went into the back of the pocket and the old census counted some of them. With
+ * `game.upCellOpenDeg` in the readiness gate it correctly refused all five and the demo read
+ * 0 shots, which is the honest answer to the question it was asking. So it now asks a better
+ * one: park in the sector a robot actually shoots from, and move around INSIDE it.
  */
 import { readFileSync } from 'node:fs';
 import params from '../config/params.json' with { type: 'json' };
@@ -21,9 +33,10 @@ export async function main(): Promise<void> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = robotSpec as unknown as RobotSpec;
-  const world = new World({ params: p, robot: spec, staging: balls, alliance: 'red', seed: 2, preload: 6 });
+  const world = new World({ params: p, robot: spec, staging: balls, alliance: 'red', seed: 2, preload: spec.hopper.capacity });
   const brain = new BuiltinTeleOp(spec, table, loadLandCal());
   world.clock.startTeleOp();
+
 
   let topSpeed = 0;
   let maxTurret = 0;
@@ -39,6 +52,7 @@ export async function main(): Promise<void> {
   };
   const stick = (fwd: number, left: number, turn = 0): GamepadState => {
     const g = emptyGamepad();
+    g.y = true;   // robot-centric: these moves are written relative to the robot's nose
     g.left_stick_y = -fwd;
     g.left_stick_x = -left;
     g.right_stick_x = -turn;
@@ -50,6 +64,22 @@ export async function main(): Promise<void> {
   const press = emptyGamepad();
   press.a = true;
   step(press);
+
+  // Stand in front of the opening, at the middle of the shot table's usable range, derived
+  // from where the mouth actually is rather than from a coordinate typed in here.
+  const hive = world.hives.red;
+  const mouth = hive.upCellMouthWorld();
+  const nrm = hive.upCellMouthNormalWorld();
+  const nh = Math.hypot(nrm[0], nrm[2]) || 1;
+  const stand = 0.0254 * 55;
+  const sx = mouth[0] + (nrm[0] / nh) * stand;
+  const sz = mouth[2] + (nrm[2] / nh) * stand;
+  world.robot.place(
+    [sx, spec.chassis.height_m / 2 + spec.chassis.clearance_m, sz],
+    (Math.atan2(mouth[0] - sx, mouth[2] - sz) * 180) / Math.PI,
+  );
+  for (let f = 0; f < 30; f++) step(emptyGamepad());
+
 
   const report = (label: string) => {
     const s = world.sensors();
@@ -64,12 +94,13 @@ export async function main(): Promise<void> {
   };
 
   console.log('the chassis is never turned to aim -- only the turret moves\n');
+  // Moves that stay in the sector: closing, strafing across the face, and backing off.
   const moves: [string, GamepadState, number][] = [
     ['start', stick(0, 0), 0.5],
-    ['drive forward', stick(0.8, 0), 1.2],
-    ['strafe left', stick(0, 0.8), 1.0],
-    ['drive back a bit', stick(-0.6, 0), 0.8],
-    ['strafe right', stick(0, -0.8), 1.6],
+    ['close in', stick(0.6, 0), 0.7],
+    ['strafe across', stick(0, 0.7), 0.9],
+    ['back off', stick(-0.6, 0), 0.6],
+    ['strafe back', stick(0, -0.7), 1.4],
   ];
 
   let shotsBefore = 0;
@@ -90,8 +121,8 @@ export async function main(): Promise<void> {
 
     // Top the hopper back up so each stop is a fair test of the aim, not of the intake.
     for (const b of world.balls.balls) {
-      if (world.robot.hopper.length >= 4) break;
-      if (b.kind === 'pollen' && b.state === 'free' && world.balls.pos(b)[1] < 0.3) world.robot.preload(world.balls, b);
+      if (world.robot.heldBalls().length >= spec.hopper.capacity) break;
+      if (b.kind === 'pollen' && b.state === 'free' && b.body.isEnabled() && world.balls.pos(b)[1] < 0.3) world.robot.preload(world.balls, b);
     }
   }
 

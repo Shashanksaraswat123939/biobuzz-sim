@@ -9,7 +9,7 @@ export class Battery {
   private readonly rint: number;
   private readonly capacity_As: number;
 
-  constructor(private readonly p: Params['battery']) {
+  constructor(p: Params['battery']) {
     this.curve = [...p.VocBySoC].sort((a, b) => a[0] - b[0]);
     this.rint = p.Rint_ohm;
     this.capacity_As = p.capacity_Ah * 3600;

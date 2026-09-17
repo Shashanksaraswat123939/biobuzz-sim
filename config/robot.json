@@ -14,7 +14,7 @@
    0
   ],
   "clearance_m": 0.02,
-  "_source": "guess, sized on a two-pod odometry puck (goBILDA Pinpoint class) rather than measured. WAS ALL ZEROS AND READ BY NOTHING: the brain was handed ground-truth position, heading AND velocity, so the motion lead -- which is built entirely on the reported velocity -- had never been tested against an estimate that could be wrong. vel_mps is the one that matters: a puck differentiates a quantised encoder, and differentiating is the noisiest thing on the robot. 0.04 m/s against a ball horizontal of about 2.3 m/s is one degree of bearing, which is the same order as the launch yaw scatter already modelled. xy_in and heading_deg are a standing error rather than a drift, which flatters a real puck over a long match and is fair over the few seconds a shot takes - CALIBRATE by driving a known square and reading the return error. The TARGET bearing and range are still exact, which is the bigger remaining lie: on a real robot they come from an AprilTag pipeline with its own noise and its own 50-100 ms of latency."
+  "_source": "guess: a typical 18 in FTC box robot, 14 kg (30.9 lb) with the CG 50 mm below the box centre. This note had been OVERWRITTEN with sensors.localizer.noise._source, where the same words still sit, so the chassis mass, inertia and CG were documented -- in docs/VARIABLES.md, which is generated from this field -- as coming from an odometry puck. The restored note also drops the old claim that 14 kg is 'at the weight limit': R104 says 'There is no ROBOT weight limit', so any design trade made against a 42 lb ceiling was answering a rule that does not exist. Izz is null and derived from the box; measure the real robot on a bifilar pendulum - CALIBRATE."
  },
  "drivetrain": {
   "type": "mecanum",
@@ -72,8 +72,8 @@
   "squeeze_N_source": "guess: how hard the roller is preloaded onto the ball by sitting below ball height. This is the normal load that makes the friction cap non-trivial - CALIBRATE"
  },
  "hopper": {
-  "capacity": 6,
-  "_source": "design parameter"
+  "capacity": 4,
+  "_source": "G407: a ROBOT may not CONTROL more than 4 SCORING ELEMENTS at once. WAS 6, which put every cycle time, shot rate and autonomous ball budget in this repository on a robot that would be penalised. This is a rule, not a design parameter. The indexer's old inability to feed from a nearly empty bin (docs/DECISIONS.md) made 4 look unusable; with indexLift at 0.6 it feeds, and tests/shoot.test.ts fires 12 in 23 s from a 4-ball bin against 11 in 67 s from a 6-ball one. tools/movingfire.ts tops up to this number rather than to 7."
  },
  "transfer": {
   "motor": {
@@ -94,6 +94,8 @@
   "beltRadius_m_source": "guess: the drive pulley on the feed belt. Belt speed is motor omega times this, and the belt has to beat gravity to lift a ball up the shaft - CALIBRATE",
   "indexLift": 0.6,
   "indexLift_source": "How much of the indexer's push acts upward. A real indexer is a wheel pressed against the ball with its contact patch BELOW the ball's centre, so it lifts as much as it shoves. At 0 -- a purely horizontal shove, which is what this was -- a ball resting on the bin floor is pinned by its own floor contact and does not move at all, so balls only reached the magazine when something else shook them there. Sweep it before trusting the value: the working window measured in the sister build is 0.3-0.8, with 0 and 0.1 feeding nothing and 1.0 throwing balls out of the bin.",
+  "boreSize_m": 0.0965,
+  "boreSize_m_source": "derived, 3.80 in: passes a 3.62 in NECTAR and refuses two POLLEN, whose DIAGONAL is 2.8*sqrt(2) = 3.96 in. The window is [3.62, 3.96) and this sits in the middle of it. WAS 3.20 in (one POLLEN plus 0.4), on the argument that a NECTAR-sized bore is 4.1 in and two POLLEN fit side by side in 4.1 in -- true, but the binding number is the diagonal, not 5.6 in of side-by-side. Two consequences, both measured: the simulator could not admit a NECTAR at all, so it could not shoot the ball worth 2.5 points in the HIVE and the entire endgame in the FLOWERS (PHYSICS 9.12); and 0.2 in of clearance let a POLLEN entering crooked wedge in the doorway BELOW entryY, which leaves entryBusy true for ever -- the indexer admits nothing more and the belt cannot free what is stuck. On seed 43 that left one ball at -2.23 in with the belt driving and the gate cycling and shots 0 for the whole run; at 3.80 in the same seed fires normally. That is 9.13 and 9.14 as well - CALIBRATE against the real tube once it exists.",
   "leadLatency_s": 0.15,
   "leadLatency_s_source": "MEASURED by tools/movingfire.ts --gate. The exit speed is chosen when the gate is commanded and the ball leaves after the feed pulse and the wheel's lag, so under acceleration the shot carries a correction for a velocity the robot has grown out of; leading on v + a*tau predicts the velocity AT RELEASE instead. Deadbanded where a*tau stops being worth more than the flywheel encoder can resolve (one count over a 20 ms window is 107 rpm), because it differentiates a velocity and a standing robot jitters -- applied unconditionally it cost a stationary rig a third of its shots. WAS 0.30, tuned when the lead spent its whole correction on the flywheel and the flywheel therefore lagged badly. The lead solves the hood now, the hood is fast, and there is little stale target left to predict: on the shuttling case 0, 0.15 and 0.30 all land the same 0.36 per second, and 0.30 has the WORST downrange bias of the three (-27 cm against -7 and -5). 0.15 is best or tied on every column, so it is set there, but the honest summary is that this knob no longer moves the answer. Kept because a real feed is slower than this modelled one and a real hood servo will lag in a way this one does not - CALIBRATE tau against a real feed once one exists."
  },
@@ -106,13 +108,15 @@
    "ticksPerDeg": 8.0
   },
   "range_deg": [
-   -120,
-   120
+   -175,
+   175
   ],
+  "range_deg_source": "design parameter, widened to +-175 per the built robot (PHYSICS Appendix B). WAS +-120, which is 240 deg of a 360 deg problem: the turret physically could not point at a third of the bearings the field asks for, and the aim clamped to the end stop and fired at whatever was there. The readiness gate refuses that now (turretPastStopDeg), so the symptom changed from a wild shot to a robot that will not fire -- same cause. +-175 rather than a full +-180 leaves a wrap-free deadband directly behind the robot, which is where the feed tube and the wiring run - CALIBRATE against the real turret's travel.",
   "speed_dps": 180,
   "accel_dps2": 900,
   "muzzleOffset_m": 0.12,
-  "muzzleHeight_m": 0.28,
+  "muzzleHeight_m": 0.4013,
+  "muzzleHeight_m_source": "cited: ROBOT_BUILD.md section 8.2, 15.8 in, which is also what PHYSICS Appendix B carries. WAS 0.28 m -- and 0.28 is INSIDE the chassis collider, whose top sits at 0.32 m. Robot.exitPoint() then walked every ball 6 cm up the shot line to spawn it clear of the box, so the world launched from 5.6 cm higher than the muzzle the SHOT TABLE was solved at. tools/aimbias.ts priced the disagreement exactly: the solver said -3.8 cm and the world put the ball +10.7 cm long, a 14.5 cm gap it attributed to 'launch geometry: muzzle height and offset'. Above the chassis top exitPoint is a no-op and the two agree by construction - CALIBRATE against the built shooter.",
   "_source": "design parameter",
   "_accelSource": "guess: 900 deg/s^2 reaches the 180 deg/s slew limit in 0.2 s, which is what a 5203-117 through a 2:1 reduction does against a turret of a few hundred g.cm^2. Derive it properly from motor torque over turret MOI once the real turret exists - CALIBRATE"
  },
@@ -120,9 +124,10 @@
   "enabled": true,
   "servo": "hood",
   "angleRange_deg": [
-   30,
-   85
+   40,
+   80
   ],
+  "_angleRangeSource": "derived: the shot table the CORRECTED pocket asks for spans hood 41-76 deg over 30-150 in (arrival 32 deg down at 3.6 m/s, apex 66 in mean), so 40-80 covers it with margin and spends the servo's resolution on the range actually used. WAS 30-85, chosen by tools/hoodsweep.ts against a pocket tilted 11 deg too steep, which is why the old table sat at 75-85 deg lobbing balls in nearly vertically.",
   "fixedAngle_deg": 45,
   "speed_dps": 120,
   "tolDeg": 2.0,
@@ -136,6 +141,10 @@
    "variant": "5202-6000",
    "gearRatio": 1.0
   },
+  "encoderTicksPerRev": 2048,
+  "encoderTicksPerRev_source": "cited: a REV-11-1271 Through Bore reads 8192 counts a revolution, and on the wheel shaft through a 4:1 reduction that is 2048 counts per WHEEL revolution. WAS the 5202's own 28-tick motor encoder, and that is what made the readiness gate a coin flip: the hub reports velocity as a whole number of counts over its 20 ms window, so 28 ticks a rev is a 107 rpm lattice -- and with tolRpm at 60 the readiness WINDOW WAS NARROWER THAN ONE COUNT. Whether the robot fired came down to where that lattice happened to fall against the target, which is why it sat at 'FIRING' with the feedforward already dead on. At 2048 a rev one count is 1.5 rpm, so a tight window means something - CALIBRATE the reduction against the real shaft.",
+  "motorCount": 2,
+  "motorCount_source": "PHYSICS 9.19 and 9.21, and Appendix B. One motor slews the wheel at 462 rpm/s (tools/slew.ts), so reaching the table's 2315 rpm from rest takes FIVE SECONDS -- long enough that the robot reads as broken, and the reason the shooter spends most of a match 'spinning up'. Two motors give 794 rpm/s. The last commit measured the second motor as what makes the RECEDING case possible at all (0.00 -> 0.24 landed per second) and it is not a substitute for the flywheel inertia, nor the inertia for it: inertia fixes the per-shot dip, motors fix the chase. THE PORT IS PAID FOR by moving the turret to a servo (R502 allows 8 W; an Axon MAX+ is 7.59 W), which is what the hardware map below now says -- without that this is a nine-motor robot and R503 allows eight. tests/rules.test.ts counts it.",
   "I_fly_kgm2": 0.000391,
   "I_fly_kgm2_source": "A 96 mm goBILDA grip wheel (105 g, 1.21e-4 kg.m^2) PLUS a 96 mm x 12 mm 6061 disc behind it: pi*r^2*t*2700 = 234 g, I = 0.5*m*r^2 = 2.70e-4, so 3.91e-4 together and 0.34 kg on the shaft. WAS THE BARE GRIP WHEEL, and no FTC shooter that works is built that way. At 1.21e-4 a single POLLEN takes 210 rpm out of the wheel on its way past (tools/shootercheck.ts), three and a half times the 60 rpm firing window, and the tachometer cannot even see it coming: the hub reports velocity quantised to about 107 rpm a count on a 28-tick encoder, filtered over 6 loops. Every wild shot in tools/_acc.ts was that gap -- fired with the true speed 367 +- 101 rpm under target while the filtered reading said it was fine. Adding inertia is the answer a team reaches for and it costs nothing in the motor budget, which matters here because the robot is already at FTC's 8-motor limit (4 drive, intake, transfer, flywheel, turret) and cannot have a second flywheel motor without giving one up. Spin-up goes from 0.74 s to 2.0 s, which is what a real shooter takes - CALIBRATE by weighing the actual wheel stack.",
   "r_fly_m": 0.048,
@@ -168,8 +177,8 @@
  },
  "calibration": {
   "_about": "Field trims. These are what a team actually adjusts between matches: they correct the SHOT TABLE against the real robot without regenerating it, and the Analysis tab computes them from a collected run.",
-  "rangeTrim_in": 0.0,
-  "rangeTrim_in_source": "measured: the mean signed downrange error of a collected run. The table is looked up at (range - rangeTrim), so a group landing 8 in LONG gets a trim of +8 and the table is asked for a shorter shot.",
+  "rangeTrim_in": 2.0,
+  "rangeTrim_in_source": "MEASURED by tools/movingtune.ts --sweep, firing from a DRIVING robot and recording where each ball crossed the mouth plane. The group sat 3-4 cm long with a 10 cm spread; the brain looks the table up at (range - trim), so a positive trim asks for a shorter shot. Swept 0-6 in over 48 balls a step: 0 gave 92% and +3 cm, 2 gave 96% and -1 cm, 3 gave 90%, 5 gave 96% and -6 cm. 2 in is where the group is CENTRED, which is the setting that keeps its margin when anything else moves. RE-MEASURE after any change to the muzzle, the shot table or the entry model: this absorbs the residue of all three.",
   "turretTrim_deg": 0.0,
   "turretTrim_deg_source": "measured: atan(mean lateral error / mean range) from a collected run. Subtracted from the commanded azimuth, so it also absorbs a turret encoder zero that is a degree off."
  },
@@ -216,8 +225,9 @@
   "br": "motor3",
   "intake": "motor4",
   "transfer": "motor5",
-  "flywheel": "motor6",
-  "turret": "motor7",
+  "flywheelA": "motor6",
+  "flywheelB": "motor7",
+  "turret": "servo2",
   "hood": "servo0",
   "gate": "servo1",
   "imu": "imu",
@@ -248,6 +258,7 @@
    29
   ],
   "maxMotors": 8,
-  "maxServos": 12
+  "maxServos": 8,
+  "_source": "R503: 'ROBOTS are limited to a total of 8 motors and 8 servos ... for all MECHANISMS used in all configurations.' maxServos WAS 12, on the grounds that two hubs give 12 ports. The number of ports is not the limit; the rule is, and ports only cap it further. Both numbers were in the spec type and read by nothing, which is how the 12 went in and how a nine-motor flywheel config reached the working tree; tests/rules.test.ts counts the hardware map against them now."
  }
 }

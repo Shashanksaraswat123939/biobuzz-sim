@@ -23,7 +23,7 @@ import robotSpec from '../config/robot.json' with { type: 'json' };
 import { ShotTable, leadShot } from '../packages/core/src/robot/builtinTeleOp.js';
 import { simulateShot } from '../packages/core/src/physics/ballistics.js';
 import { mouthLips } from './shottable.js';
-import { M_TO_IN, DEG, rpmToRadS } from '../packages/core/src/units.js';
+import { DEG, rpmToRadS } from '../packages/core/src/units.js';
 import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));

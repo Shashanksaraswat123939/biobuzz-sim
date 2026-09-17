@@ -23,16 +23,30 @@ export const CAD = {
   redX_in: -12.74,
   blueX_in: 12.76,
   /**
-   * Audience-CELL centroid relative to the pivot: (dY 9.82, dZ 11.28) -> radius and angle.
+   * THE POCKET'S PLACEMENT AND ITS ORIENTATION ARE TWO DIFFERENT ANGLES, and conflating them
+   * was an 11 deg error in the mouth that every shot solution rested on.
    *
-   * Tried deriving the radius from `up_floor_bbox_in` instead, on the theory that the
-   * assembly centroid sits too far inside the pocket. It does not work: that bbox is the
-   * AXIS-ALIGNED box of a plate tilted 30 deg, so its centre is not the plate's radial
-   * position, and the CAD's own staged balls end up below the floor it implies. The
-   * centroid is the better estimator of the two. See docs/DECISIONS.md.
+   * Both come from `up_back_skin_bbox_in`, which is the pocket's FLOOR plate: Y 47.05..60.00,
+   * Z 1.62..9.10. An axis-aligned bbox of a tilted plate does not give its centre position
+   * directly -- but it does give the plate's own extent, 12.95 in of Y over 7.48 in of Z, so
+   * the plate is hypot(12.95, 7.48) = 14.955 in long (the 14 in mouth plus its skin) and its
+   * long axis is atan2(7.48, 12.95) = 30.01 deg off vertical. The pocket axis is the normal
+   * to that plate: 59.99 deg from vertical, i.e. 30 deg above horizontal.
+   *
+   * Walk 12.04 in (cellDepth) up that normal from the plate's centre (53.525, 5.360) and the
+   * mouth centre lands at Y 59.55; step +-7 in along the plate and the lips land at 53.49 and
+   * 65.61. The manual's Fig 9-10 gives 53.5 and 65.6. Two independent sources, 0.02 in apart.
+   *
+   * The assembly CENTROID (53.77, 11.28) that this used to key off is a real CAD number and
+   * still checks out -- it is just not the pocket's box centre, and using its bearing
+   * (48.96 deg) as the pocket's ORIENTATION tilted the mouth 11 deg too steep: the lips came
+   * out at 52.5 and 62.7, the apex 2.9 in low, and hoodsweep then chose a 30-85 deg hood for
+   * a pocket that faces 41 deg above horizontal instead of 30. See docs/DECISIONS.md.
    */
-  cellRadius_in: Math.hypot(53.77 - 43.95, 11.28), // 14.9556
-  cellCadAngle_deg: Math.atan2(11.28, 53.77 - 43.95) / DEG, // 48.9565
+  cellFloorY_in: (47.05 + 60.0) / 2, // 53.525
+  cellFloorZ_in: (1.62 + 9.1) / 2, //  5.360
+  cellFloorSpanY_in: 60.0 - 47.05, // 12.95
+  cellFloorSpanZ_in: 9.1 - 1.62, //  7.48
   /** Nominal pocket, from the manual and confirmed against the CAD cell bbox to ~0.4 in. */
   mouthWidth_in: 20, // along the pivot axis
   mouthDepth_in: 14, // across the mouth (tangential)
@@ -53,19 +67,48 @@ export const CAD = {
   flowerOpeningDia_in: 4.0,
 };
 
+/** Manual Fig 9-10: the mouth plane leans this far back from vertical. 65.6 - 53.5 = 12.1 = 14*cos(30). */
+export const MOUTH_TILT_DEG = Math.atan2(CAD.cellFloorSpanZ_in, CAD.cellFloorSpanY_in) / DEG; // 30.01
+export const LIP_LOW_IN = 53.5;
+export const LIP_HIGH_IN = 65.6;
+
 /**
- * Body angle of CELL A in the rocker frame, measured from +Y.
- * At theta = 0 the CG sits directly above the pivot (the unstable mid-point), which is
- * what makes the rocker an over-centre see-saw held at its end stops by gravity.
+ * The rocker's travel, from `cells.arm_tilt_deg` in the CAD: it swings +-30 deg between its
+ * end stops. THIS IS A STOP ANGLE, not a pocket angle, and it used to be derived from the
+ * CELL centroid's bearing instead -- which is why it read 30.04 and why moving the pocket
+ * looked as though it had to move the stops too. It does not: the two are independent facts,
+ * and the tip threshold (Hive.gravityTorque, sin(theta + cgBodyAngle)) hangs off this one.
  */
-export const CELL_A_BODY_ANGLE_DEG = 79.0;
-/** So the CAD's saved state (audience CELL up) is theta = -(79.0 - 48.9565) = -30.04 deg. */
-export const REST_ANGLE_DEG = CELL_A_BODY_ANGLE_DEG - CAD.cellCadAngle_deg;
+export const REST_ANGLE_DEG = 30.0;
+
+/** Pocket axis in the ROCKER BODY frame, from +Y. 90 - 30 rest = 60 deg from vertical in the world. */
+export const CELL_A_AXIS_BODY_ANGLE_DEG = (90 - MOUTH_TILT_DEG) + REST_ANGLE_DEG; // 89.99
+
+/**
+ * Direction from the pivot to the pocket's CENTRE, in the rocker body frame, from +Y -- the
+ * arm, which is 20 deg off the pocket's own axis. Walk half a pocket depth back down the
+ * axis from the mouth centre and measure where you land relative to the pivot.
+ */
+const cellCentre = (() => {
+  const a = ((90 - MOUTH_TILT_DEG) * DEG); // pocket axis in the WORLD at rest
+  const y = CAD.cellFloorY_in + (CAD.cellDepth_in / 2) * Math.cos(a) - CAD.pivotY_in;
+  const z = CAD.cellFloorZ_in + (CAD.cellDepth_in / 2) * Math.sin(a);
+  return { radius_in: Math.hypot(y, z), angle_deg: Math.atan2(z, y) / DEG };
+})();
+/** 16.438 in. WAS 14.956, the assembly centroid's distance -- a different point. */
+export const CELL_RADIUS_IN = cellCentre.radius_in;
+/** 70.03 deg. WAS 79.0, chosen so that 79.0 - 48.96 landed on a 30 deg stop. */
+export const CELL_A_BODY_ANGLE_DEG = cellCentre.angle_deg + REST_ANGLE_DEG;
 
 export interface CellGeometry {
   id: 'A' | 'B';
-  /** Radial direction of the pocket axis in the rocker body frame, measured from +Y. */
+  /**
+   * Direction from the pivot to the pocket's CENTRE, rocker body frame, from +Y. This places
+   * the pocket; it does not orient it. The two differ by 20 deg on this rocker.
+   */
   bodyAngle_rad: number;
+  /** Orientation of the pocket's own axis (mouth-facing normal), rocker body frame, from +Y. */
+  axisAngle_rad: number;
   /** Pocket centre distance from the pivot, m. */
   radius_m: number;
   /** Half extents of the pocket interior: [alongAxis, radial, tangential], m. */
@@ -105,21 +148,21 @@ export interface FieldGeometry {
   zones: ZoneGeometry[];
 }
 
-function pocketPieces(bodyAngle_rad: number, radius_m: number, tag: string): { pieces: BoxPiece[]; half: Vec3 } {
+function pocketPieces(armAngle_rad: number, axisAngle_rad: number, radius_m: number, tag: string): { pieces: BoxPiece[]; half: Vec3 } {
   const th = inches(CAD.plateThick_in);
   const hx = inches(CAD.mouthWidth_in) / 2; // along pivot axis
-  const hu = inches(CAD.cellDepth_in) / 2; // radial (mouth -> floor)
-  const ht = inches(CAD.mouthDepth_in) / 2; // tangential
-  const phi = bodyAngle_rad;
+  const hu = inches(CAD.cellDepth_in) / 2; // along the pocket axis (floor -> mouth)
+  const ht = inches(CAD.mouthDepth_in) / 2; // across the mouth
+  const phi = axisAngle_rad;
   const c = Math.cos(phi);
   const s = Math.sin(phi);
+  // The pocket's centre sits along the ARM; its box is oriented along the AXIS. Using one
+  // angle for both is what tilted the mouth 11 deg.
+  const cy = radius_m * Math.cos(armAngle_rad);
+  const cz = radius_m * Math.sin(armAngle_rad);
 
-  // (x, u, t) in pocket-local -> rocker body frame. u is radial-out from the pivot.
-  const place = (x: number, u: number, t: number): Vec3 => [
-    x,
-    (radius_m + u) * c - t * s,
-    (radius_m + u) * s + t * c,
-  ];
+  // (x, u, t) in pocket-local -> rocker body frame. u runs out along the pocket axis.
+  const place = (x: number, u: number, t: number): Vec3 => [x, cy + u * c - t * s, cz + u * s + t * c];
 
   const pieces: BoxPiece[] = [
     { name: `${tag}-floor`, half: [hx, th / 2, ht], pos: place(0, -hu + th / 2, 0), rotX: phi },
@@ -134,14 +177,15 @@ function pocketPieces(bodyAngle_rad: number, radius_m: number, tag: string): { p
 export function buildFieldGeometry(params: Params): FieldGeometry {
   const halfWidth_m = params.env.fieldInside_m / 2;
   const phiA = CELL_A_BODY_ANGLE_DEG * DEG;
-  const radius_m = inches(CAD.cellRadius_in);
+  const axA = CELL_A_AXIS_BODY_ANGLE_DEG * DEG;
+  const radius_m = inches(CELL_RADIUS_IN);
 
-  const a = pocketPieces(phiA, radius_m, 'A');
-  const b = pocketPieces(-phiA, radius_m, 'B');
+  const a = pocketPieces(phiA, axA, radius_m, 'A');
+  const b = pocketPieces(-phiA, -axA, radius_m, 'B');
 
   const cells: [CellGeometry, CellGeometry] = [
-    { id: 'A', bodyAngle_rad: phiA, radius_m, halfInterior: a.half, pieces: a.pieces },
-    { id: 'B', bodyAngle_rad: -phiA, radius_m, halfInterior: b.half, pieces: b.pieces },
+    { id: 'A', bodyAngle_rad: phiA, axisAngle_rad: axA, radius_m, halfInterior: a.half, pieces: a.pieces },
+    { id: 'B', bodyAngle_rad: -phiA, axisAngle_rad: -axA, radius_m, halfInterior: b.half, pieces: b.pieces },
   ];
 
   // Frame: an open A-frame, approximated by four corner posts, a top bar and two ACM side
@@ -211,11 +255,32 @@ export function buildFieldGeometry(params: Params): FieldGeometry {
   };
 }
 
+/**
+ * Pocket-local (x, u, t) -> rocker body frame. u runs out along the pocket AXIS from the
+ * pocket's centre, t across the mouth, x along the pivot axis.
+ *
+ * Every caller that needs this used to inline it, and every one of them inlined the same
+ * mistake: `(radius + u) * cos(bodyAngle)`, which puts u along the ARM instead of along the
+ * axis. They are 20 deg apart. One function now, so there is one place to be wrong.
+ */
+export function fromCellLocal(cell: CellGeometry, x: number, u: number, t: number): Vec3 {
+  const c = Math.cos(cell.axisAngle_rad);
+  const s = Math.sin(cell.axisAngle_rad);
+  return [
+    x,
+    cell.radius_m * Math.cos(cell.bodyAngle_rad) + u * c - t * s,
+    cell.radius_m * Math.sin(cell.bodyAngle_rad) + u * s + t * c,
+  ];
+}
+
 /** Transform a rocker-body-frame point into pocket-local (x, u, t) coordinates. */
 export function toCellLocal(cell: CellGeometry, p: Vec3): Vec3 {
-  const c = Math.cos(cell.bodyAngle_rad);
-  const s = Math.sin(cell.bodyAngle_rad);
-  return [p[0], p[1] * c + p[2] * s - cell.radius_m, -p[1] * s + p[2] * c];
+  const c = Math.cos(cell.axisAngle_rad);
+  const s = Math.sin(cell.axisAngle_rad);
+  // Relative to the pocket's CENTRE (down the arm), resolved along the pocket's own AXIS.
+  const dy = p[1] - cell.radius_m * Math.cos(cell.bodyAngle_rad);
+  const dz = p[2] - cell.radius_m * Math.sin(cell.bodyAngle_rad);
+  return [p[0], dy * c + dz * s, -dy * s + dz * c];
 }
 
 /** Is a point inside a pocket? Point is in the rocker body frame. */
@@ -225,10 +290,7 @@ export function pointInCell(cell: CellGeometry, p: Vec3, margin = 0): boolean {
   return Math.abs(x) < h[0] + margin && Math.abs(u) < h[1] + margin && Math.abs(t) < h[2] + margin;
 }
 
-/** Mouth centre of a cell, in the rocker body frame. */
+/** Mouth centre of a cell, in the rocker body frame: down the arm, then out along the axis. */
 export function cellMouthCentre(cell: CellGeometry): Vec3 {
-  const c = Math.cos(cell.bodyAngle_rad);
-  const s = Math.sin(cell.bodyAngle_rad);
-  const r = cell.radius_m + cell.halfInterior[1];
-  return [0, r * c, r * s];
+  return fromCellLocal(cell, 0, cell.halfInterior[1], 0);
 }

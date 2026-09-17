@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import params from '../config/params.json';
-import { buildFieldGeometry, CAD, REST_ANGLE_DEG, pointInCell, toCellLocal } from '../packages/core/src/field/geometry.js';
+import {
+  buildFieldGeometry, CAD, REST_ANGLE_DEG, MOUTH_TILT_DEG, LIP_LOW_IN, LIP_HIGH_IN,
+  pointInCell, toCellLocal, fromCellLocal, cellMouthCentre,
+} from '../packages/core/src/field/geometry.js';
+import { mouthLips } from '../tools/shottable.js';
 import { worldToFtc, ftcToWorld, worldYawToFtcHeadingDeg } from '../packages/core/src/field/ftcFrame.js';
 import { inches, toInches, DEG } from '../packages/core/src/units.js';
 import type { Params, Vec3 } from '../packages/core/src/types.js';
@@ -53,26 +57,47 @@ describe('ftcFrame', () => {
 });
 
 describe('rocker geometry', () => {
-  it('the rest angle derived from the CAD is 30.04 deg, matching the plan', () => {
-    expect(REST_ANGLE_DEG).toBeGreaterThan(29.5);
-    expect(REST_ANGLE_DEG).toBeLessThan(30.5);
+  it('the rocker swings +-30 deg, the CAD arm tilt', () => {
+    // cells.arm_tilt_deg in cad-summary.json. This is a STOP angle: it sets the holding
+    // torque and therefore the tip threshold, and it is NOT the pocket's angle. It used to
+    // be derived from the CELL centroid's bearing, which tangled the two together.
+    expect(REST_ANGLE_DEG).toBeCloseTo(30.0, 6);
   });
 
-  it('at the CAD rest angle CELL A sits where the CAD audience CELL sits', () => {
-    // Rotating cell A's body angle by theta = -restAngle must reproduce the CAD centroid
-    // (dY 9.82 in, dZ 11.28 in above/outboard of the pivot).
-    const theta = -G.restAngle_rad;
-    const phi = G.cells[0].bodyAngle_rad + theta;
-    const r = toInches(G.cells[0].radius_m);
-    expect(r * Math.cos(phi)).toBeCloseTo(53.77 - 43.95, 2);
-    expect(r * Math.sin(phi)).toBeCloseTo(11.28, 2);
+  it('PUTS THE CELL MOUTH WHERE THE MANUAL DOES', () => {
+    // The check that would have caught an 11 deg error in the pocket. Manual Fig 9-10: the
+    // opening's base lip is 53.5 in off the tiles and its apex 65.6 in, and the difference
+    // 12.1 = 14*cos(30) is the manual agreeing with itself. The tolerance is half an inch
+    // because halfInterior is inset by the 0.25 in plate, so these are the INTERIOR lips.
+    const lips = mouthLips(P);
+    expect(toInches(lips.near.y)).toBeCloseTo(LIP_LOW_IN, 0);
+    expect(toInches(lips.far.y)).toBeCloseTo(LIP_HIGH_IN, 0);
+    expect(Math.abs(toInches(lips.near.y) - LIP_LOW_IN)).toBeLessThan(0.5);
+    expect(Math.abs(toInches(lips.far.y) - LIP_HIGH_IN)).toBeLessThan(0.5);
   });
 
-  it('CELL B is the mirror of CELL A through the Z = 0 plane at the other rest angle', () => {
-    const phi = G.cells[1].bodyAngle_rad + G.restAngle_rad;
-    const r = toInches(G.cells[1].radius_m);
-    expect(r * Math.cos(phi)).toBeCloseTo(53.77 - 43.95, 2);
-    expect(r * Math.sin(phi)).toBeCloseTo(-11.28, 2);
+  it('points the pocket axis 30 deg above horizontal at rest, not 41', () => {
+    // The pocket axis in the world = axisAngle - restAngle from +Y. The old model read the
+    // arm's bearing (48.96 deg from vertical, i.e. 41 deg above horizontal) for both.
+    const axisFromVertical = (G.cells[0].axisAngle_rad - G.restAngle_rad) / DEG;
+    expect(90 - axisFromVertical).toBeCloseTo(MOUTH_TILT_DEG, 1);
+    expect(MOUTH_TILT_DEG).toBeCloseTo(30.0, 1);
+  });
+
+  it('places the pocket on an arm 20 deg off its own axis', () => {
+    // The two angles the simulator used to share. If they are ever equal again, the mouth
+    // is wrong by exactly their difference.
+    const arm = G.cells[0].bodyAngle_rad / DEG;
+    const axis = G.cells[0].axisAngle_rad / DEG;
+    expect(axis - arm).toBeGreaterThan(15);
+    expect(toInches(G.cells[0].radius_m)).toBeCloseTo(16.44, 1);
+  });
+
+  it('CELL B is the mirror of CELL A through the Z = 0 plane', () => {
+    const a = cellMouthCentre(G.cells[0]);
+    const b = cellMouthCentre(G.cells[1]);
+    expect(b[1]).toBeCloseTo(a[1], 9);
+    expect(b[2]).toBeCloseTo(-a[2], 9);
   });
 
   it('the pocket box fits inside the CAD up-CELL bbox to better than an inch', () => {
@@ -83,10 +108,9 @@ describe('rocker geometry', () => {
     const h = cell.halfInterior;
     for (const su of [-1, 1]) {
       for (const st of [-1, 1]) {
-        const phi = cell.bodyAngle_rad + theta;
-        const rr = cell.radius_m + su * h[1];
-        const y = rr * Math.cos(phi) - st * h[2] * Math.sin(phi);
-        const z = rr * Math.sin(phi) + st * h[2] * Math.cos(phi);
+        const q = fromCellLocal(cell, 0, su * h[1], st * h[2]);
+        const y = q[1] * Math.cos(theta) - q[2] * Math.sin(theta);
+        const z = q[1] * Math.sin(theta) + q[2] * Math.cos(theta);
         minY = Math.min(minY, toInches(y)); maxY = Math.max(maxY, toInches(y));
         minZ = Math.min(minZ, toInches(z)); maxZ = Math.max(maxZ, toInches(z));
       }
@@ -112,10 +136,9 @@ describe('rocker geometry', () => {
 
   it('pointInCell accepts the pocket centre and rejects a point outside the mouth', () => {
     const cell = G.cells[0];
-    const c = Math.cos(cell.bodyAngle_rad), s = Math.sin(cell.bodyAngle_rad);
-    const centre: Vec3 = [0, cell.radius_m * c, cell.radius_m * s];
+    const centre: Vec3 = fromCellLocal(cell, 0, 0, 0);
     expect(pointInCell(cell, centre)).toBe(true);
-    const outside: Vec3 = [0, (cell.radius_m + inches(20)) * c, (cell.radius_m + inches(20)) * s];
+    const outside: Vec3 = fromCellLocal(cell, 0, inches(20), 0);
     expect(pointInCell(cell, outside)).toBe(false);
     expect(toCellLocal(cell, centre)[1]).toBeCloseTo(0, 9);
   });

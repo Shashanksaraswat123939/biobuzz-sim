@@ -28,9 +28,9 @@
 import params from '../config/params.json' with { type: 'json' };
 import robotJson from '../config/robot.json' with { type: 'json' };
 import { simulateShot, type Aperture } from '../packages/core/src/physics/ballistics.js';
-import { DEG, M_TO_IN, inches, rpmToRadS } from '../packages/core/src/units.js';
+import { DEG, inches, rpmToRadS } from '../packages/core/src/units.js';
 import { mouthLips } from './shottable.js';
-import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
+import type { Params, RobotSpec } from '../packages/core/src/types.js';
 
 /** Does this launch thread the mouth? Same near-lip/far-lip test the shot table uses. */
 function threads(p: Params, spec: RobotSpec, ap: Aperture, speed: number, elevDeg: number, ballR: number): boolean {

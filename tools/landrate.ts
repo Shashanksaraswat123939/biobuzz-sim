@@ -87,41 +87,29 @@ export async function landRate(
   // whatever was in there at the instant of each tip, since a tip is the CELL doing its job
   // and dumping its contents. Both are counted, neither is assumed, and a ball that only
   // visits is counted by neither.
-  // STILL NOT TRUSTWORTHY, and the disagreement is how you can tell. tools/gatecal.ts run
-  // straight after tools/landcal.ts reported 1.0% for the same robot and the same table that
-  // landcal measured at 66% settled per shot. Both cannot be right, and each is wrong in its
-  // own direction:
+  // THE CENSUS NOW LIVES IN `World`, and this tool reads it rather than keeping its own
+  // (PHYSICS 9.15). It used to roll the bookkeeping here off `hives.red.ballsInUpCell`, which
+  // counts one CELL of one rocker -- and the rocker ROCKS, so a rotation short of a scored tip
+  // carried balls into the down CELL where it read zero, and a run could score all afternoon
+  // and report nothing. The shot log's `result` was wrong the other way, testing every cell of
+  // BOTH hives, so it counted the down CELL and the opponent's. gatecal read 1.0% where
+  // landcal had just measured 66% on the same robot and table; that disagreement is what it
+  // looks like when two tools answer the same question with two different definitions.
   //
-  //   HERE: `ballsInUpCell` counts one CELL of one rocker. The rocker ROCKS -- balls landing
-  //   in it rotate it -- and a rotation that does not reach a scored tip carries them into
-  //   the down CELL, where this reads zero. A run can score all afternoon and report nothing.
-  //
-  //   THERE: the shot log's `result === 'cell'` is set by world.trackBallStates, which tests
-  //   `pointInCell` over EVERY cell of BOTH hives. It counts the down CELL, and it counts the
-  //   opponent's hive.
-  //
-  // Neither is "balls in our up CELL at the buzzer". Fix that before believing any land rate
-  // in this repo, including the ones the threshold in config/robot.json was set from.
-  let prevInCell = world.hives.red.ballsInUpCell;
-  let tipsSeen = world.hives.red.tips;
-  let dumped = 0;
-  const census = () => {
-    if (world.hives.red.tips > tipsSeen) {
-      dumped += prevInCell;   // the census from BEFORE the dump
-      tipsSeen = world.hives.red.tips;
-    }
-    prevInCell = world.hives.red.ballsInUpCell;
-  };
+  // `World.landedInUpCell` is the one definition: balls in OUR up CELL now, plus whatever was
+  // in it at the instant of each TIP, since a tip is the CELL emptying itself.
   for (let f = 0; f < 60 * (shots * 3 + 10) && world.robot.shots < shots; f++) {
     while (world.robot.hopper.length < 4 && loaded < shots) {
       if (!world.robot.preload(world.balls, world.balls.balls[loaded])) break;
       loaded++;
     }
     step(fire);
-    census();
   }
-  for (let f = 0; f < 60 * 5; f++) { step(); census(); }
-  const landed = Math.min(world.robot.shots, dumped + world.hives.red.ballsInUpCell);
+  for (let f = 0; f < 60 * 5; f++) step();
+  // Less the three NECTAR the manual stages in the up CELL before the match (10.3.1 B.i):
+  // they are in the census and they are not something this robot landed.
+  const staged = 3;
+  const landed = Math.max(0, Math.min(world.robot.shots, world.landedInUpCell('red') - staged));
   return { fired: world.robot.shots, landed, tips: world.hives.red.tips, placed: true, log: world.snapshot().shots };
 }
 

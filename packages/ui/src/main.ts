@@ -28,7 +28,7 @@ import { knobs, predict, type Prediction } from '@core/analysis/sensitivity.js';
 import { analyse, toCsv, type Report } from '@core/analysis/report.js';
 import { Trace } from '@core/analysis/trace.js';
 import { M_TO_IN, DEG, inches } from '@core/units.js';
-import { Scene, type CameraMode } from '@render/scene.js';
+import { Scene, type CameraMode, type ZonePayload } from '@render/scene.js';
 import type { ActuatorFrame, Alliance, BallKind, GamepadState, Params, RobotSpec, Snapshot, Vec3 } from '@core/types.js';
 import { readKeyboard, installKeyboard, type Keys } from './input.js';
 import { m, cm, cmSigned, mps } from './units.js';
@@ -103,13 +103,7 @@ function build(): void {
   scene.showTrajectory = traj;
   // Off until asked for: it is a model map, and a coloured floor that is always on reads
   // like a measurement of where the robot scores, which it is not.
-  const zone = shotZoneJson as {
-    cells: { x_in: number; z_in: number; p: number }[];
-    cellsTipped?: { x_in: number; z_in: number; p: number }[];
-    threshold: number;
-    step_in: number;
-  };
-  scene.setShotZone(zone.cells ?? [], zone.cellsTipped ?? zone.cells ?? [], zone.threshold ?? 0.9, zone.step_in ?? 6);
+  scene.setShotZone(shotZoneJson as unknown as ZonePayload);
   scene.showShotZone = zone0;
   scene.resize();
   prediction = null;
@@ -526,6 +520,7 @@ const DECK: Record<Mode, Action[]> = {
     { label: 'Drop a POLLEN in the CELL', title: 'Places one POLLEN into your up CELL by hand. The quickest way to watch the HIVE tip: it takes 12.', run: () => dropBall() },
     { label: 'Shot arc', title: 'Draw the trajectory the ball would fly if it were fired this instant, using the same integrator the shot itself uses.', run: () => (scene.showTrajectory = !scene.showTrajectory), on: () => scene.showTrajectory },
     { label: 'Colliders', title: 'Show the convex shapes the solver actually collides with, instead of the CAD skin drawn over them.', run: () => (scene.showColliders = !scene.showColliders), on: () => scene.showColliders },
+    { label: 'Joystick', title: 'On-screen sticks: left translates, right turns. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
     { label: 'Shot zone', title: 'Green where a perfectly aimed shot clears the land-probability gate, red where it does not, using the hood and rpm the table commands at that range and the CELL mouth as seen from that spot. A MODEL map (tools/shotzone.ts), not a record of what this robot has hit.', run: () => (scene.showShotZone = !scene.showShotZone), on: () => scene.showShotZone },
     { label: 'Speed: 1x', title: 'Sim seconds per real second. The physics step never changes, so the trajectories are identical — it just runs more of them per frame.', run: () => cycleTurbo(), on: () => turbo > 1 },
     { label: 'Pause', title: 'Freeze the physics.', run: () => togglePause(), on: () => paused },

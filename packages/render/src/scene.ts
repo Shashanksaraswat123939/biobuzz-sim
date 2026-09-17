@@ -26,6 +26,8 @@ const CAD_URLS = import.meta.glob('../../../assets/field.glb', {
 const fieldUrl: string | undefined = Object.values(CAD_URLS)[0];
 import type { FieldGeometry, BoxPiece } from '@core/field/geometry.js';
 import { inches, M_TO_IN, DEG } from '@core/units.js';
+import { pThread } from '@core/physics/ballistics.js';
+import { loadLandCal } from '@core/robot/loadCal.js';
 import type { Snapshot, Vec3 } from '@core/types.js';
 
 const COL = {
@@ -115,7 +117,30 @@ function holedBallTexture(): THREE.Texture {
   return tex;
 }
 
+/** The map tools/shotzone.ts writes, with everything the live recompute needs. */
+export interface ZoneCellData {
+  x_in: number;
+  z_in: number;
+  p: number;
+  k?: {
+    lo: number; hi: number; sigma: number; pStay: number; halfLat: number;
+    ux: number; uz: number; dist: number; commanded: number; cosEl: number;
+  };
+}
+
+export interface ZonePayload {
+  threshold: number;
+  step_in: number;
+  maxSpeed: number;
+  yawScatterDeg: number;
+  cells: ZoneCellData[];
+  cellsTipped?: ZoneCellData[];
+}
+
 export class Scene {
+  /** Measured score -> frequency, so the painted number means what the gate means. */
+  private readonly zoneCal = loadLandCal();
+
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   readonly renderer: THREE.WebGLRenderer;
@@ -212,39 +237,34 @@ export class Scene {
   private cadStatics: THREE.Object3D[] = [];
   private cadLoaded = false;
   private zoneMesh: THREE.Mesh | null = null;
-  /** One texture per rocker stop: the mouth swings across the pivot on a TIP. */
-  private zoneTex: [THREE.CanvasTexture | null, THREE.CanvasTexture | null] = [null, null];
+  private zone: ZonePayload | null = null;
   private zoneSide: 0 | 1 = 0;
   /** Whose hive the map was computed for. tools/shotzone.ts builds it for red. */
   private zoneAlliance: 'red' | 'blue' = 'red';
+  /** Velocity the painted texture was computed at, so it is only redone when it matters. */
+  private zoneVel: [number, number] = [0, 0];
 
   /**
    * Paint the field with where a shot is worth taking (tools/shotzone.ts).
    *
    * One textured plane a centimetre off the tiles, not a mesh per square: the map is a
-   * picture, and a picture is a texture. Green clears the gate, red does not, and the spots
-   * with no solution at all are left clear so the floor shows through.
+   * picture, and a picture is a texture.
    *
-   * It is a MODEL map. It says where the physics is forgiving for a perfectly aimed shot,
+   * It is a MODEL map -- it says where the physics is forgiving for a perfectly aimed shot,
    * which is not the same as where this robot has been measured hitting anything.
    */
-  setShotZone(
-    cells: { x_in: number; z_in: number; p: number }[],
-    cellsTipped: { x_in: number; z_in: number; p: number }[],
-    threshold: number,
-    step_in: number,
-  ): void {
+  setShotZone(payload: ZonePayload): void {
+    this.zone = payload;
     if (this.zoneMesh) {
       this.scene.remove(this.zoneMesh);
+      (this.zoneMesh.material as THREE.MeshBasicMaterial).map?.dispose();
       this.zoneMesh.geometry.dispose();
       this.zoneMesh = null;
     }
-    for (const t of this.zoneTex) t?.dispose();
-    this.zoneTex = [this.paintZone(cells, threshold, step_in), this.paintZone(cellsTipped, threshold, step_in)];
-    if (!this.zoneTex[0]) return;
+    if (!payload.cells?.length) return;
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(2 * this.geom.halfWidth_m, 2 * this.geom.halfWidth_m),
-      new THREE.MeshBasicMaterial({ map: this.zoneTex[this.zoneSide], transparent: true, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
     );
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.y = 0.01;
@@ -252,54 +272,79 @@ export class Scene {
     mesh.visible = false;
     this.zoneMesh = mesh;
     this.scene.add(mesh);
+    this.repaintZone([0, 0]);
   }
 
-  /** One stop's worth of map, as a texture. */
-  private paintZone(
-    cells: { x_in: number; z_in: number; p: number }[],
-    threshold: number,
-    step_in: number,
-  ): THREE.CanvasTexture | null {
-    if (!cells.length) return null;
+  /**
+   * THE MAP MOVES WITH THE ROBOT, which is the whole reason the cells carry parameters
+   * rather than a finished probability.
+   *
+   * The lead keeps a shot's ground path the same whatever the robot is doing, so the
+   * aperture, the speed band and the entry rate belong to the SPOT and were solved once.
+   * What driving changes is the speed the shot has to leave at -- retreating needs a faster
+   * one -- and since launch scatter is a fraction of exit speed, the error at the mouth
+   * grows with it. That is arithmetic per cell, so it can run every frame.
+   */
+  private repaintZone(vel: [number, number]): void {
+    const z = this.zone;
+    const mesh = this.zoneMesh;
+    if (!z || !mesh) return;
+    this.zoneVel = vel;
+    const cells = (this.zoneSide === 1 ? z.cellsTipped : z.cells) ?? z.cells;
     const hw = this.geom.halfWidth_m;
     const px = 512;
     const cv = document.createElement('canvas');
     cv.width = px;
     cv.height = px;
     const g = cv.getContext('2d');
-    if (!g) return null;
+    if (!g) return;
     g.clearRect(0, 0, px, px);
-    const half = (step_in * 0.0254) / 2;
+
+    const sigmaYaw = Math.tan((z.yawScatterDeg * Math.PI) / 180);
+    const half = (z.step_in * 0.0254) / 2;
+    const w = Math.max(2, ((half * 2) / (2 * hw)) * px);
+    const toPx = (m: number) => ((m + hw) / (2 * hw)) * px;
+
     for (const c of cells) {
-      if (c.p <= 0) continue;
-      // Field metres -> texture pixels. The plane is laid out so +x is right and +z is down.
-      const toPx = (m: number) => ((m + hw) / (2 * hw)) * px;
-      const x = c.x_in * 0.0254;
-      const z = c.z_in * 0.0254;
-      const w = Math.max(2, (half * 2 / (2 * hw)) * px);
-      // Red below the gate, green above it, and the alpha carries how close it is either way.
-      const good = c.p >= threshold;
-      const t = Math.min(1, c.p / Math.max(threshold, 1e-6));
-      g.fillStyle = good ? 'rgba(60, 220, 120, 0.55)' : `rgba(230, 70, 60, ${(0.12 + 0.33 * t).toFixed(3)})`;
-      g.fillRect(toPx(x) - w / 2, toPx(z) - w / 2, w, w);
+      const k = c.k;
+      let p = 0;
+      if (k) {
+        const horiz = k.commanded * k.cosEl;
+        const required = Math.hypot(horiz * k.ux - vel[0], horiz * k.uz - vel[1]) / k.cosEl;
+        if (required <= z.maxSpeed) {
+          const sigma = k.sigma * (required / Math.max(k.commanded, 1e-6));
+          const speed = pThread(k.lo, k.hi, k.commanded, sigma);
+          const aim = pThread(-k.halfLat, k.halfLat, 0, k.dist * sigmaYaw);
+          p = this.zoneCal ? this.zoneCal.apply(speed * aim * k.pStay) : speed * aim * k.pStay;
+        }
+      }
+      // A RAMP, not three buckets. The calibration curve is a step function fitted to bins,
+      // so thresholding it turned neighbouring squares that differ by a percent into a
+      // red/green checkerboard -- the map looked like confetti rather than a place to stand.
+      const t = Math.min(1, p / Math.max(z.threshold, 1e-6));
+      g.fillStyle = p <= 0
+        ? 'rgba(140, 32, 32, 0.20)'               // no shot from here at all
+        : `hsla(${(8 + 124 * t).toFixed(0)}, 72%, 46%, ${(0.20 + 0.42 * t).toFixed(3)})`;
+      g.fillRect(toPx(c.x_in * 0.0254) - w / 2, toPx(c.z_in * 0.0254) - w / 2, w, w);
     }
+
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
-    return tex;
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    mat.map?.dispose();
+    mat.map = tex;
+    mat.needsUpdate = true;
   }
 
   /**
-   * Follow the rocker. A TIP puts it on its other stop and the up CELL becomes the other one,
-   * so the mouth swings across the pivot -- the zone measured 37 squares centred at z = -49 in
-   * there against 30 centred at +47 in before it. An overlay that did not switch would be
-   * telling the driver to stand in the wrong half of the field for the rest of the match.
+   * Follow the rocker. A TIP puts it on its other stop and the up CELL becomes the other
+   * one, so the mouth swings across the pivot and the zone goes with it. An overlay that did
+   * not switch would send the driver to the wrong half of the field for the rest of the match.
    */
   private setZoneSide(side: 0 | 1): void {
     if (side === this.zoneSide || !this.zoneMesh) return;
     this.zoneSide = side;
-    const m = this.zoneMesh.material as THREE.MeshBasicMaterial;
-    m.map = this.zoneTex[side] ?? this.zoneTex[0];
-    m.needsUpdate = true;
+    this.repaintZone(this.zoneVel);
   }
 
   set showShotZone(on: boolean) {
@@ -905,6 +950,14 @@ export class Scene {
       const g = this.rockers[i];
       if (g) g.rotation.x = h.angleDeg * DEG;
       if (h.alliance === this.zoneAlliance) this.setZoneSide(h.upCell === 'A' ? 0 : 1);
+    }
+
+    // Redo the map when the robot's motion has changed enough to move it. Repainting every
+    // frame would be a canvas upload per frame for a picture that barely changes; 0.15 m/s
+    // is about a tenth of top speed, and below that the map is the same map.
+    if (this.zoneMesh?.visible) {
+      const v: [number, number] = [s.robot.v[0], s.robot.v[2]];
+      if (Math.hypot(v[0] - this.zoneVel[0], v[1] - this.zoneVel[1]) > 0.15) this.repaintZone(v);
     }
 
     const r = s.robot;

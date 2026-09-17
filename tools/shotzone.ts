@@ -36,7 +36,25 @@ import { loadEntry, mouthLips } from './shottable.js';
 import { cmBare, m as fm } from './_units.js';
 import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
-export interface ZoneCell { x_in: number; z_in: number; range_in: number; offAxisDeg: number; p: number }
+export interface ZoneCell {
+  x_in: number; z_in: number; range_in: number; offAxisDeg: number;
+  /** P(land) for a STATIONARY robot, which is what the tool's own printout reports. */
+  p: number;
+  /**
+   * Everything needed to redo that probability at a different robot velocity WITHOUT
+   * re-running the solver.
+   *
+   * The expensive half of a cell is the trajectory integration, and velocity does not change
+   * it: the lead keeps the ball's ground path identical, so the aperture, the speed band and
+   * the entry rate are all properties of the SPOT. What motion changes is the exit speed the
+   * shot has to be taken at, and that is arithmetic. Shipping these lets the overlay follow
+   * the robot in real time instead of being a picture of standing still.
+   */
+  k?: {
+    lo: number; hi: number; sigma: number; pStay: number; halfLat: number;
+    ux: number; uz: number; dist: number; commanded: number; cosEl: number;
+  };
+}
 
 /**
  * Field-frame velocity of the robot, m/s, for asking whether the zone MOVES when it drives.
@@ -79,14 +97,21 @@ export function buildZone(
       const dz = mouthZ - z;
       const dist = Math.hypot(dx, dz);
       const range_in = dist * M_TO_IN;
-      if (range_in < minR || range_in > maxR) continue;
+      // EVERY square gets a cell, even the hopeless ones.
+      //
+      // Skipping them left the map full of holes, and a hole reads as "no information" when
+      // what it means is "you cannot shoot from here" -- which is the single most useful
+      // thing the map can tell a driver. A zero is drawn; a gap is not.
+      const blank = (x_in: number, z_in: number): ZoneCell =>
+        ({ x_in, z_in, range_in, offAxisDeg: 90, p: 0 });
+      if (range_in < minR || range_in > maxR) { cells.push(blank(x * M_TO_IN, z * M_TO_IN)); continue; }
       const row = table.lookup(range_in);
-      if (row.hoodDeg === undefined || row.rpm <= 0) continue;
+      if (row.hoodDeg === undefined || row.rpm <= 0) { cells.push(blank(x * M_TO_IN, z * M_TO_IN)); continue; }
 
       // |uz| is the cosine of the angle off the hive's normal: 1 straight in front of it.
       const uz = dz / dist;
       const cosOff = Math.abs(uz);
-      if (cosOff < 0.15) continue;                     // shooting along the slot, not into it
+      if (cosOff < 0.15) { cells.push(blank(x * M_TO_IN, z * M_TO_IN)); continue; }
       const offAxisDeg = Math.acos(Math.min(1, cosOff)) / DEG;
 
       const muzzleZ = z + spec.turret.muzzleOffset_m * uz;
@@ -101,7 +126,7 @@ export function buildZone(
         farHeight: lips.far.y - ballR,
       };
       const here = { x_in: x * M_TO_IN, z_in: z * M_TO_IN, range_in, offAxisDeg };
-      if (aperture.nearRange <= 0 || aperture.farRange <= aperture.nearRange) continue;
+      if (aperture.nearRange <= 0 || aperture.farRange <= aperture.nearRange) { cells.push({ ...here, p: 0 }); continue; }
 
       // The shot the TABLE commands here, tested against the aperture as seen from here.
       const solved = bestShot(p, {
@@ -141,11 +166,31 @@ export function buildZone(
       const halfLat = halfLat0 * cosOff;
       const aim = pThread(-halfLat, halfLat, 0, dist * Math.tan(f.scatter.yaw_deg * DEG));
       const raw = speed * aim * solved.pStay;
-      cells.push({ ...here, p: cal ? cal.apply(raw) : raw });
+      cells.push({
+        ...here,
+        p: cal ? cal.apply(raw) : raw,
+        k: {
+          lo: solved.speedLo, hi: solved.speedHi, sigma: solved.sigmaSpeed, pStay: solved.pStay,
+          halfLat, ux: dx / dist, uz: dz / dist, dist, commanded, cosEl,
+        },
+      });
     }
   }
   return { cells, threshold: f.minLandProb ?? 0.9 };
 }
+
+/** Round for the wire: four decimals is well past what a 512 px texture can show. */
+const trim = (c: ZoneCell) => ({
+  x_in: +c.x_in.toFixed(1),
+  z_in: +c.z_in.toFixed(1),
+  p: +c.p.toFixed(4),
+  k: c.k && {
+    lo: +c.k.lo.toFixed(4), hi: +c.k.hi.toFixed(4), sigma: +c.k.sigma.toFixed(5),
+    pStay: +c.k.pStay.toFixed(4), halfLat: +c.k.halfLat.toFixed(4),
+    ux: +c.k.ux.toFixed(4), uz: +c.k.uz.toFixed(4), dist: +c.k.dist.toFixed(3),
+    commanded: +c.k.commanded.toFixed(4), cosEl: +c.k.cosEl.toFixed(4),
+  },
+});
 
 export async function main(argv: string[] = []): Promise<void> {
   const i = argv.indexOf('--step');
@@ -225,9 +270,14 @@ export async function main(argv: string[] = []): Promise<void> {
     generated: new Date().toISOString(),
     step_in: step,
     threshold,
-    cells: cells.map((c) => ({ x_in: +c.x_in.toFixed(1), z_in: +c.z_in.toFixed(1), p: +c.p.toFixed(4) })),
+    /** Constants the live recompute needs, so the renderer does not import the robot spec. */
+    maxSpeed: (robotJson as unknown as RobotSpec).flywheel.k
+      * (robotJson as unknown as RobotSpec).flywheel.r_fly_m
+      * rpmToRadS((robotJson as unknown as RobotSpec).flywheel.maxRpm),
+    yawScatterDeg: (robotJson as unknown as RobotSpec).flywheel.scatter.yaw_deg,
+    cells: cells.map(trim),
     /** The same map for the rocker's other stop, which is where it sits after a TIP. */
-    cellsTipped: flipped.cells.map((c) => ({ x_in: +c.x_in.toFixed(1), z_in: +c.z_in.toFixed(1), p: +c.p.toFixed(4) })),
+    cellsTipped: flipped.cells.map(trim),
   }, null, 1) + String.fromCharCode(10));
   console.log('');
   console.log('  wrote config/shotzone.json');

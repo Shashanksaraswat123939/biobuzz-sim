@@ -193,9 +193,16 @@ describe('the shot zone map', () => {
     // The CELL mouth is a slot: its opening is fixed in the field frame, so what a shot has
     // to fit through is the opening seen edge-on, and that shrinks with the cosine. If this
     // ever inverts, the aperture is being built in the wrong frame.
+    //
+    // OVER THE CELLS THAT HAVE A SHOT AT ALL. Including the zeros makes this a comparison of
+    // COVERAGE -- how many squares in each wedge happen to sit inside the shot table's range
+    // -- which has nothing to do with the aperture and is not what the assertion above says.
+    // The near wedge is small and sits mostly too close to the mouth to solve, so 12% of its
+    // squares score at all against 20% of the far ones, and the two means crossed over on a
+    // recalibration while the shootable squares still ordered correctly (0.83 against 0.73).
     const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
-    const near = cells.filter((c) => c.offAxisDeg < 30).map((c) => c.p);
-    const far = cells.filter((c) => c.offAxisDeg > 45).map((c) => c.p);
+    const near = cells.filter((c) => c.offAxisDeg < 30 && c.p > 0).map((c) => c.p);
+    const far = cells.filter((c) => c.offAxisDeg > 45 && c.p > 0).map((c) => c.p);
     expect(near.length).toBeGreaterThan(3);
     expect(far.length).toBeGreaterThan(3);
     expect(mean(near)).toBeGreaterThan(mean(far));

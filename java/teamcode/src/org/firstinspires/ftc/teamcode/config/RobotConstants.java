@@ -46,6 +46,7 @@ public final class RobotConstants {
 
     public static final double HOOD_MIN_DEG = 30;
     public static final double HOOD_MAX_DEG = 85;
+    public static final double HOOD_TOL_DEG = 2;
 
     public static final double FLYWHEEL_TICKS_PER_REV = 28;
     public static final double FLYWHEEL_FREE_RPM = 6000;
@@ -65,7 +66,7 @@ public final class RobotConstants {
     /** loops of moving average over getVelocity(). One reading is quantised to about 107 RPM on a direct-driven 28-tick encoder */
     public static final int FLYWHEEL_RPM_FILTER_FRAMES = 6;
     /** refuse the shot below this CALIBRATED chance of landing. 0 disables the probability gate and leaves the RPM window alone */
-    public static final double FLYWHEEL_MIN_LAND_PROB = 0.9;
+    public static final double FLYWHEEL_MIN_LAND_PROB = 0.85;
     /** one sigma of launch bearing scatter */
     public static final double FLYWHEEL_YAW_SCATTER_DEG = 1;
 }

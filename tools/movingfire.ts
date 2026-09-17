@@ -85,7 +85,7 @@ function placeAt(world: World, spec: RobotSpec, range_in: number): void {
 }
 
 /** One pass: place, settle, fire while in band. Returns only what happened in band. */
-async function pass(c: Case, seed: number, maxSeconds: number, tau?: number): Promise<Run> {
+async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gate = 0): Promise<Run> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
@@ -93,7 +93,7 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number): Pr
   // mechanism question. The land-probability threshold is policy, and with it closed the first
   // version of this test fired nothing even STANDING STILL -- the start was 2.4 m out, past
   // the range any shot clears 90% from, so every case read zero and proved nothing.
-  spec.flywheel.minLandProb = 0;
+  spec.flywheel.minLandProb = gate;
   if (tau !== undefined) spec.transfer.leadLatency_s = tau;
   const staging = Array.from({ length: 80 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
   const world = new World({ params: p, robot: spec, staging, alliance: 'red', seed });
@@ -195,7 +195,7 @@ const sd = (a: number[]) => {
 const cm = (v: number) => (v * 2.54).toFixed(0);
 
 /** Pool passes, each on its own seed, until `seconds` of IN-BAND time has accumulated. */
-async function pool(c: Case, seconds: number, tau?: number) {
+async function pool(c: Case, seconds: number, tau?: number, gate = 0) {
   let secs = 0;
   let fired = 0;
   let landed = 0;
@@ -206,7 +206,7 @@ async function pool(c: Case, seconds: number, tau?: number) {
   const acc: number[] = [];
   const ranges: number[] = [];
   for (let i = 0; secs < seconds && i < 24; i++) {
-    const r = await pass(c, 7 + i * 18, seconds - secs, tau);
+    const r = await pass(c, 7 + i * 18, seconds - secs, tau, gate);
     if (r.secs < 0.2) break;                          // a pass that cannot even start
     secs += r.secs;
     fired += r.fired;
@@ -221,12 +221,58 @@ async function pool(c: Case, seconds: number, tau?: number) {
   return { secs, fired, landed, rpmErr: mean(rpmErrs), longs, lats, vr: mean(vr), acc: mean(acc), range: mean(ranges) };
 }
 
+/**
+ * WHAT SHOULD THE GATE BE SET TO? Balls in the CELL per second, not per shot.
+ *
+ * A threshold is a trade, and the per-shot land rate only prices one side of it. Refusing a
+ * 60% shot to wait for a 90% one is only right if the 90% one turns up inside the second and
+ * a half the refused cycle would have cost. `flywheel.minLandProb` was sitting at 0.900
+ * against a measured ceiling of 0.898 -- a setting no shot can satisfy except by rounding,
+ * which is why the robot would sit in a good zone holding fire.
+ */
+async function sweepGate(seconds: number): Promise<void> {
+  const cases: Case[] = [
+    { name: 'stopped', drive: [0, 0], wobble: 0, ramp: 0, start_in: 50 },
+    { name: 'steady closing', drive: [0, 0.18], wobble: 0, ramp: 0, start_in: 76 },
+    { name: 'fore/aft shuttle', drive: [0, 0], wobble: 0.35, ramp: 0, start_in: 50 },
+  ];
+  console.log('WHAT THE GATE COSTS: landed per second against the threshold.');
+  console.log(`  ${seconds} s of in-band time per cell. The calibration's ceiling is the most any`);
+  console.log('  threshold can honestly ask for; above it the gate just stops the robot shooting.');
+  console.log('');
+  const gates = [0, 0.4, 0.6, 0.7, 0.8, 0.85, 0.9];
+  console.log(`  ${'case'.padEnd(26)}${gates.map((g) => g.toFixed(2).padStart(6)).join('')}`);
+  for (const c of cases) {
+    const landed: string[] = [];
+    const fired: string[] = [];
+    for (const g of gates) {
+      const r = await pool(c, seconds, undefined, g);
+      landed.push((r.landed / Math.max(1e-9, r.secs)).toFixed(2).padStart(6));
+      fired.push((r.fired ? r.landed / r.fired : 0).toFixed(2).padStart(6));
+    }
+    console.log(`  ${(c.name + ' landed/s').padEnd(26)}${landed.join('')}`);
+    console.log(`  ${'  of those taken'.padEnd(26)}${fired.join('')}`);
+  }
+  console.log('');
+  console.log('  Read down a column for the trade at that setting: the top row is what the robot');
+  console.log('  actually scores, the bottom row is how careful it was being.');
+}
+
 export async function main(argv: string[] = []): Promise<void> {
   const i = argv.indexOf('--seconds');
   const seconds = i >= 0 ? Number(argv[i + 1]) : 20;
+  // THE GATE IS POLICY, and it is a separate question from whether the mechanism can take the
+  // shot. Default 0 measures the mechanism; --gate with robot.json's own threshold measures
+  // what the app actually does, which is what a driver sees.
+  if (argv.includes('--sweep')) return sweepGate(seconds);
+  const gi = argv.indexOf('--gate');
+  const gate = gi >= 0
+    ? (Number.isFinite(Number(argv[gi + 1])) ? Number(argv[gi + 1]) : (robotSpec as unknown as RobotSpec).flywheel.minLandProb ?? 0.9)
+    : 0;
 
   console.log('SHOOTING ON THE MOVE — is it the speed, or the change in speed?');
   console.log(`  ${seconds} s of IN-BAND time per case, pooled over passes; band ${BAND_IN[0]}-${BAND_IN[1]} in.`);
+  console.log(`  P(land) gate at ${gate === 0 ? '0 (mechanism only)' : `${(gate * 100).toFixed(0)}% -- what the app enforces`}.`);
   console.log('');
   console.log('  case                secs  range    v_r  |a_r|   shots/s   landed/s        landed   rpm err   where the shots went');
   const cases: Case[] = [
@@ -238,7 +284,7 @@ export async function main(argv: string[] = []): Promise<void> {
     { name: 'closing, wobbling', drive: [0, 0.18], wobble: 0.30, ramp: 0, start_in: 76 },
   ];
   for (const c of cases) {
-    const r = await pool(c, seconds);
+    const r = await pool(c, seconds, undefined, gate);
     const se = Math.sqrt(Math.max(r.landed, 1)) / r.secs;   // Poisson on the count
     console.log(
       `  ${c.name.padEnd(19)} ${r.secs.toFixed(0).padStart(4)}  ${r.range.toFixed(0).padStart(5)}` +
@@ -269,7 +315,7 @@ export async function main(argv: string[] = []): Promise<void> {
     { name: 'steady ramp', drive: [0, 0], wobble: 0, ramp: 0.06, start_in: 76 },
   ];
   for (const c of accelCases) for (const tau of [0, 0.15, 0.3]) {
-    const r = await pool(c, seconds, tau);
+    const r = await pool(c, seconds, tau, gate);
     console.log(
       `  ${c.name.padEnd(17)} ${tau.toFixed(2).padStart(6)}   ${(r.fired / r.secs).toFixed(2).padStart(7)}   ` +
       `${(r.landed / r.secs).toFixed(2).padStart(5)} +-${(Math.sqrt(Math.max(r.landed, 1)) / r.secs).toFixed(2)}   ` +

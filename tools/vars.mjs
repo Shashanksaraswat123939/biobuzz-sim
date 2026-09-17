@@ -77,7 +77,7 @@ out.push(section('Intake', [
 
 out.push(section('Hopper and transfer', [
   { path: 'hopper.capacity', value: robot.hopper.capacity, note: 'balls the robot can hold' },
-  ...rows(robot.transfer, ['cycleTime_s', 'feedPulse_s', 'feedTransit_s'], 'transfer'),
+  ...rows(robot.transfer, ['cycleTime_s', 'feedPulse_s', 'feedTransit_s', 'leadLatency_s'], 'transfer'),
   { path: 'transfer.gate', value: `${robot.transfer.gate.enabled ? 'enabled' : 'off'}, open ${robot.transfer.gate.open} / closed ${robot.transfer.gate.closed}`, note: 'servo gate before the wheel' },
 ]));
 
@@ -89,10 +89,10 @@ out.push(section('Turret', [
   { path: 'turret.motor.ticksPerDeg', value: robot.turret.motor.ticksPerDeg, note: `${robot.turret.motor.variant}, gear ${robot.turret.motor.gearRatio}` },
 ], inches));
 
-out.push(section('Hood', rows(robot.hood, ['enabled', 'angleRange_deg', 'fixedAngle_deg', 'speed_dps'], 'hood')));
+out.push(section('Hood', rows(robot.hood, ['enabled', 'angleRange_deg', 'fixedAngle_deg', 'speed_dps', 'tolDeg'], 'hood')));
 
 out.push(section('Flywheel', [
-  ...rows(robot.flywheel, ['type', 'I_fly_kgm2', 'r_fly_m', 'k', 'lossFactor', 'maxRpm', 'tolRpm', 'minRpmFrac', 'readySteps', 'dragQuad_Nms2', 'coulomb_Nm'], 'flywheel'),
+  ...rows(robot.flywheel, ['type', 'I_fly_kgm2', 'r_fly_m', 'k', 'lossFactor', 'maxRpm', 'tolRpm', 'minRpmFrac', 'readySteps', 'minLandProb', 'rpmFilterFrames', 'dragQuad_Nms2', 'coulomb_Nm'], 'flywheel'),
   { path: 'flywheel.motor', value: robot.flywheel.motor.variant, note: `${motors.variants[robot.flywheel.motor.variant].freeRpm} rpm free` },
   { path: 'flywheel.scatter', value: `${robot.flywheel.scatter.angle_deg} deg elev, ${robot.flywheel.scatter.yaw_deg} deg yaw, ${(robot.flywheel.scatter.speedFrac * 100).toFixed(1)}% speed`, note: 'shot-to-shot spread; the main reason shots miss' },
 ], inches));

@@ -77,6 +77,7 @@ K('double', 'TURRET_TICKS_PER_DEG', d(robot.turret.motor.ticksPerDeg ?? ticksPer
 lines.push('');
 K('double', 'HOOD_MIN_DEG', d(robot.hood.angleRange_deg[0]));
 K('double', 'HOOD_MAX_DEG', d(robot.hood.angleRange_deg[1]));
+K('double', 'HOOD_TOL_DEG', d(robot.hood.tolDeg ?? 2));
 lines.push('');
 K('double', 'FLYWHEEL_TICKS_PER_REV', d(flyTpr));
 K('double', 'FLYWHEEL_FREE_RPM', d(flyFree));

@@ -166,8 +166,15 @@ and tracks 15 m/s² of radial acceleration against the flywheel's 1.2.
 Only flight acceleration is left uncompensated: over a one-second flight the `a·t²` term is
 small next to 1–2° of launch scatter. `transfer.leadLatency_s` is a different thing — it
 predicts the velocity at *release*, and now that the wheel barely moves it is worth nothing
-either way (`tools/movingfire.ts` measures 0.33 / 0.33 / 0.30 landed per second at τ = 0,
-0.15, 0.3). It is kept because a real hood will lag in a way this one does not.
+either way (0.36 landed per second at τ = 0, 0.15 and 0.3 alike). It is kept because a real
+hood will lag in a way this one does not.
+
+**The hood has to have arrived.** It is the axis carrying the correction now, so the readiness
+gate waits for it — `hood.tolDeg`, 2°, derived from what the wheel is already allowed (60 rpm
+is ±21 cm of range, 1° of hood is 3.5 cm, so the RPM window is worth about 6° of hood). A servo
+is *commanded*, not measured, so this is readiness rather than another factor in the
+probability: once it is there the ball leaves with the table's launch vector and the speed band
+measured standing still applies again. It closes on under 1% of loops.
 
 > The azimuth **must** be wrapped. `atan2` returns (−180, 180] and the heading is subtracted
 > from it, so the result can land anywhere in (−540, 540). Unwrapped, a bearing of +90° came
@@ -182,6 +189,22 @@ angle means firing at nothing.
 band is widest. The aperture is modelled as a near lip to clear and a far lip to stay under —
 aiming at the mouth's centre is not enough, because a ball can pass through that point while
 still climbing and clip the near lip.
+
+**Will this shot land?** `P(exit speed threads the mouth) × P(pointing inside it) × P(it stays
+in)`, put through a measured score-to-frequency curve (`config/landcal.json`,
+`tools/landcal.ts`) so `flywheel.minLandProb` is a probability and not a score with a percent
+sign. Both the simulator's mirror and `AimController` on the hub compute it — the Java copy had
+been sitting there fully implemented, self-checked, and called by nothing, so the deliverable's
+only gate was the RPM window.
+
+> **A threshold above the ceiling is not caution, it is a robot that will not shoot.** This was
+> 0.900 against a measured ceiling of 0.898, so it could be satisfied only by rounding: 0.00
+> landed per second standing still at 50 in where the same robot with the gate open landed 0.45.
+> `tools/movingfire.ts --sweep` prices the threshold in *balls per second* — refusing a 60%
+> shot only pays if a better one arrives inside the 1.5 s cycle it costs — and 0.85 gives up
+> nothing while taking the hit rate of the shots it allows from 64% to 90–100%. The curve is
+> now fitted over three driving states as well as three ranges, because the gate is used on a
+> robot that is usually moving: it lands 80% standing still and 76% on the move.
 
 **Calibration** (`robot.calibration`): `rangeTrim_in` and `turretTrim_deg`. The table is
 looked up at `(range − rangeTrim)`, so a group landing 8 in long gets a trim of +8. The

@@ -61,7 +61,9 @@ export interface RobotSpec {
     /** Feed belt drive pulley radius: belt speed is motor omega times this. */
     beltRadius_m: number; gate: { enabled: boolean; servo: string; open: number; closed: number } };
   turret: { enabled: boolean; type: 'motor' | 'servo'; motor: MotorSpec; range_deg: [number, number]; speed_dps: number; accel_dps2: number; muzzleOffset_m: number; muzzleHeight_m: number };
-  hood: { enabled: boolean; servo: string; angleRange_deg: [number, number]; fixedAngle_deg: number; speed_dps: number };
+  hood: { enabled: boolean; servo: string; angleRange_deg: [number, number]; fixedAngle_deg: number; speed_dps: number;
+    /** How close the hood must be to the angle the shot needs before firing, degrees. */
+    tolDeg?: number };
   flywheel: { type: 'single' | 'dual'; motor: MotorSpec; I_fly_kgm2: number; r_fly_m: number; k: number; lossFactor: number; minRpmFrac: number; readySteps: number;
     /** Do not fire unless P(land) is at least this. Replaces tolRpm as the speed gate. */
     minLandProb?: number;

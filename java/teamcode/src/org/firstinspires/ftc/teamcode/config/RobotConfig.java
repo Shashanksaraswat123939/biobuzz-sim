@@ -48,6 +48,7 @@ public class RobotConfig {
 
     public final double hoodMinDeg = RobotConstants.HOOD_MIN_DEG;
     public final double hoodMaxDeg = RobotConstants.HOOD_MAX_DEG;
+    public final double hoodTolDeg = RobotConstants.HOOD_TOL_DEG;
 
     public final double flywheelTicksPerRev = RobotConstants.FLYWHEEL_TICKS_PER_REV;
     public final double flywheelTolRpm = RobotConstants.FLYWHEEL_TOL_RPM;

@@ -1053,3 +1053,59 @@ Did instead: Lay the roller over once at build time and turn the group about its
 Costs/risks: `Scene` now takes the RobotSpec. The displayed spin rate is 0.12 of the real one —
              proportional, so a stall still stops it, but it is not a tachometer.
 Who/where:   packages/render/src/scene.ts, packages/core/src/types.ts, physics/robot.ts, ui/main.ts
+
+## 2026-09-17 — The readiness gate could not see the hood, which is now the aiming axis
+Plan said:   (nothing — the gate grew with the shooter)
+Found:       `hoodThere` was hard-wired true whenever the fixed-speed table was absent, from
+             when the hood only ever held the shot table's stationary angle and arrived long
+             before the flywheel did. The motion lead SOLVES the hood now, so it moves every
+             loop and carries most of the correction — and nothing waited for it. Shots left
+             mid-slew at an elevation belonging to a velocity the robot had already left, and
+             the probability model could not see it happen: there is no hood term anywhere in
+             the speed-solving product, so a shot taken 10° off still scored 85%.
+Did instead: Gate on the hood having arrived, in both table paths. A servo is COMMANDED rather
+             than measured, so this is a readiness question and not another factor in the
+             probability — once the hood is there the ball leaves with the table's launch
+             vector and the speed band measured standing still is valid again. `hood.tolDeg`
+             is 2°, derived from what the wheel is already allowed: tolRpm = 60 is worth ±21 cm
+             of range and 1° of hood is 3.5 cm, so 60 rpm ≈ 6° of hood.
+Costs/risks: It closes on under 1% of loops at this servo speed, so it costs almost nothing —
+             but a real servo is slower than 120 °/s and will need it loosened, or the shot
+             will start waiting on the hood instead of the wheel.
+Who/where:   builtinTeleOp.ts, AimController.java, config/robot.json, types.ts
+
+## 2026-09-17 — The gate was set above the best the shooter can do, so it held fire
+Plan said:   Refuse a shot unless P(land) clears `flywheel.minLandProb`.
+Found:       `minLandProb` was 0.900 against a calibration whose measured CEILING was 0.8983.
+             The threshold was two tenths of a point ABOVE anything the shooter can honestly
+             claim, so it could be met only by rounding, and the robot sat in perfectly good
+             zones holding fire. Measured with the app's own setting: 0.00 landed per second
+             standing still at 50 in, where the same robot with the gate open landed 0.45.
+             This is what "it only shoots sometimes" was. The calibration was also fitted from
+             a robot that never moved, then applied to a robot that mostly does.
+Did instead: `tools/landcal.ts` now samples three driving states as well as three ranges, so
+             the curve describes the conditions the gate is used in — and it reports the split
+             (standing still 80% of 117, on the move 76% of 176, which is the corrected lead
+             showing up as a number). Then `tools/movingfire.ts --sweep` prices the threshold
+             in BALLS PER SECOND rather than per shot, because refusing a 60% shot is only
+             right if a better one turns up inside the 1.5 s the refused cycle costs. 0.85
+             gives up nothing (0.45 / 0.65 / 0.45, identical to an open gate) and takes the
+             hit rate of the shots it allows from 64% to 90–100%. 0.90 is zero everywhere.
+Costs/risks: The number is only meaningful against the curve it was measured with. Re-run
+             landcal and then the sweep whenever the shooter changes. The ceiling itself is a
+             fact about the shooter, not the gate: no threshold above 0.898 can ever be met.
+Who/where:   config/robot.json, config/landcal.json, tools/landcal.ts, tools/movingfire.ts
+
+## 2026-09-17 — LandProbability was implemented, self-checked and called by nothing
+Plan said:   The hub refuses a shot it does not expect to land.
+Found:       `LandProbability` is complete on the Java side, with its constants generated into
+             `ShotTableData` and its maths asserted by the build's self-check — and no caller.
+             The deliverable's only gate was the RPM window: one fixed band at every range,
+             blind to whether the turret was pointing into the mouth and blind to whether a
+             ball arriving like that stays in. The simulator's mirror had all three factors.
+Did instead: Wired it into `AimController`, against the same baked calibration, with the
+             measured speed mapped back into the frame the table's band was solved in. The hub
+             now prints `P(land) 67% < 85%` where it used to say READY and miss.
+Costs/risks: The hub will now hold fire in places it previously shot. That is the point, but
+             it makes `minLandProb` a live number on the robot rather than a simulator setting.
+Who/where:   AimController.java, Turret.java, RobotConfig.java, genconstants.mjs

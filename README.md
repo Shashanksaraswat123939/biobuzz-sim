@@ -113,9 +113,23 @@ npm test                                   # 84 tests
   restitution (`e_poly`, still a guess) — not by aiming.
 - **It shoots on the move, including while accelerating.** The lead solves the hood as well as
   the azimuth and the speed, so the ball leaves with the table's whole launch vector whatever
-  the robot is doing. `tools/movingfire.ts`: 0.63 landed/s closing, 0.83 closing while the
-  stick wobbles, 0.38 strafing, against 0.30 standing still, with the downrange bias inside
-  ±20 cm in every case. It used to be +38 to +104 cm long, or short enough never to arrive.
+  the robot is doing, and the gate waits for the hood to get there. Measured through the gate
+  the app actually enforces (`tools/movingfire.ts --gate`), landed per second and the hit rate
+  of the shots taken:
+
+  | | stopped | closing | strafing | shuttling | closing + wobbling |
+  |---|---|---|---|---|---|
+  | landed/s | 0.36 | 0.64 | 0.28 | 0.36 | 0.80 |
+  | of those taken | 90% | 94% | 100% | 64% | 100% |
+  | downrange bias | +7 cm | +3 cm | −8 cm | −5 cm | +4 cm |
+
+  Every moving case now shoots at least as often as standing still. Before, the same table
+  read 0.00 / 0.68 / 0.12 / 0.04 / 0.68 — the robot mostly held fire, because the threshold
+  was set two tenths of a point above the best land rate the shooter can achieve.
+- **`minLandProb` is set by what it costs, not by what it sounds like.**
+  `tools/movingfire.ts --sweep` prices it in balls per second: 0.85 gives up nothing against an
+  open gate and takes the hit rate from 64% to 90–100%. 0.90 scores zero everywhere, because
+  the calibration's measured ceiling is 0.898.
 - **Top speed matches the motor curve**: 62.8 in/s measured against 62 in/s hand-computed.
 
 ## Layout

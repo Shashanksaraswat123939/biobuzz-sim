@@ -46,8 +46,11 @@ public class Turret {
     }
 
     public boolean onTarget(double toleranceDeg) {
-        return Math.abs(getAngleDeg() - commandDeg) < toleranceDeg;
+        return Math.abs(errorDeg()) < toleranceDeg;
     }
+
+    /** Where it is minus where it was told to be, degrees. The land model needs the number. */
+    public double errorDeg() { return Units.wrapDeg(getAngleDeg() - commandDeg); }
 
     public void update() {
         if (motor == null) return;

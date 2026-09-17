@@ -13,6 +13,8 @@ public class AimController {
     private boolean aimed = false;
     private double lastRangeIn = 0;
     private double lastLeadDeg = 0;
+    private double lastHoodErrDeg = 0;
+    private double lastPLand = -1;
 
     public AimController(Robot robot) { this.robot = robot; }
 
@@ -20,6 +22,10 @@ public class AimController {
     public double rangeIn() { return lastRangeIn; }
     /** How many degrees of the aim are motion lead. Telemetry only. */
     public double leadDeg() { return lastLeadDeg; }
+    /** Hood angle minus the angle this shot needs, degrees. Telemetry only. */
+    public double hoodErrDeg() { return lastHoodErrDeg; }
+    /** Calibrated P(this shot lands), or -1 if the table carries no model. Telemetry only. */
+    public double pLand() { return lastPLand; }
 
     /** Call once per loop while aiming. Returns true when a shot is allowed. */
     public boolean update(boolean wantShot) {
@@ -73,9 +79,37 @@ public class AimController {
         // Against where the turret is actually POINTED, which is the led bearing.
         boolean pointing = robot.turret.onTarget(3.0) && robot.turret.tracker().canReach(lead.azimuthDeg);
         boolean inRange = robot.shots.usable(range);
+
+        // WAIT FOR THE HOOD. It used to hold the table's stationary angle and arrive long
+        // before the wheel did, so nothing checked it. The lead solves it now -- that is what
+        // makes shooting on the move work -- so it moves every loop and a shot taken mid-slew
+        // leaves at an elevation belonging to a velocity the robot has already left. A servo
+        // is commanded rather than measured, so this is a readiness question and not another
+        // factor in the probability: once the hood IS there, the ball leaves with the table's
+        // launch vector and the band the table measured standing still is valid again.
+        lastHoodErrDeg = robot.hood.getAngleDeg() - lead.elevationDeg;
+        boolean hoodThere = Math.abs(lastHoodErrDeg) <= robot.cfg.hoodTolDeg;
+
+        // WILL IT LAND? LandProbability has been sitting here fully implemented, self-checked
+        // and called by nothing, so the hub's only gate was the RPM window -- a fixed band at
+        // every range, blind to whether the robot was pointing into the mouth and blind to
+        // whether a ball arriving like this stays in. This is the same product the simulator's
+        // mirror computes, against the same baked calibration.
+        //
+        // The measured speed is mapped back into the frame the table's band was solved in:
+        // speedLo/speedHi thread the mouth from a STANDING robot at the table's own angle, and
+        // the lead moves both the angle and the speed, so the band moves with them.
+        double exitRel = robot.cfg.exitSpeedFor(robot.flywheel.getRpm()) - (lead.speed - tableSpeed);
+        lastPLand = LandProbability.pLand(
+                robot.shots, range, exitRel, range * 0.0254,
+                robot.turret.errorDeg(), robot.cfg.flywheelYawScatterDeg);
+        // -1 means the table predates the columns the model needs; fall through to the window
+        // rather than refusing every shot forever.
+        boolean likely = lastPLand < 0 || lastPLand >= robot.cfg.flywheelMinLandProb;
+
         // G417: only a shot into the up CELL may move the HIVE, and a hive already
         // tipping is not a target. Hold fire.
-        aimed = pointing && inRange && robot.flywheel.isReady() && !tp.isTipping();
+        aimed = pointing && inRange && hoodThere && likely && robot.flywheel.isReady() && !tp.isTipping();
         return aimed;
     }
 
@@ -96,6 +130,13 @@ public class AimController {
         if (!robot.turret.tracker().canReach(tp.getAzimuthDeg() + lead.correctionDeg)) return "turret cannot reach";
         if (!robot.turret.onTarget(3.0)) return "turret slewing";
         if (!robot.flywheel.isReady()) return "spinning up";
+        if (Math.abs(lastHoodErrDeg) > robot.cfg.hoodTolDeg) {
+            return String.format("hood %.0f off", lastHoodErrDeg);
+        }
+        if (lastPLand >= 0 && lastPLand < robot.cfg.flywheelMinLandProb) {
+            return String.format("P(land) %.0f%% < %.0f%%",
+                    lastPLand * 100, robot.cfg.flywheelMinLandProb * 100);
+        }
         if (robot.hopper.isEmpty()) return "hopper empty";
         return "READY";
     }

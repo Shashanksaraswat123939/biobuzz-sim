@@ -28,21 +28,34 @@ import robotJson from '../config/robot.json' with { type: 'json' };
 import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/world.js';
 import { BuiltinTeleOp, ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { inches } from '../packages/core/src/units.js';
-import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
+import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 // Three ranges, not five. The two longest ones mostly failed to place on the field or ran
 // out of firing window, so they cost a full run each and contributed almost nothing.
 const RANGES = [40, 55, 70];
 
-export interface Sample { predicted: number; landed: boolean; range_in: number }
+export interface Sample { predicted: number; landed: boolean; range_in: number; moving: boolean }
+
+/**
+ * How the robot is driving while it samples. THE APP SHOOTS ON THE MOVE and the calibration
+ * is what turns the model's score into the probability the gate compares against, so a curve
+ * fitted from a robot standing still is a curve that does not describe most of a match. It
+ * used to be stationary only, and every moving shot in the app was then gated on a number
+ * measured under conditions it was not taken in.
+ */
+const DRIVING: { name: string; stick: [number, number]; wobble: number }[] = [
+  { name: 'still', stick: [0, 0], wobble: 0 },
+  { name: 'strafing', stick: [0.45, 0], wobble: 0 },
+  { name: 'shuttling', stick: [0, 0], wobble: 0.35 },
+];
 
 /**
  * Fire at one range with the gate WIDE OPEN and record (prediction, outcome) per shot.
  * The gate must be open or the sample only ever covers the high-prediction end, which is
  * exactly the region a calibration curve cannot be fitted from.
  */
-async function sampleAt(range_in: number, shots: number, seed: number): Promise<Sample[]> {
+async function sampleAt(range_in: number, shots: number, seed: number, drive = DRIVING[0]): Promise<Sample[]> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotJson) as unknown as RobotSpec;
@@ -74,10 +87,18 @@ async function sampleAt(range_in: number, shots: number, seed: number): Promise<
   const press = emptyGamepad();
   press.a = true;
   step(press);
+  // Spin up STANDING STILL, then drive. Holding the stick through a 4 s spin-up walks the
+  // robot most of the way across the field before the first sample.
   for (let f = 0; f < 240; f++) step();
+  const t1 = world.t;
+  const wall = world.geom.halfWidth_m - 0.32;
+  const held = (): GamepadState => {
+    const g = emptyGamepad();
+    g.left_stick_x = drive.stick[0];
+    g.left_stick_y = -Math.max(-1, Math.min(1, drive.stick[1] + drive.wobble * Math.sin(2 * Math.PI * 0.5 * (world.t - t1))));
+    return g;
+  };
 
-  const fire = emptyGamepad();
-  fire.right_bumper = true;
   const predicted: number[] = [];
   let last = 0;
   let loaded = 0;
@@ -89,11 +110,15 @@ async function sampleAt(range_in: number, shots: number, seed: number): Promise<
     // Capture the prediction on the frame the shot leaves, not after -- the wheel dips on
     // firing, so reading it a frame later records a number the shot was never taken at.
     const before = brain.state.pLand;
-    step(fire);
+    step({ ...held(), right_bumper: true });
     if (world.robot.shots > last) {
       predicted.push(before);
       last = world.robot.shots;
     }
+    // A pass that drives into a wall stops being a moving sample and silently becomes a
+    // stationary one, which is the fault this whole change is about.
+    const r = world.robot.pos;
+    if (Math.abs(r[0]) > wall || Math.abs(r[2]) > wall) break;
   }
   // Let everything settle. A shot still in the air is recorded as 'flight' and thrown away,
   // and at 6 s a good fraction of them were -- which is how 240 attempts became 39 samples.
@@ -103,7 +128,7 @@ async function sampleAt(range_in: number, shots: number, seed: number): Promise<
   const out: Sample[] = [];
   for (let i = 0; i < predicted.length && i < log.length; i++) {
     if (log[i].result === 'flight') continue;      // never settled; no outcome to learn from
-    out.push({ predicted: predicted[i], landed: log[i].result === 'cell', range_in });
+    out.push({ predicted: predicted[i], landed: log[i].result === 'cell', range_in, moving: drive.wobble > 0 || drive.stick[0] !== 0 || drive.stick[1] !== 0 });
   }
   return out;
 }
@@ -123,12 +148,16 @@ export async function main(argv: string[] = []): Promise<void> {
 
   const all: Sample[] = [];
   for (const seed of seeds) {
-    for (const r of RANGES) all.push(...await sampleAt(r, shots, seed));
+    for (const r of RANGES) for (const d of DRIVING) all.push(...await sampleAt(r, shots, seed, d));
   }
   const flightless = all.length;
   console.log(`  ${flightless} shots with a settled outcome`);
   const byRange = RANGES.map((r) => `${r} in: ${all.filter((s2) => s2.range_in === r).length}`).join(', ');
   console.log(`  per range: ${byRange}`);
+  const mv = all.filter((s2) => s2.moving);
+  const st = all.filter((s2) => !s2.moving);
+  const pct = (a: Sample[]) => (a.length ? `${((a.filter((x) => x.landed).length / a.length) * 100).toFixed(0)}% of ${a.length}` : 'none');
+  console.log(`  standing still ${pct(st)};  on the move ${pct(mv)}`);
   console.log(`  predictions span ${(Math.min(...all.map((s2) => s2.predicted)) * 100).toFixed(0)}% to ${(Math.max(...all.map((s2) => s2.predicted)) * 100).toFixed(0)}%`);
   if (all.length < 40) {
     console.log('  NOT ENOUGH DATA to fit anything. Raise --shots or --seeds.');
@@ -174,7 +203,7 @@ export async function main(argv: string[] = []): Promise<void> {
 
   writeFileSync(new URL('../config/landcal.json', import.meta.url), JSON.stringify({
     _about: 'MEASURED by tools/landcal.ts: the mapping from the model\'s raw P(land) score to the frequency with which shots at that score ACTUALLY land. BuiltinTeleOp applies it so that flywheel.minLandProb is a real probability instead of a score.',
-    _method: `${all.length} settled shots over ${seeds.length} seeds and ${RANGES.length} ranges with the gate open. Bins forced monotone.`,
+    _method: `${all.length} settled shots over ${seeds.length} seeds, ${RANGES.length} ranges and ${DRIVING.length} driving states (${DRIVING.map((d) => d.name).join(', ')}) with the gate open. Bins forced monotone. The app shoots on the move, so the curve has to have been fitted on the move.`,
     generated: new Date().toISOString(),
     samples: all.length,
     ceiling,

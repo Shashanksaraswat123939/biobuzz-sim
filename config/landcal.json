@@ -1,34 +1,34 @@
 {
  "_about": "MEASURED by tools/landcal.ts: the mapping from the model's raw P(land) score to the frequency with which shots at that score ACTUALLY land. BuiltinTeleOp applies it so that flywheel.minLandProb is a real probability instead of a score.",
- "_method": "304 settled shots over 8 seeds and 3 ranges with the gate open. Bins forced monotone.",
- "generated": "2026-09-17T05:31:58.923Z",
- "samples": 304,
- "ceiling": 0.9016393442622951,
+ "_method": "293 settled shots over 4 seeds, 3 ranges and 3 driving states (still, strafing, shuttling) with the gate open. Bins forced monotone. The app shoots on the move, so the curve has to have been fitted on the move.",
+ "generated": "2026-09-17T08:51:29.516Z",
+ "samples": 293,
+ "ceiling": 0.8983050847457628,
  "points": [
   {
-   "score": 0.7786566962516988,
-   "observed": 0.04918032786885246,
-   "n": 61
+   "score": 0.6943149482459078,
+   "observed": 0.5084745762711864,
+   "n": 59
   },
   {
-   "score": 0.8639030849576977,
-   "observed": 0.7049180327868853,
-   "n": 61
+   "score": 0.8538620408962166,
+   "observed": 0.7288135593220338,
+   "n": 59
   },
   {
-   "score": 0.889450604886386,
-   "observed": 0.7704918032786885,
-   "n": 61
+   "score": 0.8945621324190429,
+   "observed": 0.8983050847457628,
+   "n": 59
   },
   {
-   "score": 0.911978419961825,
-   "observed": 0.9016393442622951,
-   "n": 61
+   "score": 0.9198161397691397,
+   "observed": 0.8983050847457628,
+   "n": 59
   },
   {
-   "score": 0.9354330650202477,
-   "observed": 0.9016393442622951,
-   "n": 60
+   "score": 0.9418080173603406,
+   "observed": 0.8983050847457628,
+   "n": 57
   }
  ]
 }

@@ -195,6 +195,8 @@ export interface TeleOpState {
   hold: string;
   targetRpm: number;
   turretErrDeg: number;
+  /** Hood angle minus the angle this shot needs, degrees. The lead moves it every loop. */
+  hoodErrDeg: number;
   /** How far the motion lead moved the aim, degrees. */
   leadDeg: number;
   note: string;
@@ -208,7 +210,7 @@ export interface TeleOpState {
 export const newTeleOpState = (): TeleOpState => ({
   autoAim: true, firing: false,
   turretManualDeg: 0, flywheelOn: false,
-  ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, leadDeg: 0,
+  ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
   lastFeedT: -999, pulsing: false, vRadial: 0,
 });
@@ -521,8 +523,25 @@ export class BuiltinTeleOp {
     // one speed, so what has to arrive is the HOOD. A servo settles in tens of milliseconds
     // against the flywheel's tenths of a second, and it is a commanded position rather than a
     // measured speed -- there is nothing in the loop to be wrong about.
+    //
+    // AND IT IS NOW THE QUESTION FOR THE SPEED-SOLVING TABLE TOO. `hoodThere` used to be
+    // hard-wired true whenever the fixed-speed table was absent, from when the hood only ever
+    // held the table's stationary angle and arrived long before the wheel did. The motion lead
+    // solves the hood now -- that is what makes shooting on the move work at all -- so the
+    // hood is the axis carrying the correction, it moves every loop, and nothing was waiting
+    // for it. Shots went out mid-slew, at an elevation that belonged to a velocity the robot
+    // had already left, and the probability model could not see it happen: there is no hood
+    // term in the speed-solving product, so a shot taken 10 deg off still scored 85%.
+    //
+    // A servo has no measurement uncertainty -- it is commanded, not read -- so this is a
+    // readiness question rather than another factor in the probability. Once the hood IS at
+    // the solved elevation the ball leaves with the table's launch vector exactly, and the
+    // speed band the table measured standing still is valid again.
     const usingHood = !!(this.hoodTable && !this.hoodTable.isEmpty);
-    const hoodThere = !usingHood || (!!cell && hoodNow >= cell.lo && hoodNow <= cell.hi);
+    st.hoodErrDeg = usingHood ? (cell ? hoodNow - cell.mid : NaN) : hoodNow - lead.elevationDeg;
+    const hoodThere = usingHood
+      ? (!!cell && hoodNow >= cell.lo && hoodNow <= cell.hi)
+      : Math.abs(st.hoodErrDeg) <= (this.spec.hood.tolDeg ?? 2);
     const haveShot = !usingHood || !!cell;
     const probOk = usingHood ? st.pLand >= minP : !haveModel || st.pLand >= minP;
     const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
@@ -535,7 +554,7 @@ export class BuiltinTeleOp {
       // No cell is a real answer, not a failure: there is no hood angle that scores from here
       // at this closing speed, and saying so beats holding with an unexplained low number.
       : usingHood && !cell ? 'no shot from here at this speed'
-      : usingHood && !hoodThere ? `hood ${hoodNow.toFixed(0)} deg, want ${cell?.mid.toFixed(0)}`
+      : !hoodThere ? `hood ${hoodNow.toFixed(0)} deg, want ${(usingHood ? cell?.mid : lead.elevationDeg)?.toFixed(0)}`
       : !haveModel && !usingHood ? ''
       // A threshold ABOVE THE MEASURED CEILING cannot be met by any shot this shooter can
       // take, so the robot sits there forever printing a number that reads like bad luck.
@@ -603,6 +622,7 @@ export class BuiltinTeleOp {
         ['margin', `${(row.margin * 100).toFixed(1)}%`],
         ['lead deg', st.leadDeg.toFixed(1)],
         ['turret err', st.turretErrDeg.toFixed(1)],
+        ['hood err', Number.isFinite(st.hoodErrDeg) ? st.hoodErrDeg.toFixed(1) : '-'],
       ],
     };
   }

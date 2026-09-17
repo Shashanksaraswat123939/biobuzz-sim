@@ -397,9 +397,21 @@ function paintRobot(s: Snapshot, rangeIn: number): void {
       ? 'Resting on its stop. The mark is where the balls beat gravity.'
       : `${(progress * 100).toFixed(0)}% of the torque needed to go over.`;
 
+  // BOTH CELLS PUSH. `ballTorque` is the net over every ball on the rocker, and after a tip
+  // the ones dumped into the now-down CELL are still sitting there holding it down. Showing
+  // that net on a line under "elements in up CELL" reads as a contradiction -- four balls
+  // and a torque pushing the wrong way -- so the two are split out. The down-CELL load is
+  // real and it is why a tipped HIVE is harder to tip back.
+  const upIds = new Set(hive.perBallTorque.filter((b) => hive.upCell === 'A' ? b.lever_in > 0 : b.lever_in < 0).map((b) => b.id));
+  const sgn = restoring > 1e-6 ? Math.sign(hive.gravityTorque_Nm) : 1;
+  const upPush = -hive.perBallTorque.filter((b) => upIds.has(b.id)).reduce((a, b) => a + b.torque_Nm, 0) * sgn;
+  const downHold = -hive.perBallTorque.filter((b) => !upIds.has(b.id)).reduce((a, b) => a + b.torque_Nm, 0) * sgn;
+
   $('#r-hive').innerHTML = [
     row('elements in up CELL', String(hive.ballsInUpCell)),
-    row('ball torque', `${pushing.toFixed(3)} N·m`, pushing > restoring ? 'good' : ''),
+    row('up CELL pushes over', `${upPush.toFixed(3)} N·m`, upPush > restoring ? 'good' : ''),
+    row('down CELL holds it', `${(-downHold).toFixed(3)} N·m`, downHold < -1e-6 ? 'bad' : ''),
+    row('net from balls', `${pushing.toFixed(3)} N·m`, pushing > restoring ? 'good' : ''),
     row('gravity holds', `${restoring.toFixed(3)} N·m`),
     row('angle', `${hive.angleDeg.toFixed(2)}°`),
     row('up CELL faces', hive.upCell),
@@ -926,6 +938,11 @@ function topUpHopper(): void {
   for (const b of world.balls.balls) {
     if (b.kind !== 'pollen') continue;
     if (b.state === 'hopper' || b.state === 'intake' || b.state === 'flight') continue;
+    // NEVER OUT OF A CELL OR A FLOWER. Those balls are SCORED. Taking one back is not a
+    // practice aid, it is un-scoring a point -- and it emptied the CELL faster than the robot
+    // could fill it, so the HIVE never reached the ball torque it needed to go over. A
+    // recycler that reaches into the goal is worse than one that runs dry.
+    if (b.state === 'cell' || b.state === 'flower') continue;
     if (b.state === 'free' && b.body.isEnabled()) {
       const q = world.balls.pos(b);
       if (q[1] <= inches(8)) {            // lying on the tiles, where an intake could reach it
@@ -934,8 +951,8 @@ function topUpHopper(): void {
         continue;
       }
     }
-    // Out of play: benched by park(), or resting in a CELL. Recyclable rather than lost.
-    if (!spare) spare = b;
+    // Benched by park(): out of play and nobody's points. Fair to recycle.
+    if (b.state === 'parked' && !spare) spare = b;
   }
   const take = best ?? spare;
   if (take) world.robot.preload(world.balls, take);

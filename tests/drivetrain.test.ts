@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import params from '../config/params.json';
 import robotSpec from '../config/robot.json';
 import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/world.js';
-import { BuiltinTeleOp, ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
+import { BuiltinTeleOp, ShotTable, SPEED_STEP } from '../packages/core/src/robot/builtinTeleOp.js';
 import { M_TO_IN } from '../packages/core/src/units.js';
 import type { ActuatorFrame, GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
@@ -100,25 +100,23 @@ describe('drivetrain (PLAN.md phase 2)', () => {
     return w.robot.pos;
   };
 
-  it('field-centric by default: the stick drives the FIELD, whatever way the robot points', () => {
-    const g = emptyGamepad();
-    g.left_stick_y = -1;          // stick up
-    // Yaw 0 and yaw 90 must go the SAME way in the world. That is the whole property.
-    const at0 = drive(0, g);
-    const at90 = drive(90, g);
-    expect(at0[2]).toBeGreaterThan(0.3);            // +Z, away from the driver station
-    expect(at90[2]).toBeGreaterThan(0.3);            // and the same, nose sideways
-    expect(Math.abs(at90[0])).toBeLessThan(0.15);    // not along its own nose
-  });
-
-  it('holding Y gives robot-centric back, for a drifted IMU', () => {
+  it('robot-centric by default: forward is the nose, which is where the intake is', () => {
     const g = emptyGamepad();
     g.left_stick_y = -1;
-    g.y = true;
-    // Facing +X (yaw 90): robot-centric forward is along its own nose, +X.
+    // Facing +X (yaw 90): the nose points at +X, so that is where "forward" goes.
     const p = drive(90, g);
     expect(p[0]).toBeGreaterThan(0.3);
     expect(Math.abs(p[2])).toBeLessThan(0.15);
+  });
+
+  it('holding R3 gives field-centric, measured from the re-zero heading', () => {
+    const g = emptyGamepad();
+    g.left_stick_y = -1;
+    g.right_stick_button = true;
+    // Same yaw 90, but the stick now points down the FIELD (+Z) whatever the robot does.
+    const p = drive(90, g);
+    expect(p[2]).toBeGreaterThan(0.3);
+    expect(Math.abs(p[0])).toBeLessThan(0.15);
   });
 
   it('strafing left and right are mirror images', () => {
@@ -152,5 +150,64 @@ describe('drivetrain (PLAN.md phase 2)', () => {
       world.step(brain.update(world.sensors(), g, world.seq));
     }
     expect(world.robot.pos[2] - start).toBeGreaterThan(0.3);
+  });
+});
+
+describe('the driver layout', () => {
+  const step = (brain: BuiltinTeleOp, g: GamepadState, n = 3) => {
+    const w = rig();
+    for (let i = 0; i < n; i++) brain.update(w.sensors(), g, i, 1 / 60);
+  };
+
+  it('Y and A ratchet the speed gear between one detent and full, and nowhere outside it', () => {
+    const brain = new BuiltinTeleOp(robotSpec as unknown as RobotSpec, new ShotTable([]));
+    const tap = (k: 'y' | 'a') => {
+      const g = emptyGamepad();
+      (g as unknown as Record<string, boolean>)[k] = true;
+      step(brain, g, 1);
+      step(brain, emptyGamepad(), 1);
+    };
+    expect(brain.state.speedScale).toBeCloseTo(1, 6);
+    for (let i = 0; i < 9; i++) tap('a');
+    expect(brain.state.speedScale).toBeCloseTo(SPEED_STEP, 6);   // floors, never zero or negative
+    for (let i = 0; i < 9; i++) tap('y');
+    expect(brain.state.speedScale).toBeCloseTo(1, 6);            // and ceilings at full
+  });
+
+  it('the gear actually limits the robot, and a lower gear is slower', () => {
+    const far = (scale: number) => {
+      const w = rig();
+      w.robot.place([0, 0.17, 0], 0);
+      const brain = new BuiltinTeleOp(robotSpec as unknown as RobotSpec, new ShotTable([]));
+      brain.state.speedScale = scale;
+      const g = emptyGamepad();
+      g.left_stick_y = -1;
+      for (let i = 0; i < 90; i++) w.step(brain.update(w.sensors(), g, i, 1 / 60));
+      return Math.hypot(w.robot.pos[0], w.robot.pos[2]);
+    };
+    const full = far(1);
+    const low = far(SPEED_STEP);
+    expect(low).toBeLessThan(full * 0.5);
+    expect(low).toBeGreaterThan(0.02);   // still moves: a gear is a limit, not a brake
+  });
+
+  it('X turns one way and B the other, and neither translates', () => {
+    const spin = (k: 'x' | 'b') => {
+      const w = rig();
+      w.robot.place([0, 0.17, 0], 0);
+      const brain = new BuiltinTeleOp(robotSpec as unknown as RobotSpec, new ShotTable([]));
+      const g = emptyGamepad();
+      // The UI synthesises X/B into right_stick_x before the brain sees them; the brain's
+      // own contract is still the yaw axis, so that is what is exercised here.
+      g.right_stick_x = k === 'b' ? 1 : -1;
+      for (let i = 0; i < 60; i++) w.step(brain.update(w.sensors(), g, i, 1 / 60));
+      return { yaw: w.robot.yaw, d: Math.hypot(w.robot.pos[0], w.robot.pos[2]) };
+    };
+    const left = spin('x');
+    const right = spin('b');
+    expect(Math.sign(left.yaw)).toBe(-Math.sign(right.yaw));
+    expect(Math.abs(left.yaw)).toBeGreaterThan(0.2);
+    expect(left.d).toBeLessThan(0.08);
+    expect(right.d).toBeLessThan(0.08);
   });
 });

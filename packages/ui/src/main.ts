@@ -23,6 +23,7 @@ import shotZoneJson from '../../../config/shotzone.json';
 import { World, initPhysics, emptyGamepad } from '@core/physics/world.js';
 import { BuiltinTeleOp, ShotTable } from '@core/robot/builtinTeleOp.js';
 import { loadLandCal } from '@core/robot/loadCal.js';
+import { buildMotor } from '@core/physics/motor.js';
 import { AutoDriver, defaultPlan, type AutoPlan } from '@core/robot/autoDriver.js';
 import { AutoRoutine } from '@core/robot/autoRoutine.js';
 import { simulateShot, rpmToSpeed } from '@core/physics/ballistics.js';
@@ -32,7 +33,7 @@ import { Trace } from '@core/analysis/trace.js';
 import { M_TO_IN, DEG, RAD, inches } from '@core/units.js';
 import { Scene, type CameraMode, type ZonePayload } from '@render/scene.js';
 import type { ActuatorFrame, Alliance, BallKind, GamepadState, Params, RobotSpec, Snapshot, Vec3 } from '@core/types.js';
-import { readKeyboard, installKeyboard, type Keys } from './input.js';
+import { readKeyboard, installKeyboard, type Keys, type Paddles } from './input.js';
 import { m, cm, cmSigned, mps } from './units.js';
 import { Joysticks } from './joystick.js';
 import { buildTunePanel, type Tunable } from './tune.js';
@@ -157,6 +158,8 @@ function onTune(t: Tunable): void {
  * a step anyway. Release is deliberately faster than push, because stopping should not have
  * to be planned. A real analog stick is passed through untouched -- it is already analog.
  */
+const VIEW_YAW_RATE = 2.4;   // rad/s at full stick: a half turn in 1.3 s
+const VIEW_PITCH_RATE = 1.4;
 const SLEW_UP = 5.0;    // full deflection in 0.2 s
 const SLEW_DOWN = 12.0; // and back to nothing in 0.08 s
 const slewed = { lx: 0, ly: 0, rx: 0 };
@@ -172,31 +175,83 @@ function slew(now: number, want: number, dt: number): number {
  * analog in principle, but a thumb on a touch screen snaps to the edge much as a key does, so
  * it gets the same treatment; a real gamepad stick does not.
  */
-function rampDigital(s: GamepadState): GamepadState {
+function rampDigital(s: GamepadState, analogSticks = false): GamepadState {
   const dt = Math.min(0.05, lastFrameDt);
+  // YAW IS ALWAYS RAMPED, even on a real controller: it comes from the X and B BUTTONS now,
+  // and an un-ramped button would slam the chassis to full rotation in one frame. The
+  // translation sticks are only ramped when they are digital -- slewing a real analog stick
+  // just adds 0.2 s of lag to an input that is already smooth.
+  slewed.rx = slew(slewed.rx, s.right_stick_x, dt);
+  if (analogSticks) return { ...s, right_stick_x: slewed.rx };
   slewed.lx = slew(slewed.lx, s.left_stick_x, dt);
   slewed.ly = slew(slewed.ly, s.left_stick_y, dt);
-  slewed.rx = slew(slewed.rx, s.right_stick_x, dt);
   return { ...s, left_stick_x: slewed.lx, left_stick_y: slewed.ly, right_stick_x: slewed.rx };
 }
+
+/**
+ * PHYSICAL buttons to what they DO, in one place.
+ *
+ * The pad the driver holds and the frame the brain reads are deliberately not the same thing.
+ * The brain's `GamepadState` is the wire the Java OpMode sees, so its field names are fixed;
+ * the driver's layout is not, and it changed:
+ *
+ *   left stick   translate            right stick  the VIEW (never the robot)
+ *   X / B        turn left / right    Y / A        speed gear up / down
+ *   R1           fire                 L1(+L3)      crawl / re-zero the field frame
+ *   M1 / M2      auto-aim / auto-fire R3           hold for robot-centric
+ *
+ * Turning moved off the right stick because the right stick now moves the camera, and the
+ * brain's yaw command is still `right_stick_x` -- so X/B are synthesised into it here, BEFORE
+ * `rampDigital`, which means a button press ramps the yaw exactly like a stick deflection
+ * instead of stepping it. Nothing downstream of this function knows the layout changed.
+ */
+function remap(phys: GamepadState, pad: Paddles): GamepadState {
+  return {
+    ...phys,
+    right_stick_x: (phys.b ? 1 : 0) - (phys.x ? 1 : 0),  // B right, X left
+    x: pad.m1,                       // M1: auto-aim toggle
+    right_bumper: pad.m2,            // M2: auto-fire latch
+    b: phys.right_bumper,            // R1: fire while held
+  };
+}
+
+/**
+ * Free-running top speed of the drivetrain, m/s: the drive motor's free speed through its
+ * gearing, times the wheel radius. This is the ceiling the gear bar is a fraction OF. The
+ * robot never quite reaches it under load, which is the honest thing for a speed LIMIT to
+ * show -- it is the limit being set, not the speed being achieved.
+ */
+const topSpeed_ms = buildMotor(robotSpec.drivetrain.motors.fl).freeOmega * robotSpec.drivetrain.wheelRadius_m;
+
+/** The physical right stick, which the brain never sees: it drives the camera. */
+let viewStick = { x: 0, y: 0 };
 
 function gamepadState(): GamepadState {
   const g = navigator.getGamepads?.().find((p) => p);
   const k = readKeyboard(keys);
-  if (!g) return rampDigital(sticks.merge(k));
+  if (!g) {
+    viewStick = { x: k.right_stick_x, y: k.right_stick_y };
+    return rampDigital(remap(sticks.merge(k), k.paddles));
+  }
   const dz = (v: number) => (Math.abs(v) < 0.09 ? 0 : v);
+  const btn = (i: number) => g.buttons[i]?.pressed ?? false;
+  // M1/M2 past the standard 17 on the pads that have them; L1/L2 on the pads that do not.
+  const paddles: Paddles = {
+    m1: (btn(16) || (g.buttons.length <= 17 && btn(4))) || k.paddles.m1,
+    m2: (btn(17) || (g.buttons.length <= 17 && (g.buttons[6]?.value ?? 0) > 0.5)) || k.paddles.m2,
+  };
   const merged: GamepadState = {
     left_stick_x: dz(g.axes[0] ?? 0) || k.left_stick_x,
     left_stick_y: dz(g.axes[1] ?? 0) || k.left_stick_y,
     right_stick_x: dz(g.axes[2] ?? 0) || k.right_stick_x,
     right_stick_y: dz(g.axes[3] ?? 0) || k.right_stick_y,
-    left_trigger: Math.max(g.buttons[6]?.value ?? 0, k.left_trigger),
+    left_trigger: Math.max(paddles.m2 ? 0 : (g.buttons[6]?.value ?? 0), k.left_trigger),
     right_trigger: Math.max(g.buttons[7]?.value ?? 0, k.right_trigger),
     a: (g.buttons[0]?.pressed ?? false) || k.a,
     b: (g.buttons[1]?.pressed ?? false) || k.b,
     x: (g.buttons[2]?.pressed ?? false) || k.x,
     y: (g.buttons[3]?.pressed ?? false) || k.y,
-    left_bumper: (g.buttons[4]?.pressed ?? false) || k.left_bumper,
+    left_bumper: k.left_bumper,   // L1 is M1's fallback; crawl is shift/on-screen only there
     right_bumper: (g.buttons[5]?.pressed ?? false) || k.right_bumper,
     dpad_up: (g.buttons[12]?.pressed ?? false) || k.dpad_up,
     dpad_down: (g.buttons[13]?.pressed ?? false) || k.dpad_down,
@@ -204,10 +259,11 @@ function gamepadState(): GamepadState {
     dpad_right: (g.buttons[15]?.pressed ?? false) || k.dpad_right,
     start: (g.buttons[9]?.pressed ?? false) || k.start,
     back: (g.buttons[8]?.pressed ?? false) || k.back,
-    left_stick_button: g.buttons[10]?.pressed ?? false,
-    right_stick_button: g.buttons[11]?.pressed ?? false,
+    left_stick_button: btn(10) || k.left_stick_button,
+    right_stick_button: btn(11) || k.right_stick_button,
   };
-  return sticks.merge(merged);
+  viewStick = { x: merged.right_stick_x, y: merged.right_stick_y };
+  return rampDigital(remap(sticks.merge(merged), paddles), true);
 }
 
 /** Same sticks, edge-triggered buttons released: a toggle fires once per animation frame. */
@@ -220,12 +276,13 @@ function padShortcuts(g: GamepadState): void {
   padPrev = { ...g };
   if (!p) return;
   const edge = (a: boolean, b: boolean) => a && !b;
-  if (edge(g.y, p.y)) setAutoLoad(!autoLoad);                       // Y: auto-fill hopper
+  // Y and L3 used to be a second job for buttons the brain also reads -- auto-fill and pause
+  // fired at the same time as the speed gear and the re-zero. One button, one action; both
+  // are still on the deck and the keyboard.
   if (edge(g.start, p.start)) primary();                            // Start: the green button
-  if (edge(g.back, p.back)) cycleMode();                            // Back: next mode
+  if (edge(g.back, p.back)) cycleMode();                            // Select: next mode
   if (edge(g.dpad_up, p.dpad_up)) cycleCamera(1);                   // D-pad up/down: camera
   if (edge(g.dpad_down, p.dpad_down)) cycleCamera(-1);
-  if (edge(g.left_stick_button, p.left_stick_button)) togglePause(); // L3: pause
 }
 
 // ---------------------------------------------------------------- loop
@@ -243,6 +300,11 @@ function loop(now: number): void {
 
   const human = gamepadState();
   padShortcuts(human);
+  // THE RIGHT STICK IS THE VIEW. Rates, not steps, so the pan speed is the same on a 144 Hz
+  // screen as on a 30 Hz one; squared so a small deflection is a fine correction and a full
+  // one is a fast look-behind.
+  const sq = (v: number) => v * Math.abs(v);
+  scene.nudgeView(-sq(viewStick.x) * VIEW_YAW_RATE * dtReal, sq(viewStick.y) * VIEW_PITCH_RATE * dtReal);
 
   const t0 = performance.now();
   if (!paused) {
@@ -346,6 +408,12 @@ function paint(s: Snapshot): void {
   set('#st-rpm', `${r.flywheel.rpm.toFixed(0)}`, brain.state.ready ? 'on' : '');
   set('#st-hopper', `${r.hopper.count}/${r.hopper.capacity}`, r.hopper.count ? '' : 'off');
   set('#st-batt', `${r.battery.volts.toFixed(1)} V`, r.battery.volts < 11.5 ? 'off' : '');
+  // DRIVE SPEED GEAR. The bar is the fraction; the number is what that fraction is worth in
+  // m/s, derived from the drive motor's free speed and the wheel radius rather than written
+  // down, so changing either in config/robot.json moves the readout with it.
+  const gearFrac = brain.state.speedScale;
+  set('#st-speed', `${(gearFrac * topSpeed_ms).toFixed(2)} m/s`, gearFrac < 1 ? 'off' : 'on');
+  $<HTMLElement>('#st-speedbar').style.width = `${gearFrac * 100}%`;
 
   paintDeck();
 
@@ -647,10 +715,10 @@ interface Action { label: string; title: string; run: () => void; on?: () => boo
 
 const DECK: Record<Mode, Action[]> = {
   practice: [
-    { label: 'Auto-aim', title: 'Turret and hood solve for the CELL continuously, including a lead for the robot’s own motion. Off means the arrow keys aim it.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
-    { label: 'Fire', title: 'Latch. Spins the flywheel, waits for it to be in tolerance and the turret to be on target, then feeds at the cycle time until you press it again.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
+    { label: 'Auto-aim (M1)', title: 'Turret and hood solve for the CELL continuously, including a lead for the robot’s own motion. Off means , and . aim it by hand. M1 on the pad, T on the keyboard.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
+    { label: 'Auto-fire (M2)', title: 'Latch. Spins the flywheel, waits for it to be in tolerance and the turret to be on target, then feeds at the cycle time until you press it again. M2 on the pad, G on the keyboard. R1 (space) fires by hand instead, for as long as you hold it.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
     { label: 'Auto-fill hopper', title: 'Practice aid, not a game rule: quietly picks up the nearest POLLEN off the floor whenever the hopper has room, so you can work on aiming without driving a collection lap.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
-    { label: 'Joystick', title: 'On-screen sticks: left translates, right turns. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
+    { label: 'Joystick', title: 'On-screen sticks: left translates, right looks around. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
     { label: 'Shot zone', title: 'Green where a perfectly aimed shot clears the land-probability gate, red where it does not, using the hood and rpm the table commands at that range and the CELL mouth as seen from that spot. A MODEL map (tools/shotzone.ts), not a record of what this robot has hit.', run: () => (scene.showShotZone = !scene.showShotZone), on: () => scene.showShotZone },
     { label: 'Pause', title: 'Freeze the physics. The view still moves.', run: () => togglePause(), on: () => paused },
     { label: 'Reset', title: 'Rebuild the match: robot back on its start tile, balls re-staged, score and shot log cleared.', run: () => build() },
@@ -670,13 +738,13 @@ const DECK: Record<Mode, Action[]> = {
     { label: 'Reset', title: 'Rebuild the match and clear the shot log.', run: () => build() },
   ],
   test: [
-    { label: 'Auto-aim', title: 'Turret and hood solve for the CELL continuously. Off means the arrow keys aim it.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
-    { label: 'Fire', title: 'Latch. Spins up and feeds at the cycle time until pressed again.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
+    { label: 'Auto-aim (M1)', title: 'Turret and hood solve for the CELL continuously. Off means , and . aim it by hand.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
+    { label: 'Auto-fire (M2)', title: 'Latch. Spins up and feeds at the cycle time until pressed again. R1 fires by hand.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
     { label: 'Auto-fill hopper', title: 'Keeps the hopper topped up from the floor so a test run does not stop for ammunition.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
     { label: 'Drop a POLLEN in the CELL', title: 'Places one POLLEN into your up CELL by hand. The quickest way to watch the HIVE tip: it takes 12.', run: () => dropBall() },
     { label: 'Shot arc', title: 'Two curves. YELLOW is the prediction: what the solver says the shot the aim is lining up will do, drawn with the same integrator the shot table is built from. BLUE is the trail the last ball actually flew. When they lie on top of each other the model is right; where they part company is the thing worth chasing.', run: () => (scene.showTrajectory = !scene.showTrajectory), on: () => scene.showTrajectory },
     { label: 'Colliders', title: 'Show the convex shapes the solver actually collides with, instead of the CAD skin drawn over them.', run: () => (scene.showColliders = !scene.showColliders), on: () => scene.showColliders },
-    { label: 'Joystick', title: 'On-screen sticks: left translates, right turns. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
+    { label: 'Joystick', title: 'On-screen sticks: left translates, right looks around. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
     { label: 'Shot zone', title: 'Green where a perfectly aimed shot clears the land-probability gate, red where it does not, using the hood and rpm the table commands at that range and the CELL mouth as seen from that spot. A MODEL map (tools/shotzone.ts), not a record of what this robot has hit.', run: () => (scene.showShotZone = !scene.showShotZone), on: () => scene.showShotZone },
     { label: 'Speed: 1x', title: 'Sim seconds per real second. The physics step never changes, so the trajectories are identical — it just runs more of them per frame.', run: () => cycleTurbo(), on: () => turbo > 1 },
     { label: 'Pause', title: 'Freeze the physics.', run: () => togglePause(), on: () => paused },

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import params from '../config/params.json';
 import robotSpec from '../config/robot.json';
 import { World, initPhysics } from '../packages/core/src/physics/world.js';
-import { RAD } from '../packages/core/src/units.js';
+import { RAD, M_TO_IN } from '../packages/core/src/units.js';
 import { dropTest } from '../tools/hivedrop.js';
 import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
@@ -129,5 +129,38 @@ describe('out of play means out of play', () => {
     w.step(idle);
     expect(w.endOfMatchCounts('red').upCell).toBeLessThan(before + 1);
     expect(w.endOfMatchCounts('red').upCell).toBe(0);
+  });
+});
+
+describe('a TIP empties the CELL that was up (manual 10.5.1)', () => {
+  it('drops every ball onto the floor instead of holding them on the frame', () => {
+    const p = structuredClone(params) as unknown as Params;
+    const staging = Array.from({ length: 16 }, (_, i) => ({ kind: 'pollen' as const, pos: [-1 + i * 0.12, 0.05, -2.2] as Vec3 }));
+    const w = new World({ params: p, robot: robotSpec as unknown as RobotSpec, staging, alliance: 'red', seed: 5 });
+    const hive = w.hives.red;
+
+    // Feed the up CELL until it goes over, the way a match does.
+    let n = 0;
+    for (let f = 0; f < 2000 && hive.tips === 0; f++) {
+      if (f % 12 === 0 && n < w.balls.balls.length) {
+        const b = w.balls.balls[n];
+        const at = hive.upCellStagePos(n % 3, b.radius);
+        w.balls.release(b, [at[0], at[1] + 0.1, at[2]], [0, 0, 0], [0, 0, 0], 'free');
+        n++;
+      }
+      w.step(idle);
+    }
+    expect(hive.tips, 'the rocker never tipped').toBe(1);
+
+    for (let f = 0; f < 400; f++) w.step(idle);
+
+    // THE ACM SIDE PANELS USED TO CATCH THEM. They are modelled at |z| 19.48 in over y
+    // 34.1..40.0, which is inside the volume the rocker itself sweeps through -- so the balls
+    // rolled out of the tipped mouth, wedged on a panel edge, and stayed there at y 35 in with
+    // zero velocity for the rest of the match, still counting as CELL contents.
+    const live = w.balls.balls.filter((b) => b.body.isEnabled());
+    const onFloor = live.filter((b) => w.balls.pos(b)[1] * M_TO_IN < 6).length;
+    expect(onFloor).toBe(live.length);
+    expect(live.filter((b) => b.state === 'cell')).toHaveLength(0);
   });
 });

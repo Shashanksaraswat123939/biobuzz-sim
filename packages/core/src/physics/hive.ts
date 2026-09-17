@@ -287,6 +287,12 @@ export class Hive {
     this.tipping = Math.abs(this.omega) > 0.2;
   }
 
+  geomRestAngle(): number { return this.geom.restAngle_rad; }
+  downCellGeom(): CellGeometry { return this.downCell; }
+  cellCentreWorld(c: CellGeometry): Vec3 {
+    return this.toWorld([0, c.radius_m * Math.cos(c.bodyAngle_rad), c.radius_m * Math.sin(c.bodyAngle_rad)]);
+  }
+
   /** A tip that happened since the last call, for the scorer to consume. */
   takeTip(): boolean {
     if (!this.armed) return false;

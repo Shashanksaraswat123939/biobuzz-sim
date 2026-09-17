@@ -67,7 +67,9 @@ function run(world: World, brain: BuiltinTeleOp, seconds: number, g: GamepadStat
 function spinUp(world: World, brain: BuiltinTeleOp, seconds = 4): void {
   run(world, brain, 0.05, emptyGamepad());
   const press = emptyGamepad();
-  press.a = true;
+  // Pre-spin has no pad button any more -- A is the speed gear and firing implies the wheel --
+  // so the latch is set the way the deck button sets it.
+  brain.state.flywheelOn = true;
   run(world, brain, 0.05, press);
   run(world, brain, seconds, emptyGamepad());
 }

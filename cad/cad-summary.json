@@ -130,6 +130,11 @@
    22.65
   ],
   "opening_dia_in": 4.0,
+  "retrieval_opening_in": {
+   "height": 3.55,
+   "width": 3.57,
+   "_source": "am-5855 drawing via PHYSICS_AND_SIMULATION.md 10.7: 'a retrieval opening 3.55 in tall by 3.57 in deep at the bottom'. This is what makes the bottom ring 'pass POLLEN and block NECTAR' -- it is geometry, not a filter: a 2.80 in POLLEN fits through and a 3.62 in NECTAR does not, so a NECTAR plug cannot be pulled back out."
+  },
   "hips_pipes": 4,
   "positions_xz_in": [
    [

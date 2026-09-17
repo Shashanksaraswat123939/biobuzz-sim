@@ -234,6 +234,10 @@ export function muzzleVelocity(
   return { vx: vxField - w * ry, vy: vyField + w * rx };
 }
 
+/** One detent of the drive speed gear. Five gears spans the useful range without a menu. */
+export const SPEED_STEP = 0.2;
+const gear = (v: number) => Math.round(clamp(v, SPEED_STEP, 1) / SPEED_STEP) * SPEED_STEP;
+
 export interface TeleOpState {
   autoAim: boolean;
   /** Fire is a latch, not a trigger you hold: the cycle time paces it, not your thumb. */
@@ -245,6 +249,12 @@ export interface TeleOpState {
   headingZero: number;
   /** Manual turret command when auto-aim is off. */
   turretManualDeg: number;
+  /**
+   * Drive speed gear, 0..1, multiplying every translation and rotation command. SPEED_STEP
+   * wide, so it is a ratchet with a small number of detents rather than a continuous trim
+   * nobody can return to a known value.
+   */
+  speedScale: number;
   /**
    * Pre-spin latch. Firing implies it, so a driver never has to arm two things to shoot;
    * it exists on its own only so the wheel can be brought up before committing.
@@ -299,7 +309,7 @@ export interface TeleOpState {
 
 export const newTeleOpState = (): TeleOpState => ({
   autoAim: true, firing: false,
-  turretManualDeg: 0, flywheelOn: false,
+  turretManualDeg: 0, flywheelOn: false, speedScale: 1,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
   lastFeedT: -999, pulsing: false, vRadial: 0, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0,
@@ -364,35 +374,42 @@ export class BuiltinTeleOp {
     const st = this.state;
     const p = this.prev;
     if (p) {
-      if (edge(g.a, p.a)) st.flywheelOn = !st.flywheelOn;
+      // SPEED GEAR, Y up and A down. A driver wants a speed limit they can SET, not one they
+      // have to keep a thumb on: the gear survives letting go of the stick, which is what
+      // "crawl for the last six inches, then go" actually needs. The hold-to-crawl bumper is
+      // still there on top of it for a momentary dab.
+      if (edge(g.y, p.y)) st.speedScale = gear(st.speedScale + SPEED_STEP);
+      if (edge(g.a, p.a)) st.speedScale = gear(st.speedScale - SPEED_STEP);
       if (edge(g.x, p.x)) st.autoAim = !st.autoAim;
       // RE-ZERO THE FIELD FRAME. Field-centric is only as good as the heading it rotates by,
       // and a real IMU drifts; every driver wants a "forward is where I am pointing now"
       // button. Square the robot up to the field and tap it.
-      if (edge(g.back, p.back)) st.headingZero = s.imu.yaw;
+      if (edge(g.left_stick_button, p.left_stick_button)) st.headingZero = s.imu.yaw;
       if (edge(g.right_bumper, p.right_bumper)) st.firing = !st.firing;
     }
     this.prev = { ...g };
 
     // ---- drive
-    // FIELD-CENTRIC by default: the stick points at the FIELD, not at the robot's nose.
+    // ROBOT-CENTRIC by default: the stick points at the ROBOT'S NOSE, which is the intake.
     //
-    // This was robot-centric, on the argument that the turret means the chassis never has to
-    // face the goal so field-centric buys nothing. That is true of the SHOT and false of the
-    // driver. With a turret the chassis spends the match pointing wherever it was last going,
-    // so "forward" on the stick is a direction the driver has to keep track of and cannot
-    // see -- push up, robot goes sideways, correct, over-correct. It is the single thing that
-    // makes this hard to drive, and it has nothing to do with speed.
+    // This was field-centric, on the argument that a driver should not have to track which way
+    // the chassis is pointing. That argument is right for a robot you only have to POSITION and
+    // wrong for this one: almost everything the driver does with the chassis is aim the INTAKE
+    // at a ball, and the intake is bolted to the front. Field-centric makes "drive at that
+    // ball" a mental rotation on every approach, and the robot that results feels like it is
+    // being flown rather than driven -- which is exactly the complaint.
     //
-    // Field-centric rotates the stick into the field frame by the heading the robot reports,
-    // so up on the stick is away from the driver station whatever the robot is doing. Hold
-    // the right bumper for robot-centric if you want the old behaviour (or the IMU drifts).
-    const slow = g.left_bumper ? 0.35 : 1;
+    // The turret is why this costs nothing: the chassis never has to face the goal, so the
+    // nose is free to mean "where I am collecting from" all match.
+    //
+    // Field-centric is still there, held on R3, measured from whatever heading the re-zero
+    // (L3) last called forward.
+    const slow = (g.left_bumper ? 0.35 : 1) * st.speedScale;
     const sx = -g.left_stick_y * slow;   // stick up
     const sy = -g.left_stick_x * slow;   // stick left
     const om = -g.right_stick_x * slow;
 
-    const robotCentric = g.y;   // hold Y: robot-centric, for when the IMU has drifted
+    const robotCentric = !g.right_stick_button;  // hold R3 for field-centric instead
     const h = (s.imu.yaw - st.headingZero) * DEG;
     const vx = robotCentric ? sx : sx * Math.cos(h) + sy * Math.sin(h);   // robot forward
     const vy = robotCentric ? sy : -sx * Math.sin(h) + sy * Math.cos(h);  // robot left

@@ -95,7 +95,7 @@ export class World {
     this.robot = new Robot(RAPIER, this.physics, opts.params, opts.robot, this.rng.fork(23), {
       p: start.p,
       yaw: start.yawDeg * DEG,
-    });
+    }, opts.alliance);
     this.preload = Math.max(0, Math.min(opts.preload ?? 0, opts.robot.hopper.capacity));
     this.loadPreload();
   }
@@ -260,26 +260,59 @@ export class World {
 
     for (const f of this.geom.frame) add(f.half, f.pos, f.rotX, 0.4, 0.4);
 
-    // FLOWERs: real tubes, made of a ring of thin boxes, so balls drop in and stack.
+    // FLOWERs: real tubes, made of a ring of thin boxes, so balls drop in and stack --
+    // with the RETRIEVAL OPENING actually cut in them.
+    //
+    // The tube used to be a closed cylinder on a solid disc, which meant a ball that went
+    // into a flower stayed there for the rest of the match. That removed the counter-play the
+    // whole flower endgame is built on (pull the bottom ball, the stack drops, the top ring
+    // reopens) and it silently removed the rule that makes a NECTAR plug worth 5 points: the
+    // plug is permanent because a 3.62 in NECTAR does not fit through a 3.55 in opening and a
+    // 2.80 in POLLEN does. Cut the opening and both behaviours are just geometry.
+    //
+    // The tube is therefore built in two height bands: closed all the way round above the
+    // opening, and open over the field-facing arc below it.
     for (const f of this.geom.flowers) {
-      const segs = 12;
+      const segs = 16;
       const r = f.openingR_m;
-      const h = (f.topY_m - inches(0.2)) / 2;
-      const w = (Math.PI * r) / segs;
+      const t = 0.004;
+      const yLo = inches(0.2);
+      const yOpen = f.retrievalTopY_m;
+      // Half-angle of the opening, from the chord it has to be wide enough to pass.
+      const halfArc = Math.asin(Math.min(1, f.retrievalHalfW_m / (r + t)));
+      const faceA = Math.atan2(f.openingDir[1], f.openingDir[0]);
       for (let i = 0; i < segs; i++) {
         const a = (i / segs) * Math.PI * 2;
-        this.physics.createCollider(
-          R.ColliderDesc.cuboid(w, h, 0.004)
-            .setTranslation(f.x_m + Math.cos(a) * (r + 0.004), inches(0.2) + h, f.z_m + Math.sin(a) * (r + 0.004))
-            .setRotation(quatY(-a))
-            .setFriction(0.3)
-            .setRestitution(0.4)
-            .setRestitutionCombineRule(R.CoefficientCombineRule.Min)
-            .setCollisionGroups(GROUPS.field),
-          body,
-        );
+        // Signed angular distance from the opening's centre, wrapped to +-pi.
+        const d = Math.abs(Math.atan2(Math.sin(a - faceA), Math.cos(a - faceA)));
+        const bands: [number, number][] = d < halfArc
+          ? [[yOpen, f.topY_m]]           // this segment is the doorway: start above it
+          : [[yLo, f.topY_m]];
+        const w = (Math.PI * r) / segs;
+        for (const [y0, y1] of bands) {
+          const h = (y1 - y0) / 2;
+          if (h <= 0) continue;
+          this.physics.createCollider(
+            // quatY(th) sends local +Z to (sin th, 0, cos th). The plate's THIN axis is local
+            // +Z and has to point radially outward, at (cos a, 0, sin a) -- so th = pi/2 - a.
+            // This was quatY(-a), which is that rotation turned through a right angle: every
+            // plate stood edge-on to the tube it was supposed to be a wall of, so the "tube"
+            // was a pinwheel with 0.8 in gaps between the blades and a ball inside it rattled
+            // out through the side. It is why balls in flowers never behaved.
+            R.ColliderDesc.cuboid(w, h, t)
+              .setTranslation(f.x_m + Math.cos(a) * (r + t), y0 + h, f.z_m + Math.sin(a) * (r + t))
+              .setRotation(quatY(Math.PI / 2 - a))
+              .setFriction(0.3)
+              .setRestitution(0.4)
+              .setRestitutionCombineRule(R.CoefficientCombineRule.Min)
+              .setCollisionGroups(GROUPS.field),
+            body,
+          );
+        }
       }
-      add([r, 0.005, r], [f.x_m, inches(0.2), f.z_m], 0, 0.5, 0.2);
+      // The bottom ring the stack rests on. Solid: a ball leaves through the doorway, not
+      // through the floor.
+      add([r, 0.005, r], [f.x_m, yLo, f.z_m], 0, 0.5, 0.2);
     }
   }
 

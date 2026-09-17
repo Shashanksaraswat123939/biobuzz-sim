@@ -33,7 +33,8 @@ import type { RobotSpec, Snapshot, Vec3 } from '@core/types.js';
 const COL = {
   tile: 0x39434f,
   tileAlt: 0x323b46,
-  wall: 0x9fd8f0,
+  wall: 0x4a525c,
+  rail: 0x1d2228,
   frame: 0x98a2ae,
   red: 0xd0342c,
   blue: 0x2f6fd0,
@@ -187,6 +188,14 @@ export class Scene {
   /** CAD geometry, once assets/field.glb has loaded. */
   private cadRockers: (THREE.Object3D | null)[] = [null, null];
   private orbit = { theta: -Math.PI / 2, phi: 1.0, dist: 6.5, target: new THREE.Vector3(0, 0.7, 0) };
+  /**
+   * Where the driver is LOOKING, relative to whatever the camera mode would otherwise show.
+   * The right stick drives this, so "look behind me" is a thumb movement in every mode
+   * instead of a mode change: in orbit it swings the orbit itself, and in the modes that ride
+   * the robot it swings the eye around the robot, which is the one thing those modes could
+   * not do. `phi` is shared with the orbit so the elevation reads the same everywhere.
+   */
+  viewYaw = 0;
   private aimMarker: THREE.Mesh;
   /**
    * Where the viewer is looking, degrees, in the same frame as the robot's heading.
@@ -597,7 +606,13 @@ export class Scene {
     this.scene.add(tiles);
 
     // perimeter
-    const wallMat = new THREE.MeshStandardMaterial({ color: COL.wall, transparent: true, opacity: 0.22, roughness: 0.1, metalness: 0.1, side: THREE.DoubleSide });
+    // THE PERIMETER, VISIBLE. It was pale blue at 0.22 opacity over a teal room floor, which is
+    // the same argument as no wall at all: you could not tell where the field ended, and a ball
+    // that stopped against it looked like a ball that stopped in mid air. Dark grey and mostly
+    // opaque reads as a boundary from every angle; a solid rail caps it so the top edge is a
+    // line rather than a fade.
+    const wallMat = new THREE.MeshStandardMaterial({ color: COL.wall, transparent: true, opacity: 0.55, roughness: 0.8, metalness: 0.05, side: THREE.DoubleSide });
+    const railMat = new THREE.MeshStandardMaterial({ color: COL.rail, roughness: 0.6, metalness: 0.2 });
     const h = this.geom.railTopY_m;
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
       const g = new THREE.PlaneGeometry(hw * 2, h);
@@ -605,6 +620,12 @@ export class Scene {
       m.position.set(dx * hw, h / 2, dz * hw);
       m.rotation.y = dx !== 0 ? Math.PI / 2 : 0;
       this.scene.add(m);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(dx !== 0 ? 0.04 : hw * 2 + 0.04, 0.05, dx !== 0 ? hw * 2 + 0.04 : 0.04), railMat);
+      rail.position.set(dx * hw, h, dz * hw);
+      this.scene.add(rail);
+      const kick = new THREE.Mesh(new THREE.BoxGeometry(dx !== 0 ? 0.03 : hw * 2, 0.10, dx !== 0 ? hw * 2 : 0.03), railMat);
+      kick.position.set(dx * hw, 0.05, dz * hw);
+      this.scene.add(kick);
     }
 
     // The A-frame as the CAD actually builds it: four legs splaying from foot bars at the
@@ -1138,6 +1159,17 @@ export class Scene {
     this.placeCamera(s);
   }
 
+  /**
+   * Swing the view. `dYaw`/`dPitch` are already rate x dt; pitch is clamped short of the
+   * poles because the orbit formula degenerates there and the view flips.
+   */
+  nudgeView(dYaw: number, dPitch: number): void {
+    if (!dYaw && !dPitch) return;
+    this.viewYaw += dYaw;
+    if (this.cameraMode === 'orbit') this.orbit.theta += dYaw;
+    this.orbit.phi = Math.min(Math.PI - 0.12, Math.max(0.12, this.orbit.phi + dPitch));
+  }
+
   private placeCamera(s: Snapshot): void {
     const r = s.robot;
     const o = this.orbit;
@@ -1148,7 +1180,7 @@ export class Scene {
         break;
       case 'follow': {
         // Behind the robot, at the orbit's own elevation so the wheel still tilts the view.
-        const yaw = r.yawDeg * DEG;
+        const yaw = r.yawDeg * DEG + this.viewYaw;
         const back = 2.1 + o.phi * 0.5;
         this.camera.position.set(r.p[0] - Math.sin(yaw) * back, r.p[1] + 0.55 + o.phi * 0.9, r.p[2] - Math.cos(yaw) * back);
         this.camera.lookAt(r.p[0] + Math.sin(yaw) * 1.5, r.p[1] + 0.25, r.p[2] + Math.cos(yaw) * 1.5);
@@ -1157,11 +1189,14 @@ export class Scene {
       case 'fpv': {
         // Driver's eye: on the robot, looking where the robot is pointed. The turret is
         // free to be aimed somewhere else entirely, which is the whole point of having one.
-        const yaw = r.yawDeg * DEG;
+        const yaw = r.yawDeg * DEG + this.viewYaw;
+        // Pitch the gaze with the same phi the other modes use: 1.0 rad is the neutral the
+        // orbit starts at, so a driver who has not touched the stick looks level.
+        const pitch = (1.0 - o.phi) * 1.6;
         this.camera.position.set(r.p[0] + Math.sin(yaw) * 0.18, r.p[1] + 0.22, r.p[2] + Math.cos(yaw) * 0.18);
         this.camera.lookAt(
           r.p[0] + Math.sin(yaw) * 6,
-          r.p[1] + 0.22 + 0.9,
+          r.p[1] + 0.22 + 0.9 + pitch * 6,
           r.p[2] + Math.cos(yaw) * 6,
         );
         break;

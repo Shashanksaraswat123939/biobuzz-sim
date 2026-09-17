@@ -13,7 +13,8 @@ import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { buildMotor, motorTorque, motorCurrent, radToTicks, type MotorModel } from './motor.js';
 import { HubMotorLoop } from '../robot/hubEmulation.js';
 import { clamp, DEG, RAD, M_TO_IN, radSToRpm, rpmToRadS } from '../units.js';
-import type { ActuatorFrame, MotorCmd, RobotSpec, Params, Snapshot, Vec3, BallKind } from '../types.js';
+import type { ActuatorFrame, Alliance, MotorCmd, RobotSpec, Params, Snapshot, Vec3, BallKind } from '../types.js';
+import { allianceOfNectar } from '../rules/scoring.js';
 import type { BallSet, Ball } from './balls.js';
 import type { Rng } from '../io/rng.js';
 import { GROUPS } from './groups.js';
@@ -110,6 +111,8 @@ export class Robot {
     readonly spec: RobotSpec,
     private readonly rng: Rng,
     start: { p: Vec3; yaw: number },
+    /** Which NECTAR this robot is allowed to touch. G408: the other colour is rejected. */
+    readonly alliance: Alliance = 'red',
   ) {
     const c = spec.chassis;
     this.halfSum = (spec.drivetrain.wheelbase_m + spec.drivetrain.track_m) / 2;
@@ -637,10 +640,21 @@ export class Robot {
       if (rel[2] < zBack || rel[2] > zFront) continue;
       if (rel[1] > this.binFloorY + ip.mouth.height_m + b.radius) continue;
 
+      // G408: NEVER CONTROL THE OPPONENT'S NECTAR.
+      //
+      // A real robot enforces this with a colour sensor at the mouth that reverses the roller
+      // when it sees the wrong colour, and that is exactly what this does -- the sign of the
+      // surface speed flips for that one ball, so the same traction model that pulls a legal
+      // ball in pushes an illegal one out. There is no separate reject path, no teleport, and
+      // no rule check: an opponent NECTAR simply cannot be driven into the bin, so the
+      // violation is impossible rather than penalised.
+      const reject = b.kind !== 'pollen' && allianceOfNectar(b.kind) !== this.alliance;
+      const surface = reject ? -vSurface : vSurface;
+
       // Slip is roller surface speed minus the ball speed, both in the ROBOT frame.
       const bv = b.body.linvel();
       const rv = this.toLocal([bv.x - v[0], bv.y - v[1], bv.z - v[2]]);
-      const slip = -vSurface - rv[2];                  // +Z is forward; the roller pulls -Z
+      const slip = -surface - rv[2];                   // +Z is forward; the roller pulls -Z
 
       // Normal load: the ball weight plus the squeeze from the roller sitting below ball
       // height. Without a squeeze term an intake could never lift anything.
@@ -656,7 +670,7 @@ export class Robot {
       b.body.wakeUp();
       const w = this.toWorld([0, 0, f]);
       b.body.addForce({ x: w[0], y: 0, z: w[2] }, true);
-      if (duty > 0) {
+      if (duty > 0 && !reject) {
         // Below the bin floor the ball is still outside and the roller has to lift it over
         // the floor plate's edge; once it is over, the roller presses it DOWN into the bin.
         // Getting this backwards wedged every ball under the chassis.

@@ -65,6 +65,14 @@ export const CAD = {
   flowerRingY_in: { lower: 0.2, middle: 4.34, top: 21.4 },
   flowerBackstopY_in: 22.65,
   flowerOpeningDia_in: 4.0,
+  /**
+   * The retrieval opening at the bottom of the tube (am-5855; PHYSICS_AND_SIMULATION.md 10.7,
+   * cad/cad-summary.json flowers.retrieval_opening_in). Its HEIGHT is the rule that says the
+   * bottom of a flower passes POLLEN and blocks NECTAR: 3.55 in takes a 2.80 in POLLEN and
+   * not a 3.62 in NECTAR, so a NECTAR plug cannot be pulled back out and the whole endgame
+   * of STRATEGY.md 8 is geometry rather than a special case.
+   */
+  flowerRetrieval_in: { height: 3.55, width: 3.57 },
 };
 
 /** Manual Fig 9-10: the mouth plane leans this far back from vertical. 65.6 - 53.5 = 12.1 = 14*cos(30). */
@@ -124,6 +132,16 @@ export interface FlowerGeometry {
   scoreLow_m: number;
   scoreHigh_m: number;
   topY_m: number;
+  /**
+   * The retrieval opening: a gap in the tube wall from the floor up to this height, on the
+   * side given by `openingDir`. Everything about "the bottom ring passes POLLEN and blocks
+   * NECTAR" falls out of it being 3.55 in tall -- a 2.80 in POLLEN comes through it and a
+   * 3.62 in NECTAR cannot, so a NECTAR plug is permanent without any rule saying so.
+   */
+  retrievalTopY_m: number;
+  retrievalHalfW_m: number;
+  /** Unit XZ direction the opening faces: away from the wall the flower stands on. */
+  openingDir: [number, number];
 }
 
 export interface ZoneGeometry {
@@ -201,16 +219,23 @@ export function buildFieldGeometry(params: Params): FieldGeometry {
     }
   }
   frame.push({ name: 'topbar', half: [fx, post, post], pos: [0, topY, 0], rotX: 0 });
-  const acmLo = inches(CAD.acmPanelY_in[0]);
-  const acmHi = inches(CAD.acmPanelY_in[1]);
-  for (const sz of [-1, 1]) {
-    frame.push({
-      name: `acm${sz}`,
-      half: [fx, (acmHi - acmLo) / 2, inches(0.2)],
-      pos: [0, (acmLo + acmHi) / 2, sz * fz],
-      rotX: 0,
-    });
-  }
+  // THE ACM SIDE PANELS ARE NOT COLLIDERS, and this is not a simplification -- modelling them
+  // as walls was wrong.
+  //
+  // The CAD puts them at |z| = 19.48 in over y 34.1..40.0. The ROCKER's own bounding box is
+  // z -25.19..20.06 over y 30.65..66.13, so that rectangle is inside the volume the rocker
+  // SWEEPS THROUGH: a panel spanning it would be a wall the hive collides with, which is why
+  // the rocker is on its own collision group and passes through the frame.
+  //
+  // Balls were not given the same exemption, and that is the bug behind "the balls do not fall
+  // off the hive". A TIP swings the up CELL down to a 30 deg mouth-down attitude and the balls
+  // roll out exactly there -- straight into the panel, where they wedged on its lower edge and
+  // sat, still counted as being in a CELL, for the rest of the match. Measured: 16 POLLEN
+  // tipped the rocker and all 16 stayed at y 35 in with zero velocity.
+  //
+  // The panels stay in the renderer, which draws the A-frame from the CAD parts; they are just
+  // not in the physics frame, which is the list of things a BALL can hit.
+  void CAD.acmPanelY_in;
 
   const flowers: FlowerGeometry[] = CAD.flowerXZ_in.map(([x, z], index) => ({
     index,
@@ -220,6 +245,12 @@ export function buildFieldGeometry(params: Params): FieldGeometry {
     scoreLow_m: inches(CAD.flowerRingY_in.middle),
     scoreHigh_m: inches(CAD.flowerRingY_in.top),
     topY_m: inches(CAD.flowerBackstopY_in),
+    retrievalTopY_m: inches(CAD.flowerRetrieval_in.height),
+    retrievalHalfW_m: inches(CAD.flowerRetrieval_in.width / 2),
+    // The backstop is on the WALL side (manual 9.7), so the opening faces the field. The
+    // flowers sit near a corner of the perimeter, and the wall each one stands on is the one
+    // it is closest to -- whichever of |x|, |z| is larger.
+    openingDir: Math.abs(x) > Math.abs(z) ? [-Math.sign(x), 0] : [0, -Math.sign(z)],
   }));
 
   // LOADING ZONE 23 x 11 in and GARDEN 23 x 2 in, at the alliance stations on the +-X walls.

@@ -146,6 +146,9 @@ code { background: #1e232a; padding: 1px 4px; border-radius: 3px; font-family: v
 .meter > span { display: block; height: 100%; width: 0; background: var(--blue); transition: width .1s linear; }
 .meter > span.near { background: var(--warn); }
 .meter > span.over { background: var(--go); }
+.meter.gearbar { height: 8px; margin-top: 3px; }
+.meter.gearbar > span { background: linear-gradient(90deg, var(--go), var(--warn)); }
+.stat.gear { margin-top: 4px; }
 .meter .mark { position: absolute; top: 0; bottom: 0; left: 66.6%; width: 1px; background: #8e99a8; }
 
 .budget { display: flex; flex-direction: column; gap: 2px; }

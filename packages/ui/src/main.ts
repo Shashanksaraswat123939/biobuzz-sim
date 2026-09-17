@@ -31,6 +31,7 @@ import { M_TO_IN, DEG, inches } from '@core/units.js';
 import { Scene, type CameraMode } from '@render/scene.js';
 import type { ActuatorFrame, Alliance, BallKind, GamepadState, Params, RobotSpec, Snapshot, Vec3 } from '@core/types.js';
 import { readKeyboard, installKeyboard, type Keys } from './input.js';
+import { m, cm, cmSigned, mps } from './units.js';
 import { Joysticks } from './joystick.js';
 import { buildTunePanel, type Tunable } from './tune.js';
 import { WorldBridge } from './bridge.js';
@@ -269,7 +270,7 @@ function paint(s: Snapshot): void {
 
   const rangeIn = Math.hypot(world.aimPoint()[0] - r.p[0], world.aimPoint()[2] - r.p[2]) * M_TO_IN;
   set('#st-note', auto && auto.phase !== 'done' ? auto.note : brain.state.note, brain.state.ready ? 'on' : 'off');
-  set('#st-range', `${rangeIn.toFixed(0)} in`);
+  set('#st-range', m(rangeIn));
   set('#st-turret', `${r.turret.angleDeg.toFixed(0)}°`, r.turret.atLimit ? 'off' : '');
   set('#st-rpm', `${r.flywheel.rpm.toFixed(0)}`, brain.state.ready ? 'on' : '');
   set('#st-hopper', `${r.hopper.count}/${r.hopper.capacity}`, r.hopper.count ? '' : 'off');
@@ -294,10 +295,10 @@ function set(sel: string, text: string, cls = ''): void {
 function paintRobot(s: Snapshot, rangeIn: number): void {
   const r = s.robot;
   $('#r-pose').innerHTML = [
-    row('field x, y', `${r.ftc.x.toFixed(1)}, ${r.ftc.y.toFixed(1)} in`),
+    row('field x, y', `${(r.ftc.x * 0.0254).toFixed(2)}, ${(r.ftc.y * 0.0254).toFixed(2)} m`),
     row('heading', `${r.ftc.heading.toFixed(1)}°`),
-    row('speed', `${(r.speed * M_TO_IN).toFixed(1)} in/s`),
-    row('range to CELL', `${rangeIn.toFixed(1)} in`),
+    row('speed', mps(r.speed)),
+    row('range to CELL', m(rangeIn)),
     row('bearing to CELL', `${world.sensors().game.upCellAzimuthDeg.toFixed(1)}°`),
   ].join('');
 
@@ -397,21 +398,21 @@ function paintPredict(rangeIn: number): void {
   const ok = Number.isFinite(p.reach_in);
 
   $('#p-summary').innerHTML = [
-    row('range to the CELL', `${p.target_in.toFixed(1)} in`),
+    row('range to the CELL', m(p.target_in)),
     row('shot table solution', `${predShot.hood.toFixed(0)}° at ${predShot.rpm.toFixed(0)} rpm`),
     row('exit speed', `${predShot.speed.toFixed(2)} m/s`),
-    row('this shot lands at', ok ? `${p.reach_in.toFixed(1)} in` : 'out of range'),
-    row('miss', ok ? `${p.bias_in > 0 ? '+' : ''}${p.bias_in.toFixed(1)} in ${p.bias_in > 0 ? 'long' : 'short'}` : '—',
+    row('this shot lands at', ok ? m(p.reach_in) : 'out of range'),
+    row('miss', ok ? `${cmSigned(p.bias_in)} ${p.bias_in > 0 ? 'long' : 'short'}` : '—',
       ok ? (Math.abs(p.bias_in) < 6 ? 'good' : 'bad') : 'err'),
-    row('predicted group, 1σ', `± ${p.spread_in.toFixed(1)} in`, p.spread_in < 12 ? 'good' : 'bad'),
+    row('predicted group, 1σ', `± ${cm(p.spread_in)}`, p.spread_in < 12 ? 'good' : 'bad'),
   ].join('');
 
   $('#p-rows').innerHTML = p.rows.map((k, i) => {
-    const per = Number.isFinite(k.perStep_in) ? `${k.perStep_in >= 0 ? '+' : ''}${k.perStep_in.toFixed(1)}"/${k.step}${k.unit}` : '—';
+    const per = Number.isFinite(k.perStep_in) ? `${cmSigned(k.perStep_in)}/${k.step}${k.unit}` : '—';
     return `<div class="brow ${i === 0 ? 'lead' : ''}" data-key="${k.key}">
       <span class="n" title="${esc(k.why)}">${k.label} &nbsp;<span style="opacity:.6">${per}</span></span>
       <span class="t"><i style="width:${(k.share * 100).toFixed(0)}%"></i></span>
-      <span class="v">${k.contrib_in.toFixed(1)}"</span>
+      <span class="v">${cm(k.contrib_in)}</span>
     </div>`;
   }).join('');
 
@@ -431,7 +432,7 @@ function paintAnalysis(s: Snapshot): void {
   const running = !!auto && auto.phase !== 'done';
   $('#a-plan').innerHTML = [
     row('shots to collect', String(plan.shots)),
-    row('range sweep', `${plan.range_in[0]}–${plan.range_in[1]} in`),
+    row('range sweep', `${m(plan.range_in[0])}–${m(plan.range_in[1])}`),
     row('bearing spread', `± ${plan.bearing_deg}°`),
     row('fire while moving', plan.onTheMove ? 'yes' : 'no'),
     row('progress', running ? `${auto!.shotsAsked} / ${plan.shots} — ${auto!.phase}` : s.shots.length ? 'finished' : 'not started'),
@@ -443,10 +444,10 @@ function paintAnalysis(s: Snapshot): void {
   $('#a-rows').innerHTML = [
     row('shots landed', `${rep.n}`),
     row('into the CELL', `${rep.landed} (${(rep.landRate * 100).toFixed(0)}%)`, rep.landRate > 0.6 ? 'good' : rep.landRate > 0.3 ? 'bad' : 'err'),
-    row('downrange bias', `${rep.bias_in >= 0 ? '+' : ''}${rep.bias_in.toFixed(1)} in`, Math.abs(rep.bias_in) < 6 ? 'good' : 'bad'),
-    row('downrange spread 1σ', `± ${rep.sd_in.toFixed(1)} in`, rep.sd_in < 18 ? 'good' : 'bad'),
-    row('lateral bias', `${rep.latBias_in >= 0 ? '+' : ''}${rep.latBias_in.toFixed(1)} in`, Math.abs(rep.latBias_in) < 5 ? 'good' : 'bad'),
-    row('lateral spread 1σ', `± ${rep.latSd_in.toFixed(1)} in`, rep.latSd_in < 12 ? 'good' : 'bad'),
+    row('downrange bias', cmSigned(rep.bias_in), Math.abs(rep.bias_in) < 6 ? 'good' : 'bad'),
+    row('downrange spread 1σ', `± ${cm(rep.sd_in)}`, rep.sd_in < 18 ? 'good' : 'bad'),
+    row('lateral bias', cmSigned(rep.latBias_in), Math.abs(rep.latBias_in) < 5 ? 'good' : 'bad'),
+    row('lateral spread 1σ', `± ${cm(rep.latSd_in)}`, rep.latSd_in < 12 ? 'good' : 'bad'),
     row('rpm error at fire', `${rep.rpmErr_rpm.toFixed(0)} rpm`, rep.rpmErr_rpm < robotSpec.flywheel.tolRpm ? 'good' : 'bad'),
     row('fired off speed', String(rep.firedOffSpeed), rep.firedOffSpeed ? 'bad' : 'good'),
   ].join('');
@@ -454,10 +455,10 @@ function paintAnalysis(s: Snapshot): void {
 
   const cal = robotSpec.calibration;
   $('#a-cal').innerHTML = [
-    row('range trim now', `${cal.rangeTrim_in >= 0 ? '+' : ''}${cal.rangeTrim_in.toFixed(1)} in`, cal.rangeTrim_in ? 'good' : ''),
+    row('range trim now', cmSigned(cal.rangeTrim_in), cal.rangeTrim_in ? 'good' : ''),
     row('turret trim now', `${cal.turretTrim_deg >= 0 ? '+' : ''}${cal.turretTrim_deg.toFixed(2)}°`, cal.turretTrim_deg ? 'good' : ''),
     row('this run suggests', rep.fix.worthIt
-      ? `${rep.fix.rangeTrim_in >= 0 ? '+' : ''}${rep.fix.rangeTrim_in.toFixed(1)} in, ${rep.fix.turretTrim_deg >= 0 ? '+' : ''}${rep.fix.turretTrim_deg.toFixed(2)}°`
+      ? `${cmSigned(rep.fix.rangeTrim_in)}, ${rep.fix.turretTrim_deg >= 0 ? '+' : ''}${rep.fix.turretTrim_deg.toFixed(2)}°`
       : 'no change', rep.fix.worthIt ? 'bad' : 'good'),
   ].join('');
   $('#a-fixwhy').textContent = rep.fix.why;
@@ -469,7 +470,7 @@ function paintAnalysis(s: Snapshot): void {
   const worst = Math.max(1, ...rep.byRange.map((b) => b.meanMiss_in));
   $('#a-bins').innerHTML = rep.byRange.length
     ? rep.byRange.map((b) => `<div class="brow">
-        <span class="n">${b.range_in} in &nbsp;<span style="opacity:.6">${b.landed}/${b.n} in</span></span>
+        <span class="n">${m(b.range_in)} &nbsp;<span style="opacity:.6">${b.landed}/${b.n} in</span></span>
         <span class="t"><i style="width:${((b.meanMiss_in / worst) * 100).toFixed(0)}%"></i></span>
         <span class="v">${b.meanMiss_in.toFixed(0)}"</span></div>`).join('')
     : '<p class="cap">No finished shots yet.</p>';
@@ -486,8 +487,8 @@ function paintAnalysis(s: Snapshot): void {
   }
 
   $('#a-log').innerHTML = s.shots.slice(-12).reverse().map((x) =>
-    row(`#${x.n} ${x.rangeIn.toFixed(0)}in ${x.rpm.toFixed(0)}rpm`,
-      x.result === 'flight' ? 'in flight' : `${x.result === 'cell' ? 'CELL' : 'miss'} ${x.long_in >= 0 ? '+' : ''}${x.long_in.toFixed(0)}/${x.lat_in >= 0 ? '+' : ''}${x.lat_in.toFixed(0)}`,
+    row(`#${x.n} ${m(x.rangeIn, 1)} ${x.rpm.toFixed(0)}rpm`,
+      x.result === 'flight' ? 'in flight' : `${x.result === 'cell' ? 'CELL' : 'miss'} ${cmSigned(x.long_in, 0)}/${cmSigned(x.lat_in, 0)}`,
       x.result === 'cell' ? 'good' : x.result === 'miss' ? 'bad' : ''),
   ).join('') || row('—', 'no shots yet');
 }

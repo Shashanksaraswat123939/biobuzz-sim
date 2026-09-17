@@ -446,7 +446,8 @@ export class BuiltinTeleOp {
         gate: mayFire ? this.spec.transfer.gate.open : this.spec.transfer.gate.closed,
       },
       telemetry: [
-        ['range in', s.game.upCellRangeIn.toFixed(1)],
+        // Metres for the reader; the hub's own sensor stays in the FTC frame's inches.
+        ['range', `${(s.game.upCellRangeIn * 0.0254).toFixed(2)} m`],
         ['target rpm', st.targetRpm.toFixed(0)],
         ['rpm', rpm.toFixed(0)],
         ['ready', String(st.ready)],

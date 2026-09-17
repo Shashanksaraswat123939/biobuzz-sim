@@ -23,7 +23,6 @@ export interface Tunable {
   fmt?: (v: number) => string;
 }
 
-const IN = 39.3700787;
 const f1 = (v: number) => v.toFixed(1);
 const f2 = (v: number) => v.toFixed(2);
 const f3 = (v: number) => v.toFixed(3);
@@ -39,10 +38,10 @@ export const TUNABLES: Tunable[] = [
     hint: 'Sets how far the wheel dips when a ball goes through, and so how fast you can cycle.',
     min: 0.0005, max: 0.01, step: 0.0001,
     get: (_p, r) => r.flywheel.I_fly_kgm2, set: (_p, r, v) => (r.flywheel.I_fly_kgm2 = v) },
-  { group: 'Shooter', label: 'Flywheel radius (in)', fmt: f2,
+  { group: 'Shooter', label: 'Flywheel radius (mm)', fmt: f0,
     hint: 'Rim radius. Exit speed is linear in it.',
-    min: 1.0, max: 3.0, step: 0.05,
-    get: (_p, r) => r.flywheel.r_fly_m * IN, set: (_p, r, v) => (r.flywheel.r_fly_m = v / IN) },
+    min: 25, max: 76, step: 1,
+    get: (_p, r) => r.flywheel.r_fly_m * 1000, set: (_p, r, v) => (r.flywheel.r_fly_m = v / 1000) },
   { group: 'Shooter', label: 'Energy loss per shot', fmt: f2,
     hint: 'How much more than the ball’s kinetic energy the wheel gives up — slip and squash.',
     min: 1.0, max: 2.5, step: 0.05,
@@ -73,10 +72,10 @@ export const TUNABLES: Tunable[] = [
     hint: 'Sets how much of a swing is spent accelerating. The profile is trapezoidal.',
     min: 100, max: 4000, step: 50,
     get: (_p, r) => r.turret.accel_dps2, set: (_p, r, v) => (r.turret.accel_dps2 = v) },
-  { group: 'Turret and hood', label: 'Muzzle height (in)', fmt: f1, rebuild: true,
+  { group: 'Turret and hood', label: 'Muzzle height (mm)', fmt: f0, rebuild: true,
     hint: 'Where the ball leaves the robot. Changes the whole shot table.',
-    min: 6, max: 26, step: 0.25,
-    get: (_p, r) => r.turret.muzzleHeight_m * IN, set: (_p, r, v) => (r.turret.muzzleHeight_m = v / IN) },
+    min: 150, max: 660, step: 5,
+    get: (_p, r) => r.turret.muzzleHeight_m * 1000, set: (_p, r, v) => (r.turret.muzzleHeight_m = v / 1000) },
   { group: 'Turret and hood', label: 'Hood minimum (deg)', fmt: f0, rebuild: true,
     hint: 'Flattest shot the hood can make.',
     min: 10, max: 60, step: 1,
@@ -113,10 +112,10 @@ export const TUNABLES: Tunable[] = [
     hint: 'CAD estimate 2.38, plausible 1.5–3.5. The biggest lever on how many balls tip it.',
     min: 1.0, max: 4.0, step: 0.05,
     get: (p) => p.hive.massKg, set: (p, _r, v) => (p.hive.massKg = v) },
-  { group: 'Hive', label: 'CG height above pivot (in)', fmt: f2, rebuild: true,
-    hint: 'CAD 2.11 in. With the mass this sets the restoring torque holding the rocker down.',
-    min: 0.5, max: 5, step: 0.05,
-    get: (p) => p.hive.cgOffset_m[1] * IN, set: (p, _r, v) => (p.hive.cgOffset_m[1] = v / IN) },
+  { group: 'Hive', label: 'CG height above pivot (mm)', fmt: f0, rebuild: true,
+    hint: 'CAD 53.6 mm. With the mass this sets the restoring torque holding the rocker down.',
+    min: 12, max: 127, step: 1,
+    get: (p) => p.hive.cgOffset_m[1] * 1000, set: (p, _r, v) => (p.hive.cgOffset_m[1] = v / 1000) },
   { group: 'Hive', label: 'Pivot friction (N·m)', fmt: f3, rebuild: true,
     hint: 'Unknown. Dry friction at the axle; delays the tip and adds hysteresis.',
     min: 0, max: 0.5, step: 0.005,

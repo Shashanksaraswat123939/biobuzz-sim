@@ -120,8 +120,8 @@ export function groupPlot(cv: HTMLCanvasElement, shots: ShotRecord[], mouthR_in:
   g.textAlign = 'right';
   g.fillText('right', w - 4, cy - 5);
   g.textAlign = 'center';
-  g.fillText(`long +${lim}"`, cx, 12);
-  g.fillText(`short -${lim}"`, cx, h - 4);
+  g.fillText(`long +${(lim * 2.54).toFixed(0)} cm`, cx, 12);
+  g.fillText(`short -${(lim * 2.54).toFixed(0)} cm`, cx, h - 4);
 }
 
 /** Downrange error against the range it was fired from: does the table fail at one end? */
@@ -152,11 +152,13 @@ export function errorVsRange(cv: HTMLCanvasElement, shots: ShotRecord[]): void {
     g.stroke();
     g.globalAlpha = 1;
     g.textAlign = 'right';
-    g.fillText(`${e >= 0 ? '+' : ''}${e.toFixed(0)}"`, padL - 4, Y(e) + 3.5);
+    // Axis ticks are error, which is a handful of centimetres -- metres here would be all
+    // leading zeros.
+    g.fillText(`${e >= 0 ? '+' : ''}${(e * 2.54).toFixed(0)}`, padL - 4, Y(e) + 3.5);
   }
   g.textAlign = 'center';
-  g.fillText(`${rLo.toFixed(0)} in`, padL + 14, h - 5);
-  g.fillText(`${rHi.toFixed(0)} in`, w - 20, h - 5);
+  g.fillText(`${(rLo * 0.0254).toFixed(1)} m`, padL + 14, h - 5);
+  g.fillText(`${(rHi * 0.0254).toFixed(1)} m`, w - 20, h - 5);
 
   for (const s of done) {
     g.beginPath();
@@ -188,7 +190,9 @@ export function errorVsRange(cv: HTMLCanvasElement, shots: ShotRecord[]): void {
       g.stroke();
       g.fillStyle = ACCENT;
       g.textAlign = 'left';
-      g.fillText(`${m >= 0 ? '+' : ''}${(m * 12).toFixed(1)} in of error per foot of range`, padL + 4, padT + 11);
+      // Slope is inches of error per inch of range, which is dimensionless -- so it is the
+      // same number in any unit, and only the phrasing changes.
+      g.fillText(`${m >= 0 ? '+' : ''}${(m * 100).toFixed(1)} cm of error per metre of range`, padL + 4, padT + 11);
     }
   }
 }
@@ -236,10 +240,10 @@ export function histogram(cv: HTMLCanvasElement, shots: ShotRecord[]): void {
 
   g.fillStyle = DIM;
   g.textAlign = 'left';
-  g.fillText(`short -${lim.toFixed(0)}"`, 4, h - 5);
+  g.fillText(`short -${(lim * 2.54).toFixed(0)} cm`, 4, h - 5);
   g.textAlign = 'right';
-  g.fillText(`long +${lim.toFixed(0)}"`, w - 4, h - 5);
+  g.fillText(`long +${(lim * 2.54).toFixed(0)} cm`, w - 4, h - 5);
   g.textAlign = 'center';
   g.fillStyle = INK;
-  g.fillText(`mean ${mean >= 0 ? '+' : ''}${mean.toFixed(1)}"`, Math.max(40, Math.min(w - 40, mx)), h - 5);
+  g.fillText(`mean ${mean >= 0 ? '+' : ''}${(mean * 2.54).toFixed(1)} cm`, Math.max(40, Math.min(w - 40, mx)), h - 5);
 }

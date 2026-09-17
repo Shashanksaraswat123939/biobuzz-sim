@@ -952,13 +952,21 @@ export class Scene {
       if (h.alliance === this.zoneAlliance) this.setZoneSide(h.upCell === 'A' ? 0 : 1);
     }
 
-    // Redo the map when the robot's motion has changed enough to move it. Repainting every
-    // frame would be a canvas upload per frame for a picture that barely changes; 0.15 m/s
-    // is about a tenth of top speed, and below that the map is the same map.
-    if (this.zoneMesh?.visible) {
-      const v: [number, number] = [s.robot.v[0], s.robot.v[2]];
-      if (Math.hypot(v[0] - this.zoneVel[0], v[1] - this.zoneVel[1]) > 0.15) this.repaintZone(v);
-    }
+    // THE MAP IS PAINTED FOR A STATIONARY ROBOT, deliberately, and it used to repaint from
+    // the live velocity every time that moved by 0.15 m/s.
+    //
+    // Two reasons it does not any more. The question a driver asks of a floor map is "if I
+    // GO there, can I shoot?", and the answer to that is the stationary one -- painting every
+    // distant cell with the velocity the robot happens to have right now answers "if I were
+    // over there moving like this", which is a hypothetical nobody asked.
+    //
+    // And measurement killed it: tools/collect.ts --moving fired ONE shot out of forty, with
+    // that shot 280 rpm outside its band, where the same run standing still fired forty. The
+    // lead moves the target rpm every loop and the readiness gate needs three consecutive
+    // loops inside 60 rpm, so on the move the gate essentially never latches. A map that
+    // turns greener as you drive at the hive would be describing shots this robot cannot
+    // take. `repaintZone` still takes a velocity, so re-enabling it is one line once firing
+    // on the move works.
 
     const r = s.robot;
     this.robotGroup.position.set(r.p[0], r.p[1], r.p[2]);

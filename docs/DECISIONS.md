@@ -732,3 +732,34 @@ The fix is one honest census: balls inside the up CELL of the alliance's own hiv
 the buzzer and at each tip. It should live in `World`, next to the scoring, so that every tool
 shares it instead of each one inventing its own.
 
+## OPEN: the robot cannot shoot on the move at all
+
+`tools/collect.ts --shots 40` fires forty shots standing still. The same run with `--moving`
+fires **one**, and that one leaves 280 rpm outside its band.
+
+The cause is the interaction between two things that are each individually reasonable. The
+motion lead recomputes the required exit speed every loop -- shooting while closing needs less,
+while retreating needs more -- so the target rpm is a moving goalpost. The readiness gate needs
+the wheel inside `tolRpm` for `readySteps` consecutive loops. A wheel chasing a target that
+moves faster than it can track never gets three loops in a row, so the gate never latches.
+
+`FlywheelGate.java` has the same structure and the same guard (`setTargetRpm` resets the band
+count when the target moves by more than half the tolerance), so the deliverable inherits it.
+
+This matters more than it looks. The lead is a real piece of work with its own tests, and it
+exists precisely so the robot can shoot without stopping -- but as configured, it is machinery
+that can never be used. Either the gate has to tolerate a moving target (compare against a
+PREDICTED rpm at the moment of release rather than the current one), or the robot's doctrine is
+stop-then-shoot and the lead is dead weight. Both are defensible; having the lead and not being
+able to use it is not.
+
+### What that means for the shot-zone overlay
+
+The overlay paints the STATIONARY map. It briefly repainted from the live velocity, which is
+correct physics -- the scatter is a fraction of exit speed, so retreating widens the group and
+closing tightens it, worth 58 squares against 0 at 1.5 m/s in the model. But it was the wrong
+thing to draw twice over: the useful question for a floor map is "if I go there, can I shoot",
+not "if I were there moving as I am now", and the measurement says the robot would not take the
+shot at all. The per-cell parameters still ship and `repaintZone` still takes a velocity, so it
+is one line to turn back on when firing on the move works.
+

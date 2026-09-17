@@ -167,3 +167,55 @@ describe('the staging is the staging the manual describes (10.3.1)', () => {
     }
   });
 });
+
+describe('a FLOWER is worth what STRATEGY.md 7.1 says it is', () => {
+  /**
+   * The whole endgame is "plug early, cap late": the first NECTAR into a tube is 5 for the
+   * bottom bonus plus 2 for itself, and it makes every ball above it yours. The scorer had the
+   * rule; nothing had ever checked that a ball dropped down a real tube lands in the volume
+   * the rule reads, which is the half that can silently stop working.
+   */
+  const drop = (kind: BallKind, flower: number) => {
+    const w = rig(staging.balls.map((b) => ({ kind: b.kind as BallKind, pos: b.pos as Vec3 })));
+    for (let i = 0; i < 60; i++) w.step({ seq: i, motors: {}, servos: {} });
+    const f = w.geom.flowers[flower];
+    // A NECTAR is with the human player at the start, so take a parked one and post it in.
+    const b = w.balls.balls.find((x) => x.kind === kind && !x.body.isEnabled())!;
+    w.balls.release(b, [f.x_m, f.topY_m + 0.05, f.z_m], [0, 0, -0.05], [0, 0, 0], 'free');
+    for (let i = 0; i < 240; i++) w.step({ seq: i, motors: {}, servos: {} });
+    return w;
+  };
+
+  it('three staged POLLEN sit in the scoring volume and belong to nobody', () => {
+    const w = rig(staging.balls.map((b) => ({ kind: b.kind as BallKind, pos: b.pos as Vec3 })));
+    for (let i = 0; i < 90; i++) w.step({ seq: i, motors: {}, servos: {} });
+    const c = w.endOfMatchCounts('red');
+    // 4 staged per tube: one in the bottom slot under the middle ring, three in the volume.
+    expect(c.flowers.map((f) => f.elements)).toEqual([3, 3, 3, 3]);
+    expect(c.flowers.every((f) => f.topNectar === null)).toBe(true);
+    expect(c.bottomNectar.every((b) => b.alliance === null)).toBe(true);
+  });
+
+  it('one NECTAR down a tube takes the bottom bonus and everything above it', () => {
+    const w = drop('nectarRed', 0);
+    const red = w.endOfMatchCounts('red');
+    expect(red.flowers[0].topNectar, 'the plug owns the flower').toBe('red');
+    expect(red.bottomNectar[0].alliance, 'and it is the bottom-most NECTAR').toBe('red');
+    // 5 for the bottom bonus, 2 for each element in the volume. The NECTAR is one of them.
+    const before = w.scorer.project('red', w.endOfMatchCounts('red'));
+    w.scorer.finalise('red', w.endOfMatchCounts('red'));
+    expect(w.scorer.state.red.total, 'the projection is the same arithmetic').toBe(before);
+    expect(w.scorer.state.red.bottomNectar).toBe(1);
+    expect(w.scorer.state.red.flower).toBeGreaterThanOrEqual(4);
+  });
+
+  it('the opponent NECTAR takes the same flower away from us', () => {
+    const w = drop('nectarBlue', 0);
+    expect(w.endOfMatchCounts('red').flowers[0].topNectar).toBe('blue');
+    expect(w.endOfMatchCounts('blue').flowers[0].topNectar).toBe('blue');
+    w.scorer.finalise('red', w.endOfMatchCounts('red'));
+    w.scorer.finalise('blue', w.endOfMatchCounts('blue'));
+    expect(w.scorer.state.red.flower, 'a flower we do not own scores us nothing').toBe(0);
+    expect(w.scorer.state.blue.flower).toBeGreaterThanOrEqual(4);
+  });
+});

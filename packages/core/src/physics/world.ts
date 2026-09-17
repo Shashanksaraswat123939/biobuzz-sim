@@ -661,9 +661,15 @@ export class World {
     let garden = 0;
 
     for (const b of this.balls.balls) {
+      if (!b.body.isEnabled()) continue;    // out of play: with the human player, or retired
       const p = this.balls.pos(b);
       this.geom.flowers.forEach((f, i) => {
-        if (!inFlowerScoringVolume(p, f, 0)) return;
+        // THE BALL'S OWN RADIUS, not zero. The census treated every ball as a point, so a
+        // ball counted only once its CENTRE cleared the middle ring -- and the manual counts
+        // it when any part of it is inside. With four POLLEN staged on the bottom ring the
+        // second one's centre lands within a third of an inch of that ring, so three of the
+        // four flowers scored 2 and one scored 3, from settling noise alone.
+        if (!inFlowerScoringVolume(p, f, b.radius)) return;
         flowers[i].elements++;
         const na = allianceOfNectar(b.kind);
         if (na === 'red') flowers[i].redNectar++;

@@ -134,9 +134,18 @@ function positional(alliance: Alliance, c: EndOfMatchCounts) {
   };
 }
 
-/** Is a ball inside a FLOWER's scoring volume (between the middle and top rings)? */
+/**
+ * Is a ball inside a FLOWER's scoring volume (between the middle and top rings)?
+ *
+ * ANY PART OF IT COUNTS -- manual 10.5.2, and PHYSICS_AND_SIMULATION.md 7.1 states the same
+ * rule when it works out the stack capacity. This used the ball's RADIUS across the tube and
+ * its CENTRE up it, which is two different rules on two axes and under-counts every flower:
+ * with four POLLEN staged on the bottom ring the second ball's centre lands at 4.1-4.45 in
+ * against a 4.34 in middle ring, so whether a flower scored 2 or 3 came down to a third of an
+ * inch of settling noise. By the real rule its top is at 5.5 and it is unambiguously in.
+ */
 export function inFlowerScoringVolume(p: Vec3, f: { x_m: number; z_m: number; openingR_m: number; scoreLow_m: number; scoreHigh_m: number }, r: number): boolean {
-  if (p[1] < f.scoreLow_m || p[1] > f.scoreHigh_m) return false;
+  if (p[1] + r < f.scoreLow_m || p[1] - r > f.scoreHigh_m) return false;
   return Math.hypot(p[0] - f.x_m, p[2] - f.z_m) < f.openingR_m + r;
 }
 

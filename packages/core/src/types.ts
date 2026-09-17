@@ -17,6 +17,8 @@ export interface Params {
     e_foam: number; e_poly: number; e_ball: number; rollMu: number; mu: number;
   };
   hive: {
+    /** Aim this fraction of the pocket's depth INSIDE the mouth. 0 aims at the lip. */
+    aimDepthFrac?: number;
     massKg: number; cgOffset_m: Vec3; Ipivot_kgm2: number;
     pivotY_m: number; redX_m: number; blueX_m: number;
     restAngles_deg: [number, number]; frictionTorque_Nm: number;
@@ -69,7 +71,9 @@ export interface RobotSpec {
     /** One-pole filter on the commanded bearing. 1 is straight through, which is what hunted. */
     aimFilterAlpha?: number;
     /** Hold fire above this chassis yaw rate: the setpoint outruns the axis. deg/s. */
-    fireYawCap_dps?: number };
+    fireYawCap_dps?: number;
+    /** Hold fire when the motion lead exceeds this: the shot is mostly chassis, not launch. */
+    fireLeadCap_deg?: number };
   hood: { enabled: boolean; servo: string; angleRange_deg: [number, number]; fixedAngle_deg: number; speed_dps: number;
     /** How close the hood must be to the angle the shot needs before firing, degrees. */
     tolDeg?: number };

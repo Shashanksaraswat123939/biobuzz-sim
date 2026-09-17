@@ -160,8 +160,28 @@ export class Hive {
   }
 
   /** Mouth centre of the up-facing CELL, in world coordinates. Aim here. */
+  /**
+   * Where to AIM, world frame. Not the mouth's centre: a point `aimDepthFrac` of the pocket's
+   * depth inside it.
+   *
+   * MEASURED AND REJECTED, and left here so it is not tried again. The idea was sound: every
+   * wild shot in the stopped and wobbling cases goes out with 3, 4 or 6 balls already in the
+   * CELL, none of them an aiming error, so a ball settling deeper should let the next one fly
+   * over it. tools/movingtune.ts --depth says otherwise --
+   *
+   *   frac   0.00   0.15   0.30   0.45
+   *   in%     92%    87%    75%    74%
+   *   wild      2      5      7     11
+   *
+   * -- because the target is an APERTURE, not a volume. Aiming past the mouth centre asks the
+   * ball to clear the near lip with less margin, and the lip takes more than the pile does.
+   * The mouth centre is the optimum and `aimDepthFrac` stays 0.
+   */
   upCellMouthWorld(): Vec3 {
-    return this.toWorld(cellMouthCentre(this.upCell));
+    const cell = this.upCell;
+    const frac = this.params.hive.aimDepthFrac ?? 0;
+    const u = cell.halfInterior[1] * (1 - 2 * frac);
+    return this.toWorld(fromCellLocal(cell, 0, u, 0));
   }
 
   /**

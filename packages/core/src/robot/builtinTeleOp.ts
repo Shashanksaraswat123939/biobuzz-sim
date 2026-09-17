@@ -141,10 +141,10 @@ export function leadShot(
   headingDeg: number,
   /** The hood's travel. The solved elevation is clamped into it. */
   hoodRange: readonly [number, number] = [-90, 90],
-): { azimuthDeg: number; speed: number; elevationDeg: number } {
+): { azimuthDeg: number; speed: number; elevationDeg: number; clamped: number; outrun: number } {
   const horiz = tableSpeed * Math.cos(elevationDeg * DEG);
   const vert = tableSpeed * Math.sin(elevationDeg * DEG);
-  const still = { azimuthDeg: bearingDeg, speed: tableSpeed, elevationDeg };
+  const still = { azimuthDeg: bearingDeg, speed: tableSpeed, elevationDeg, clamped: 0, outrun: 0 };
   if (horiz < 1e-3) return still;
 
   const bearingField = (headingDeg + bearingDeg) * DEG;
@@ -153,7 +153,36 @@ export function leadShot(
   const mag = Math.hypot(wantX, wantY);
   if (mag < 1e-3) return still;
 
+  // HOW FAR THE HOOD FELL SHORT OF THE SOLUTION, degrees. 0 means the aim was achievable.
+  //
+  // Past the hood's travel there is no launch that matches the table's vector at all, and the
+  // clamp below degrades smoothly rather than dividing by cos(85 deg) -- which is right, and
+  // silent. A degraded solution is not a shot: the ball leaves with a vertical belonging to an
+  // elevation the hood could not reach, and goes wherever that puts it. Measured, a robot
+  // driving diagonally at 1.1 m/s from 45 in put five of five balls out, 138 cm wide, with the
+  // velocity estimate good to 0.05 m/s and the turret nowhere near its stop. The aim was not
+  // wrong; the aim was IMPOSSIBLE, and nothing said so.
+  const wantEl = Math.atan2(vert, mag) * RAD;
+  const clamped = Math.abs(wantEl - clamp(wantEl, hoodRange[0], hoodRange[1]));
+
+  // WHEN THE ROBOT OUTRUNS THE BALL SIDEWAYS, m/s over.
+  //
+  // The lead cancels the robot's velocity by pointing the launch the other way, and the most
+  // it can cancel ACROSS the shot line is the ball's own horizontal speed. Past that there is
+  // no azimuth that works -- the ball is carried sideways faster than it is being thrown.
+  //
+  // It is not an exotic case. Horizontal speed is S*cos(elevation), and the table uses a
+  // steep hood up close: at 45 in it asks for 69 deg, which leaves about 0.8 m/s of
+  // horizontal out of a 2.3 m/s launch. A robot doing 1.06 m/s diagonally is FASTER THAN THE
+  // BALL sideways. Measured, five of five such shots went out, 132 cm wide, with the velocity
+  // estimate good to 0.05 m/s, the hood unclamped and the turret nowhere near its stop: the
+  // aim was executed exactly and the aim was impossible.
+  const cross = Math.abs(-vxField * Math.sin(bearingField) + vyField * Math.cos(bearingField));
+  const outrun = Math.max(0, cross - horiz);
+
   return {
+    clamped,
+    outrun,
     // WRAP. atan2 returns (-180, 180] and the heading is subtracted from it, so the result
     // can land anywhere in (-540, 540). Unwrapped, a bearing of +90 came out as -270 and
     // clamped to the turret's -120 limit -- the robot aimed at its end stop and fired over
@@ -244,6 +273,12 @@ export interface TeleOpState {
    * ball leaves, as a fraction. Above 1 the shot is refused.
    */
   accelBudget: number;
+  /** Degrees the hood fell short of the elevation the motion lead solved. 0 is achievable. */
+  aimClampedDeg: number;
+  /** m/s by which the chassis outruns the ball's own horizontal speed across the shot line. */
+  aimOutrun: number;
+  /** The exit speed and elevation the motion lead solved for, before the hood clamp. */
+  leadSpeed: number; leadElevDeg: number;
   /** How far the motion lead moved the aim, degrees. */
   leadDeg: number;
   /** The bearing the lead ASKED for, before the turret's travel clamped it. */
@@ -263,7 +298,7 @@ export const newTeleOpState = (): TeleOpState => ({
   turretManualDeg: 0, flywheelOn: false,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
-  lastFeedT: -999, pulsing: false, vRadial: 0, headingZero: 0, accelBudget: 0,
+  lastFeedT: -999, pulsing: false, vRadial: 0, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0,
 });
 
 const edge = (now: boolean, was: boolean) => now && !was;
@@ -712,6 +747,33 @@ export class BuiltinTeleOp {
     const yawCap = this.spec.turret.fireYawCap_dps ?? Infinity;
     const yawOk = Math.abs(s.localizer.omega) <= yawCap;
 
+    // AN IMPOSSIBLE AIM IS NOT A SHOT. leadShot clamps the solved elevation into the hood's
+    // travel and degrades smoothly, which is the right thing to do and completely silent --
+    // so a robot charging the goal at speed from close in fired a launch vector the hood
+    // could not produce and the ball went wherever that put it. Half a degree of clamp is
+    // noise; past a degree the vertical no longer belongs to the shot.
+    // Half a degree of hood clamp is noise; past a degree the vertical no longer belongs to
+    // the shot. Any outrun at all is fatal -- there is no azimuth, not a degraded one.
+    // HOW MUCH OF THE SHOT IS THE ROBOT'S OWN MOTION.
+    //
+    // The lead is exact on paper and every term feeding it checks out -- the hood arrives, the
+    // turret arrives, the velocity estimate is good to 0.05 m/s, nothing is clamped and the
+    // robot is not outrunning the ball. And past about twenty degrees of lead the shots go
+    // out anyway, a metre long and a metre wide, while a seventeen-degree lead lands 100%.
+    //
+    // A large lead means the ball's ground track is mostly the CHASSIS and only a little the
+    // launch, so every small error in the chassis velocity is multiplied into the shot instead
+    // of added to it. Rather than pretend to know which term dominates, this is set from the
+    // measurement: sweep it, take the angle where the shots stop landing. tools/movingtune.ts
+    // --lead does the sweep and prints the table it came from.
+    const leadCap = this.spec.turret.fireLeadCap_deg ?? Infinity;
+    const leadOk = Math.abs(st.leadDeg) <= leadCap;
+    const aimPossible = lead.clamped <= 1.0 && lead.outrun <= 0.02;
+    st.aimClampedDeg = lead.clamped;
+    st.aimOutrun = lead.outrun;
+    st.leadSpeed = lead.speed;
+    st.leadElevDeg = lead.elevationDeg;
+
     // ACCELERATING OUT OF THE BAND BEFORE THE BALL LEAVES.
     //
     // The lead cancels the velocity the robot HAS. The feed commits about `leadLatency_s`
@@ -739,13 +801,16 @@ export class BuiltinTeleOp {
     const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
     st.readyCount = atSpeed ? st.readyCount + 1 : 0;
     st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretErrDeg) < 3
-      && st.turretPastStopDeg < 0.5 && !s.game.hiveTipping && mouthOpen && accelOk && yawOk;
+      && st.turretPastStopDeg < 0.5 && !s.game.hiveTipping && mouthOpen && accelOk && yawOk && aimPossible && leadOk;
 
     st.hold = !wheelOn ? ''
       : s.game.hiveTipping ? 'hive is tipping'
       : !mouthOpen ? `mouth faces away, ${s.game.upCellOpenDeg.toFixed(0)} deg off its opening - DRIVE ROUND`
       : !accelOk ? `accelerating out of the band: ${(st.accelBudget * 100).toFixed(0)}% of it before the ball leaves`
       : !yawOk ? `turning too fast to aim: ${Math.abs(s.localizer.omega).toFixed(0)} deg/s, cap ${yawCap.toFixed(0)}`
+      : !leadOk ? `too much of this shot is the robot's own motion: ${Math.abs(st.leadDeg).toFixed(0)} deg of lead, cap ${leadCap.toFixed(0)} - SLOW DOWN`
+      : lead.outrun > 0.02 ? `moving sideways faster than the ball flies: ${lead.outrun.toFixed(2)} m/s over - SLOW DOWN or back off`
+      : !aimPossible ? `no launch fits: the hood is ${lead.clamped.toFixed(0)} deg short of the shot this motion needs`
       : st.turretPastStopDeg >= 0.5 ? `turret cannot reach, ${st.turretPastStopDeg.toFixed(0)} deg past its stop`
       : Math.abs(st.turretErrDeg) >= 3 ? `turret ${st.turretErrDeg.toFixed(0)} deg off`
       // No cell is a real answer, not a failure: there is no hood angle that scores from here

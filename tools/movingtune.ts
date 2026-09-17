@@ -45,6 +45,9 @@ export interface Shot {
   aimErr: number;
   /** Which ball of the run this was, and how many were already sitting in the up CELL. */
   nth: number; inCell: number;
+  /** The lead the brain applied, how far past its stop the aim wanted, and the velocity error. */
+  leadDeg: number; pastStop: number; velErr: number; speed: number;
+  leadSpeed: number; leadElev: number; hoodNow: number; outrun: number; clampDeg: number;
 }
 
 export interface Result { shots: Shot[]; fired: number; landed: number; secs: number; cycle_s: number }
@@ -74,6 +77,8 @@ export async function run(opts: {
   seed: number; range_in: number; drive: [number, number]; wobble: number; secs: number;
   /** Degrees off the mouth's normal to stand. 0 is square on; the room is off to the side. */
   bearing_deg?: number;
+  /** Disable the land-probability gate, to ask what the mechanism can do rather than what it does. */
+  noGate?: boolean;
   /** Stick on the turn axis. A robot spinning on the spot drives the bearing through +-180. */
   spin?: number;
   mutate?: (p: Params, r: RobotSpec) => void;
@@ -81,7 +86,13 @@ export async function run(opts: {
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
   opts.mutate?.(p, spec);
-  spec.flywheel.minLandProb = 0;          // mechanism, not policy: let every shot through
+  // THE GATE AS CONFIGURED, unless --nogate. This tool ran with minLandProb forced to 0 for a
+  // long time, on the reasoning that the mechanism is the question and the threshold is
+  // policy. That is true when asking "can the shooter do this at all" and false when asking
+  // "does the robot score", which is the question that matters -- with the gate off, every
+  // shot the robot would have REFUSED still counts against it. Run both ways: the gap between
+  // them is exactly what the gate is buying.
+  if (opts.noGate) spec.flywheel.minLandProb = 0;
   // A bin of POLLEN and nothing else on the field, the same rig tools/movingfire.ts uses:
   // preloading straight out of the CAD staging pulls the NECTAR back out of the CELLs and
   // the first preload() that refuses one stops the top-up for good, so the hopper stays empty.
@@ -142,7 +153,9 @@ export async function run(opts: {
 
   // Per-shot state, sampled at the frame the ball leaves.
   const at: { rpmErr: number; hoodErr: number; turretErr: number; vr: number; range: number;
-    omega: number; muzzleLat: number; aimErr: number; nth: number; inCell: number }[] = [];
+    omega: number; muzzleLat: number; aimErr: number; nth: number; inCell: number;
+    leadDeg: number; pastStop: number; velErr: number; speed: number;
+    leadSpeed: number; leadElev: number; hoodNow: number; outrun: number; clampDeg: number }[] = [];
   let seen = 0;
   const t0 = world.t;
   const tips0 = hive.tips;
@@ -178,6 +191,19 @@ export async function run(opts: {
         aimErr: ((Math.atan2(mz.dir[0], mz.dir[2]) - Math.atan2(dx, dz)) * 180) / Math.PI,
         nth: seen,
         inCell: hive.ballsInUpCell,
+        leadDeg: brain.state.leadDeg,
+        pastStop: brain.state.turretPastStopDeg,
+        // What the lead was WORKING FROM against what the chassis was really doing. The lead
+        // is only as good as the velocity it subtracts, and that velocity is a filtered
+        // localizer reading, not the truth.
+        velErr: Math.hypot(s.localizer.vx * 0.0254 - world.robot.body.linvel().z,
+                           s.localizer.vy * 0.0254 - world.robot.body.linvel().x),
+        speed: Math.hypot(world.robot.body.linvel().x, world.robot.body.linvel().z),
+        leadSpeed: brain.state.leadSpeed,
+        leadElev: brain.state.leadElevDeg,
+        hoodNow: world.snapshot().robot.hood.angleDeg,
+        outrun: brain.state.aimOutrun,
+        clampDeg: brain.state.aimClampedDeg,
       });
     }
     const r = world.robot.pos;
@@ -203,6 +229,8 @@ export async function run(opts: {
       turretErr: a?.turretErr ?? NaN, vr: a?.vr ?? NaN, range_in: a?.range ?? NaN,
       omega: a?.omega ?? NaN, muzzleLat: a?.muzzleLat ?? NaN, aimErr: a?.aimErr ?? NaN,
       nth: a?.nth ?? NaN, inCell: a?.inCell ?? NaN,
+      leadDeg: a?.leadDeg ?? NaN, pastStop: a?.pastStop ?? NaN, velErr: a?.velErr ?? NaN, speed: a?.speed ?? NaN,
+      leadSpeed: a?.leadSpeed ?? NaN, leadElev: a?.leadElev ?? NaN, hoodNow: a?.hoodNow ?? NaN, outrun: a?.outrun ?? NaN, clampDeg: a?.clampDeg ?? NaN,
     }));
   return { shots, fired, landed: shots.filter((s) => s.landed).length, secs, cycle_s: spec.transfer.cycleTime_s };
 }
@@ -210,13 +238,13 @@ export async function run(opts: {
 /** Pool several seeds of one case. */
 export async function pool(
   name: string, drive: [number, number], wobble: number, range_in: number, seeds: number,
-  mutate?: (p: Params, r: RobotSpec) => void, bearing_deg = 0, spin = 0,
+  mutate?: (p: Params, r: RobotSpec) => void, bearing_deg = 0, spin = 0, noGate = false,
 ): Promise<{ name: string; shots: Shot[]; secs: number; cycle_s: number }> {
   const shots: Shot[] = [];
   let secs = 0;
   let cycle_s = 1;
   for (let i = 0; i < seeds; i++) {
-    const r = await run({ seed: 7 + i * 18, range_in, drive, wobble, secs: 14, bearing_deg, spin, mutate });
+    const r = await run({ seed: 7 + i * 18, range_in, drive, wobble, secs: 14, bearing_deg, spin, noGate, mutate });
     shots.push(...r.shots);
     secs += r.secs;
     cycle_s = r.cycle_s;
@@ -267,6 +295,14 @@ export async function main(argv: string[] = []): Promise<void> {
     ['receding 0.25', [0, -0.25], 0, 38, 55, 0],
     ['strafing 0.35', [0.35, 0], 0, 50, 30, 0],
     ['wobbling', [0, 0], 0.35, 50, 30, 0],
+    // ---- AT SPEED. The cases above are a robot pottering; these are one being driven.
+    // 0.6 of stick is about 0.8 m/s and 0.9 is near the drivetrain's 1.22 m/s top speed,
+    // which is what a match actually looks like.
+    ['FAST closing 0.7', [0, 0.7], 0, 82, 55, 0],
+    ['FAST receding 0.7', [0, -0.7], 0, 34, 55, 0],
+    ['FAST strafing 0.8', [0.8, 0], 0, 50, 30, 0],
+    ['FAST wobble 0.7', [0, 0], 0.7, 50, 30, 0],
+    ['FAST diagonal', [0.6, 0.6], 0, 60, 40, 0],
     // SPINNING ON THE SPOT: the case that drives the bearing through +-180 over and over and
     // makes the turret unwind. Nothing else in this list exercises the wrap.
     //
@@ -277,7 +313,8 @@ export async function main(argv: string[] = []): Promise<void> {
     ['spinning 0.25', [0, 0], 0, 50, 30, 0.25],
   ];
   const rows = [];
-  for (const [name, drive, wobble, range, bear, spin] of cases) rows.push(await pool(name, drive, wobble, range, seeds, undefined, bear, spin));
+  const noGate = argv.includes('--nogate');
+  for (const [name, drive, wobble, range, bear, spin] of cases) rows.push(await pool(name, drive, wobble, range, seeds, undefined, bear, spin, noGate));
   report(rows);
 
   const all = rows.flatMap((r) => r.shots);
@@ -300,13 +337,13 @@ export async function main(argv: string[] = []): Promise<void> {
   if (argv.includes('--wild')) {
     console.log('WILD SHOTS (more than 20 cm lateral or 30 cm downrange off the mouth centre)');
     console.log('');
-    console.log('  case              long cm   lat cm   AIM err   ball #   already in CELL   range');
+    console.log('  case               long cm  lat cm   lead  leadSpd  leadEl  hoodNow  outrun  clamp  spd  range');
     for (const r of rows) {
       for (const x of r.shots) {
         if (Math.abs(x.lat_in) * 2.54 <= 20 && Math.abs(x.long_in) * 2.54 <= 30) continue;
         console.log(
-          `  ${r.name.padEnd(16)} ${cm(x.long_in).toFixed(0).padStart(6)}   ${cm(x.lat_in).toFixed(0).padStart(6)}   ` +
-          `${x.aimErr.toFixed(2).padStart(7)}  ${String(x.nth).padStart(6)}  ${String(x.inCell).padStart(15)}   ${x.range_in.toFixed(0).padStart(5)}`);
+          `  ${r.name.padEnd(17)} ${cm(x.long_in).toFixed(0).padStart(6)}  ${cm(x.lat_in).toFixed(0).padStart(6)}  ` +
+          `${x.leadDeg.toFixed(1).padStart(6)}  ${x.leadSpeed.toFixed(2).padStart(7)}  ${x.leadElev.toFixed(1).padStart(6)}  ${x.hoodNow.toFixed(1).padStart(7)}  ${x.outrun.toFixed(2).padStart(6)}  ${x.clampDeg.toFixed(1).padStart(5)}  ${x.speed.toFixed(2).padStart(4)}  ${x.range_in.toFixed(0).padStart(5)}`);
       }
     }
     console.log('');
@@ -356,6 +393,54 @@ export async function main(argv: string[] = []): Promise<void> {
       console.log(`  ${st.toFixed(2).padStart(5)}  ${String(s.length).padStart(3)}  ` +
         `${((100 * s.filter((x) => x.landed).length) / s.length).toFixed(0).padStart(4)}%  ${String(wild).padStart(5)}  ` +
         `${(s.length / Math.max(0.1, r.secs)).toFixed(2).padStart(8)}   ` +
+        `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}`);
+    }
+    console.log('');
+  }
+
+  // --lead: how much of the shot may be the robot's own motion before it stops landing.
+  if (argv.includes('--lead')) {
+    console.log('MOTION-LEAD CAP SWEEP, degrees. Inf is no cap.');
+    console.log('');
+    console.log('  cap    n   in%   wild   shots/s     long cm       lat cm');
+    for (const capDeg of [12, 16, 20, 25, 1e9]) {
+      const rs = [];
+      for (const [name, drive, wobble, range, bear, spin] of cases) {
+        rs.push(await pool(name, drive, wobble, range, Math.max(2, seeds - 2),
+          (_p, r) => { r.turret.fireLeadCap_deg = capDeg; }, bear, spin));
+      }
+      const s = rs.flatMap((r) => r.shots);
+      const secs = rs.reduce((a, r) => a + r.secs, 0);
+      const lng = s.map((x) => cm(x.long_in)).filter(Number.isFinite);
+      const lat = s.map((x) => cm(x.lat_in)).filter(Number.isFinite);
+      const wild = s.filter((x) => Math.abs(x.lat_in) * 2.54 > 20 || Math.abs(x.long_in) * 2.54 > 30).length;
+      console.log(`  ${(capDeg > 1e6 ? 'none' : capDeg.toFixed(0)).padStart(4)}  ${String(s.length).padStart(3)}  ` +
+        `${((100 * s.filter((x) => x.landed).length) / Math.max(1, s.length)).toFixed(0).padStart(4)}%  ${String(wild).padStart(5)}  ` +
+        `${(s.length / Math.max(0.1, secs)).toFixed(2).padStart(8)}   ` +
+        `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}`);
+    }
+    console.log('');
+  }
+
+  // --depth: how far INTO the pocket to aim, as a fraction of its depth.
+  if (argv.includes('--depth')) {
+    console.log('AIM DEPTH SWEEP. 0 aims at the mouth centre, 0.5 at the pocket centre.');
+    console.log('');
+    console.log('  frac   n   in%   wild   shots/s     long cm       lat cm');
+    for (const f of [0, 0.15, 0.3, 0.45]) {
+      const rs = [];
+      for (const [name, drive, wobble, range, bear, spin] of cases) {
+        rs.push(await pool(name, drive, wobble, range, Math.max(2, seeds - 2),
+          (pp) => { pp.hive.aimDepthFrac = f; }, bear, spin));
+      }
+      const s = rs.flatMap((r) => r.shots);
+      const secs = rs.reduce((a, r) => a + r.secs, 0);
+      const lng = s.map((x) => cm(x.long_in)).filter(Number.isFinite);
+      const lat = s.map((x) => cm(x.lat_in)).filter(Number.isFinite);
+      const wild = s.filter((x) => Math.abs(x.lat_in) * 2.54 > 20 || Math.abs(x.long_in) * 2.54 > 30).length;
+      console.log(`  ${f.toFixed(2).padStart(4)}  ${String(s.length).padStart(3)}  ` +
+        `${((100 * s.filter((x) => x.landed).length) / Math.max(1, s.length)).toFixed(0).padStart(4)}%  ${String(wild).padStart(5)}  ` +
+        `${(s.length / Math.max(0.1, secs)).toFixed(2).padStart(8)}   ` +
         `${mean(lng).toFixed(0).padStart(5)} +-${sd(lng).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(5)} +-${sd(lat).toFixed(0).padStart(3)}`);
     }
     console.log('');

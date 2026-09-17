@@ -85,7 +85,7 @@ async function sampleAt(range_in: number, shots: number, seed: number, drive = D
   };
   step();
   const press = emptyGamepad();
-  press.a = true;
+  press.dpad_up = true;
   step(press);
   // Spin up STANDING STILL, then drive. Holding the stick through a 4 s spin-up walks the
   // robot most of the way across the field before the first sample.

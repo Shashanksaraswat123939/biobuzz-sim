@@ -73,7 +73,7 @@ async function run(useHood: boolean, drive: [number, number], wobble: number, se
   const arm = emptyGamepad();
   step(arm);
   const armed = emptyGamepad();
-  armed.a = true;
+  armed.dpad_up = true;
   step(armed);
 
   const hold = (t: number): GamepadState => {

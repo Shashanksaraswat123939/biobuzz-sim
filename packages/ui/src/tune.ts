@@ -7,6 +7,7 @@
  * The hint says where the value came from — measured, from the CAD, or a guess — because a
  * guess with a big effect is the one worth going and measuring.
  */
+import { clamp } from '@core/units.js';
 import type { Params, RobotSpec } from '@core/types.js';
 
 export interface Tunable {
@@ -183,19 +184,36 @@ export function buildTunePanel(
     const fmt = t.fmt ?? f3;
     const wrap = document.createElement('div');
     wrap.className = 'tune';
-    const value = t.get(params, robot);
+    const start = t.get(params, robot);
     wrap.innerHTML = `
-      <label><span>${t.label}${t.rebuild ? ' *' : ''}</span><b>${fmt(value)}</b></label>
-      <input type="range" min="${t.min}" max="${t.max}" step="${t.step}" value="${value}" />
+      <div class="top"><span>${t.label}${t.rebuild ? ' *' : ''}</span>
+        <input type="number" min="${t.min}" max="${t.max}" step="${t.step}" value="${start}" />
+      </div>
+      <input type="range" min="${t.min}" max="${t.max}" step="${t.step}" value="${start}" />
+      <div class="ends"><i>${fmt(t.min)}</i><i>${fmt(t.max)}</i></div>
       <small>${t.hint}</small>`;
-    const input = wrap.querySelector('input')!;
-    const out = wrap.querySelector('b')!;
-    input.oninput = () => {
-      const v = Number(input.value);
+    const slider = wrap.querySelector<HTMLInputElement>('input[type=range]')!;
+    const box = wrap.querySelector<HTMLInputElement>('input[type=number]')!;
+    // The filled part of the track is where the value sits in its own span. Chrome will not
+    // paint a range track from the value on its own, so it is a custom property the two
+    // inputs both keep up to date.
+    const paint = (v: number) => {
+      wrap.style.setProperty('--fill', `${((v - t.min) / Math.max(1e-9, t.max - t.min)) * 100}%`);
+      wrap.classList.toggle('changed', Math.abs(v - start) > t.step / 2);
+    };
+    const apply = (raw: number, echo: HTMLInputElement) => {
+      // A TYPED VALUE IS STILL A LEGAL VALUE. The panel writes straight into the objects the
+      // physics runs on, so an out-of-range or off-step entry would put the simulator in a
+      // state no slider can represent or return from.
+      const v = clamp(Math.round(raw / t.step) * t.step, t.min, t.max);
       t.set(params, robot, v);
-      out.textContent = fmt(v);
+      echo.value = String(Number(v.toFixed(6)));
+      paint(v);
       onChange(t);
     };
+    slider.oninput = () => apply(Number(slider.value), box);
+    box.onchange = () => { if (Number.isFinite(Number(box.value))) apply(Number(box.value), slider); else box.value = String(t.get(params, robot)); };
+    paint(start);
     host.appendChild(wrap);
   }
   const note = document.createElement('p');

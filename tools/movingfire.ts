@@ -119,7 +119,7 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gat
 
   const arm = emptyGamepad();
   step(arm);
-  arm.a = true;
+  arm.dpad_up = true;
   step(arm);
 
   // SPIN THE WHEEL UP STANDING STILL, THEN settle the drive. One combined settle with the
@@ -132,8 +132,7 @@ async function pass(c: Case, seed: number, maxSeconds: number, tau?: number, gat
     const g = emptyGamepad();
     // Robot-centric: these cases are written relative to the nose of a robot placed facing
     // the hive. The driver's default is field-centric.
-    g.y = true;
-    g.left_stick_x = c.drive[0];
+        g.left_stick_x = c.drive[0];
     // `ramp` is a steady change of stick per second: constant acceleration, the case a
     // first-order predictor is actually built for. `wobble` oscillates instead, and an
     // oscillation defeats v + a*tau at exactly the moments the gate likes -- at a velocity

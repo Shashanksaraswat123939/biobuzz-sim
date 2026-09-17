@@ -162,6 +162,16 @@ export class Scene {
   private ballMeshes: THREE.Mesh[] = [];
   private rockers: THREE.Group[] = [];
   private robotGroup = new THREE.Group();
+  /**
+   * The OPPONENT, drawn plainly on purpose.
+   *
+   * Your robot is the CAD one, with its wheels and its hood and its intake roller turning.
+   * The opponent is a coloured box with a nose and a turret stick, because the two have to be
+   * instantly distinguishable at a glance while driving -- and because everything you need to
+   * read off it is where it is, which way its intake points, and where its turret is aimed.
+   */
+  private opponentGroup: THREE.Group | null = null;
+  private opponentTurret: THREE.Group | null = null;
   private turretGroup = new THREE.Group();
   private hoodMesh!: THREE.Mesh;
   private wheelMeshes: THREE.Object3D[] = [];
@@ -208,6 +218,8 @@ export class Scene {
     ballSpecs: { id: number; r: number; kind: string }[],
     /** The same robot.json the physics builds from, so the picture cannot drift from it. */
     private readonly robotSpec: RobotSpec,
+    /** Which side you are on. The opponent is drawn in the other alliance's colour. */
+    private readonly alliance: 'red' | 'blue' = 'red',
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -821,6 +833,38 @@ export class Scene {
    * the shooter with a barrel that is clearly the OUTtake. Render only -- the physics is
    * still one box plus the tyre model, which is what `robot.json` describes.
    */
+  /** Chassis, a nose showing which way the intake faces, and a turret stick. */
+  private buildOpponent(): void {
+    const c = this.robotSpec.chassis;
+    // The opponent is whichever alliance you are not.
+    const colour = this.alliance === 'red' ? COL.blue : COL.red;
+    const g = new THREE.Group();
+    const body = new THREE.MeshStandardMaterial({ color: colour, roughness: 0.55, metalness: 0.15 });
+    const box = new THREE.Mesh(new THREE.BoxGeometry(c.width_m, c.height_m, c.length_m), body);
+    box.position.y = c.height_m / 2;
+    g.add(box);
+    // The nose is the INTAKE end: a wedge across the front, at mouth height.
+    const nose = new THREE.Mesh(
+      new THREE.BoxGeometry(c.width_m * 0.8, 0.05, 0.05),
+      new THREE.MeshStandardMaterial({ color: 0xf2f5f8, roughness: 0.4 }),
+    );
+    nose.position.set(0, 0.07, c.length_m / 2 + 0.02);
+    g.add(nose);
+    const t = new THREE.Group();
+    t.position.y = c.height_m + 0.02;
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.02, 0.22, 10),
+      new THREE.MeshStandardMaterial({ color: 0xd8dde3, roughness: 0.4, metalness: 0.5 }),
+    );
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.z = 0.11;
+    t.add(barrel);
+    g.add(t);
+    this.opponentTurret = t;
+    this.opponentGroup = g;
+    this.scene.add(g);
+  }
+
   private buildRobot(): void {
     const c = { L: 0.43, W: 0.43, H: 0.30 };
     const frame = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.5, roughness: 0.45 });
@@ -1085,6 +1129,17 @@ export class Scene {
     // turns greener as you drive at the hive would be describing shots this robot cannot
     // take. `repaintZone` still takes a velocity, so re-enabling it is one line once firing
     // on the move works.
+
+    if (s.opponent) {
+      if (!this.opponentGroup) this.buildOpponent();
+      const o = s.opponent;
+      this.opponentGroup!.visible = true;
+      this.opponentGroup!.position.set(o.p[0], o.p[1], o.p[2]);
+      this.opponentGroup!.rotation.y = o.yawDeg * DEG;
+      this.opponentTurret!.rotation.y = o.turret.angleDeg * DEG;
+    } else if (this.opponentGroup) {
+      this.opponentGroup.visible = false;
+    }
 
     const r = s.robot;
     this.robotGroup.position.set(r.p[0], r.p[1], r.p[2]);

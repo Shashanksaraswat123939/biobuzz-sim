@@ -19,6 +19,7 @@ import robotSpec from '../config/robot.json';
 import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/world.js';
 import { BuiltinTeleOp, ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { inches, M_TO_IN } from '../packages/core/src/units.js';
+import staging from '../assets/staging.json';
 import type { BallKind, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 beforeAll(async () => { await initPhysics(); });
@@ -96,5 +97,73 @@ describe('the FLOWER retrieval opening', () => {
     const dia_in = (k: 'pollen' | 'nectar') => params.ball[k].d_m * M_TO_IN;
     expect(f.retrievalTopY_m * M_TO_IN).toBeGreaterThan(dia_in('pollen'));
     expect(f.retrievalTopY_m * M_TO_IN).toBeLessThan(dia_in('nectar'));
+  });
+});
+
+describe('the staging is the staging the manual describes (10.3.1)', () => {
+  /**
+   * THREE SEPARATE BUGS PUT 19 OF 56 BALLS OUT OF PLAY BEFORE THE MATCH STARTED, and none of
+   * them reported anything -- the balls were simply never there.
+   *
+   *  - The GARDEN POLLEN come from the STEP at |x| 73.1 in, two and a half inches the far side
+   *    of a 70.68 in wall, so all sixteen were benched as out of bounds.
+   *  - `parkOffField` called a ball out of bounds when its CENTRE was within a RADIUS of the
+   *    wall, which is every POLLEN in the two FLOWERs that stand on the +-X walls.
+   *  - The preload took the four nearest `free` POLLEN, and at construction time nothing has
+   *    been classified yet, so the nearest flower emptied itself into the hopper.
+   */
+  const built = () => {
+    const w = rig(staging.balls.map((b) => ({ kind: b.kind as BallKind, pos: b.pos as Vec3 })));
+    for (let i = 0; i < 90; i++) w.step({ seq: i, motors: {}, servos: {} });
+    return w;
+  };
+
+  it('has all 40 POLLEN in play, 4 up every FLOWER and 8 in each GARDEN', () => {
+    const w = built();
+    const live = w.balls.balls.filter((b) => b.body.isEnabled());
+    expect(live.filter((b) => b.kind === 'pollen')).toHaveLength(40);
+
+    for (const [i, f] of w.geom.flowers.entries()) {
+      const n = live.filter((b) => {
+        const p = w.balls.pos(b);
+        return Math.hypot(p[0] - f.x_m, p[2] - f.z_m) < f.openingR_m + b.radius;
+      }).length;
+      expect(n, `flower ${i} at ${(f.x_m * M_TO_IN).toFixed(0)}, ${(f.z_m * M_TO_IN).toFixed(0)}`).toBe(4);
+    }
+
+    for (const a of ['red', 'blue'] as const) {
+      const z = w.geom.zones.find((q) => q.name === 'GARDEN' && q.alliance === a)!;
+      const n = live.filter((b) => {
+        const p = w.balls.pos(b);
+        return p[0] > z.min[0] && p[0] < z.max[0] && p[2] > z.min[2] && p[2] < z.max[2] && p[1] < z.max[1];
+      }).length;
+      expect(n, `${a} GARDEN`).toBe(8);
+    }
+  });
+
+  it('starts 3 NECTAR in each up CELL and leaves 5 per alliance with the human player', () => {
+    const w = built();
+    const parked = w.balls.balls.filter((b) => !b.body.isEnabled());
+    expect(parked).toHaveLength(10);
+    expect(parked.every((b) => b.kind !== 'pollen'), 'a POLLEN is never out of play at the start').toBe(true);
+    expect(w.balls.balls.filter((b) => b.state === 'cell')).toHaveLength(6);
+  });
+
+  it('a preload is 4 POLLEN per robot and never comes out of a FLOWER or a GARDEN', () => {
+    const p = structuredClone(params) as unknown as Params;
+    const st = staging.balls.map((b) => ({ kind: b.kind as BallKind, pos: b.pos as Vec3 }));
+    const w = new World({ params: p, robot: spec(), staging: st, alliance: 'red', seed: 5, preload: 4, opponent: true });
+    for (let i = 0; i < 90; i++) w.step({ seq: i, motors: {}, servos: {} });
+    const snap = w.snapshot();
+    expect(snap.robot.hopper.count).toBe(4);
+    expect(snap.opponent?.hopper.count).toBe(4);
+    for (const [i, f] of w.geom.flowers.entries()) {
+      const n = w.balls.balls.filter((b) => {
+        if (!b.body.isEnabled()) return false;
+        const q = w.balls.pos(b);
+        return Math.hypot(q[0] - f.x_m, q[2] - f.z_m) < f.openingR_m + b.radius;
+      }).length;
+      expect(n, `flower ${i} after both preloads`).toBe(4);
+    }
   });
 });

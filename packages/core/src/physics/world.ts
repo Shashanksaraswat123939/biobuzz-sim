@@ -28,7 +28,11 @@ export interface WorldOptions {
   seed?: number;
   /** POLLEN the robot starts the match holding. Real robots do; autos rely on it. */
   preload?: number;
+  /** Put a second, real robot on the other alliance. See `World.opponent`. */
+  opponent?: boolean;
 }
+
+interface ImuSample { t: number; yaw: number; rate: number }
 
 export const emptyGamepad = (): GamepadState => ({
   left_stick_x: 0, left_stick_y: 0, right_stick_x: 0, right_stick_y: 0,
@@ -43,6 +47,25 @@ export async function initPhysics(): Promise<void> {
   await RAPIER.init();
 }
 
+/**
+ * Bring any staged POLLEN inside the wall. See `World.parkOffField` for why.
+ */
+function stageOnField(staging: StagedBall[], halfWidth_m: number, params: Params): StagedBall[] {
+  const r = params.ball.pollen.d_m / 2;
+  // Only a ball that is really OUTSIDE the wall moves, and it moves just inside it. A blanket
+  // clamp at halfWidth - r would also pull the FLOWER staging in: those tubes stand at 69.77
+  // in, which is inside the 70.68 in wall but outside that margin, and half an inch of drift
+  // is enough to leave a ball sitting on the tube's rim instead of down it.
+  const inside = (v: number) => (Math.abs(v) <= halfWidth_m ? v : Math.sign(v) * (halfWidth_m - r * 1.05));
+  return staging.map((b) => {
+    if (b.kind !== 'pollen') return b;
+    const [x, y, z] = b.pos;
+    const cx = inside(x);
+    const cz = inside(z);
+    return cx === x && cz === z ? b : { ...b, pos: [cx, y, cz] as Vec3 };
+  });
+}
+
 export class World {
   readonly geom: FieldGeometry;
   readonly physics: RAPIER.World;
@@ -53,6 +76,14 @@ export class World {
   readonly scorer = new Scorer();
   readonly battery: Battery;
   readonly alliance: Alliance;
+  /**
+   * The OPPONENT, when one was asked for: a second real robot on the other alliance, with its
+   * own body, its own battery and its own brain driving it through the same gamepad a human
+   * would. It is not a ghost and not a scripted animation -- it collides, it takes balls out
+   * of play, it tips its own HIVE and it scores against you.
+   */
+  readonly opponent: Robot | null = null;
+  readonly opponentBattery: Battery | null = null;
 
   t = 0;
   seq = 0;
@@ -62,7 +93,9 @@ export class World {
   private readonly params: Params;
   private lastActuators: ActuatorFrame = { seq: 0, motors: {}, servos: {} };
   private gamepads: [GamepadState, GamepadState] = [emptyGamepad(), emptyGamepad()];
-  private imuBuffer: { t: number; yaw: number; rate: number }[] = [];
+  private imuBuffer: ImuSample[] = [];
+  private oppImuBuffer: ImuSample[] = [];
+  private oppActuators: ActuatorFrame = { seq: 0, motors: {}, servos: {} };
   private leftStart: Record<Alliance, boolean> = { red: false, blue: false };
   private nectarEntitlement: Record<Alliance, number> = { red: 0, blue: 0 };
   private finalised = false;
@@ -82,7 +115,7 @@ export class World {
     const statics = this.physics.createRigidBody(RAPIER.RigidBodyDesc.fixed());
     this.buildStatics(statics);
 
-    this.balls = new BallSet(RAPIER, this.physics, opts.params, this.rng.fork(11), opts.staging);
+    this.balls = new BallSet(RAPIER, this.physics, opts.params, this.rng.fork(11), stageOnField(opts.staging, this.geom.halfWidth_m, opts.params));
     this.parkOffField();
     this.hives = {
       red: new Hive(RAPIER, this.physics, opts.params, this.geom, 'red', statics),
@@ -96,6 +129,15 @@ export class World {
       p: start.p,
       yaw: start.yawDeg * DEG,
     }, opts.alliance);
+    if (opts.opponent) {
+      const other: Alliance = opts.alliance === 'red' ? 'blue' : 'red';
+      const os = this.defaultStart(other, opts.robot);
+      this.opponent = new Robot(RAPIER, this.physics, opts.params, opts.robot, this.rng.fork(29), {
+        p: os.p,
+        yaw: os.yawDeg * DEG,
+      }, other);
+      this.opponentBattery = new Battery(opts.params.battery);
+    }
     this.preload = Math.max(0, Math.min(opts.preload ?? 0, opts.robot.hopper.capacity));
     this.loadPreload();
   }
@@ -137,11 +179,32 @@ export class World {
    * charges 12. Every autonomous plan timed in this simulator was wrong in the same
    * direction.
    */
+  /**
+   * ALL FORTY POLLEN ARE IN PLAY (manual 10.3.1), and sixteen of them were not.
+   *
+   * The GARDEN POLLEN come from the STEP's own centroids, which put them at |x| 73.1 in. The
+   * playing surface is 141.35 in across, so its inside face is at 70.68 -- the CAD has them
+   * two and a half inches the far side of the wall, resting in the garden trough as the
+   * physical part models it. `parkOffField` then did exactly what it is for and benched all
+   * sixteen before the match started, so the field ran the whole game on 24 POLLEN instead of
+   * 40 and each GARDEN was empty. Nothing reported it; they were simply never there.
+   *
+   * The fix is at the LOAD, not in the retirement rule: a POLLEN is always in play, so one
+   * staged outside is a placement to correct, and the correction is to bring it inside the
+   * wall by its own radius -- which lands it in the GARDEN zone the scorer actually uses.
+   *
+   * NECTAR is left exactly where the CAD puts it. Five per alliance genuinely do start OFF the
+   * field, with the human player (10.3.1, G426), and parking them is the right answer.
+   */
   private parkOffField(): void {
+    // OUT OF BOUNDS IS THE CENTRE PAST THE WALL, not the centre within a radius of it. A ball
+    // touching the glass is in play, and the margin cost a whole FLOWER: the two tubes on the
+    // +-X walls stand at |x| 69.77 in, so their four staged POLLEN each sat 0.91 in inside the
+    // 70.68 in wall -- inside the field by any reading -- and were benched before the match.
     const hw = this.geom.halfWidth_m;
     for (const b of this.balls.balls) {
       const q = this.balls.pos(b);
-      if (Math.abs(q[0]) > hw - b.radius || Math.abs(q[2]) > hw - b.radius) {
+      if (Math.abs(q[0]) > hw || Math.abs(q[2]) > hw) {
         this.balls.park(b);
         continue;
       }
@@ -213,14 +276,34 @@ export class World {
   }
 
   /** Take the POLLEN nearest the robot off the field and into its hopper. */
+  /**
+   * G304: each robot starts in contact with exactly 4 preload POLLEN. The staging has them --
+   * 40 POLLEN is 16 in the FLOWERs, 16 in the GARDENs and 8 left over, which is 4 for each of
+   * the two robots on the field.
+   *
+   * IT HAS TO SKIP THE STAGED ONES BY POSITION, not by `state`. Nothing has stepped yet when
+   * this runs, so `trackBallStates` has never classified anything and every ball still reads
+   * `free` -- including the ones standing in a flower tube. The nearest-four rule then emptied
+   * the flower closest to the start tile straight into the hopper, and that flower was simply
+   * missing for the rest of the match.
+   */
   private loadPreload(): void {
-    if (this.preload <= 0) return;
-    const p = this.robot.pos;
-    const free = this.balls.balls
-      .filter((b) => b.kind === 'pollen' && b.state === 'free' && b.body.isEnabled())
-      .map((b) => ({ b, d: Math.hypot(...(this.balls.pos(b).map((v, i) => v - p[i]) as Vec3)) }))
-      .sort((a, c) => a.d - c.d);
-    for (let i = 0; i < this.preload && i < free.length; i++) this.robot.preload(this.balls, free[i].b);
+    const takers: { r: Robot; n: number }[] = [{ r: this.robot, n: this.preload }];
+    if (this.opponent) takers.push({ r: this.opponent, n: this.preload });
+    const staged = (b: Ball): boolean => {
+      const q = this.balls.pos(b);
+      if (this.geom.flowers.some((f) => Math.hypot(q[0] - f.x_m, q[2] - f.z_m) < f.openingR_m + b.radius)) return true;
+      return this.geom.zones.some((z) => z.name === 'GARDEN'
+        && q[0] > z.min[0] && q[0] < z.max[0] && q[2] > z.min[2] && q[2] < z.max[2] && q[1] < z.max[1]);
+    };
+    const pool = this.balls.balls.filter((b) => b.kind === 'pollen' && b.state === 'free' && b.body.isEnabled() && !staged(b));
+    for (const { r, n } of takers) {
+      if (n <= 0) continue;
+      const p = r.pos;
+      pool.sort((a, c) => Math.hypot(this.balls.pos(a)[0] - p[0], this.balls.pos(a)[2] - p[2])
+        - Math.hypot(this.balls.pos(c)[0] - p[0], this.balls.pos(c)[2] - p[2]));
+      for (let i = 0; i < n && pool.length; i++) r.preload(this.balls, pool.shift()!);
+    }
   }
 
   private defaultStart(alliance: Alliance, spec: RobotSpec): { p: Vec3; yawDeg: number } {
@@ -322,6 +405,11 @@ export class World {
     this.gamepads = [g1, g2];
   }
 
+  /** What the opponent's brain decided this frame. Applied in the next step, like ours. */
+  setOpponentActuators(a: ActuatorFrame): void {
+    this.oppActuators = a;
+  }
+
   /** One rendered frame: substepsPerFrame physics steps. */
   step(act: ActuatorFrame): void {
     this.lastActuators = act;
@@ -340,6 +428,13 @@ export class World {
 
     const amps = this.robot.preStep(act, dt, this.t, this.battery.volts, this.balls, this.aimPoint());
     this.battery.update(amps, dt);
+
+    if (this.opponent && this.opponentBattery) {
+      const oa = this.opponent.preStep(
+        this.oppActuators, dt, this.t, this.opponentBattery.volts, this.balls, this.aimPointFor(this.opponent.alliance),
+      );
+      this.opponentBattery.update(oa, dt);
+    }
 
     // Balls the robot is carrying are inside its shell, nowhere near a CELL, so they
     // cannot contribute tipping torque -- but they are real bodies now, so they have to be
@@ -604,19 +699,24 @@ export class World {
 
   /** World point the robot should aim at: the mouth of its own hive's up CELL. */
   aimPoint(): Vec3 {
-    return this.hives[this.alliance].upCellMouthWorld();
+    return this.aimPointFor(this.alliance);
   }
 
-  private distanceReadings(): Record<string, number> {
+  /** The same for either alliance, so the opponent aims at ITS hive and not at ours. */
+  aimPointFor(a: Alliance): Vec3 {
+    return this.hives[a].upCellMouthWorld();
+  }
+
+  private distanceReadings(r: Robot): Record<string, number> {
     const out: Record<string, number> = {};
-    const p = this.robot.pos;
-    for (const s of this.robot.spec.sensors.distance) {
+    const p = r.pos;
+    for (const s of r.spec.sensors.distance) {
       const mount = Robot.mountToLocal(s.mount_m as Vec3);
       const dirLocal = Robot.mountToLocal(s.dir as Vec3);
-      const o = this.robot.toWorld(mount);
-      const d = this.robot.toWorld(dirLocal);
+      const o = r.toWorld(mount);
+      const d = r.toWorld(dirLocal);
       const ray = new RAPIER.Ray({ x: p[0] + o[0], y: p[1] + o[1], z: p[2] + o[2] }, { x: d[0], y: d[1], z: d[2] });
-      const hit = this.physics.castRay(ray, s.max_m, true, undefined, undefined, undefined, this.robot.body);
+      const hit = this.physics.castRay(ray, s.max_m, true, undefined, undefined, undefined, r.body);
       const m = hit ? hit.timeOfImpact : s.max_m;
       out[s.name] = s.unit === 'in' ? m * M_TO_IN : m * 1000;
     }
@@ -640,11 +740,11 @@ export class World {
    * robot, in the horizontal plane. 0 is square onto the opening; past 90 the robot is behind
    * the mouth plane and no launch can enter.
    */
-  private upCellOpenAngleDeg(): number {
-    const hive = this.hives[this.alliance];
+  private upCellOpenAngleDeg(r: Robot): number {
+    const hive = this.hives[r.alliance];
     const m = hive.upCellMouthWorld();
     const n = hive.upCellMouthNormalWorld();
-    const p = this.robot.pos;
+    const p = r.pos;
     const dx = p[0] - m[0];
     const dz = p[2] - m[2];
     const dn = Math.hypot(dx, dz) || 1;
@@ -653,8 +753,8 @@ export class World {
     return Math.acos(Math.max(-1, Math.min(1, cos))) * RAD;
   }
 
-  private localizerReading(ftcP: Vec3, ftcV: Vec3, yawDeg: number, yawRate: number): SensorFrame['localizer'] {
-    const n = this.robot.spec.sensors.localizer.noise;
+  private localizerReading(r: Robot, ftcP: Vec3, ftcV: Vec3, yawDeg: number, yawRate: number): SensorFrame['localizer'] {
+    const n = r.spec.sensors.localizer.noise;
     const g = (sigma: number) => (sigma > 0 ? this.rng.gauss(0, sigma) : 0);
     const velSigma = n.vel_mps ?? 0;
     return {
@@ -669,7 +769,26 @@ export class World {
   }
 
   sensors(): SensorFrame {
-    const r = this.robot;
+    return this.sensorsFor(this.robot, this.battery, this.imuBuffer, this.gamepads);
+  }
+
+  /**
+   * What the OPPONENT's brain sees. Same construction, its own robot, its own battery, its own
+   * IMU history and its own hive -- so the bot is solving the same problem you are, from the
+   * same quality of information, rather than from ground truth.
+   */
+  opponentSensors(): SensorFrame {
+    if (!this.opponent || !this.opponentBattery) throw new Error('no opponent in this world');
+    const idle = emptyGamepad();
+    return this.sensorsFor(this.opponent, this.opponentBattery, this.oppImuBuffer, [idle, idle]);
+  }
+
+  private sensorsFor(
+    r: Robot,
+    battery: Battery,
+    imuBuffer: ImuSample[],
+    gamepads: [GamepadState, GamepadState],
+  ): SensorFrame {
     const p = r.pos;
     const ftcP = worldToFtc(p);
     const v = r.body.linvel();
@@ -678,17 +797,17 @@ export class World {
     const yawRate = r.body.angvel().y * RAD;
 
     // IMU latency: the brain gets a reading from imuLatencyMs ago, like the hub's.
-    this.imuBuffer.push({ t: this.t, yaw: yawDeg, rate: yawRate });
+    imuBuffer.push({ t: this.t, yaw: yawDeg, rate: yawRate });
     const lag = r.spec.hub.imuLatencyMs / 1000;
-    while (this.imuBuffer.length > 1 && this.t - this.imuBuffer[0].t > lag) this.imuBuffer.shift();
-    const imu = this.imuBuffer[0];
+    while (imuBuffer.length > 1 && this.t - imuBuffer[0].t > lag) imuBuffer.shift();
+    const imu = imuBuffer[0];
 
     const motors: SensorFrame['motors'] = {};
     for (const name of r.motors.keys()) motors[name] = r.motorState(name);
     const servos: SensorFrame['servos'] = {};
     for (const [name, s] of r.servos) servos[name] = { pos: s.pos };
 
-    const aim = this.aimPoint();
+    const aim = this.aimPointFor(r.alliance);
     const dx = aim[0] - p[0];
     const dz = aim[2] - p[2];
     const bearing = worldDirToFtcBearingDeg(dx, dz);
@@ -701,15 +820,15 @@ export class World {
       motors,
       servos,
       imu: { yaw: imu.yaw, pitch: 0, roll: 0, yawRate: imu.rate },
-      battery: { volts: this.battery.volts + this.rng.gauss(0, r.spec.hub.voltageNoise_V) },
-      distance: this.distanceReadings(),
-      localizer: this.localizerReading(ftcP, ftcV, yawDeg, yawRate),
-      gamepad1: this.gamepads[0],
-      gamepad2: this.gamepads[1],
+      battery: { volts: battery.volts + this.rng.gauss(0, r.spec.hub.voltageNoise_V) },
+      distance: this.distanceReadings(r),
+      localizer: this.localizerReading(r, ftcP, ftcV, yawDeg, yawRate),
+      gamepad1: gamepads[0],
+      gamepad2: gamepads[1],
       game: {
         upCellAzimuthDeg: wrapPi((bearing - yawDeg) * DEG) * RAD,
         upCellRangeIn: Math.hypot(dx, dz) * M_TO_IN,
-        hiveTipping: this.hives[this.alliance].tipping,
+        hiveTipping: this.hives[r.alliance].tipping,
         // IS THE MOUTH OPEN TOWARDS ME? 0 deg is square onto the opening, 90 is edge-on to
         // the mouth plane, 180 is behind the goal looking at the back of the pocket.
         //
@@ -720,11 +839,23 @@ export class World {
         // stopped control case read 0.12 landed per second while tools/landcal.ts, which
         // stops before a tip, measured 85%. On a real robot this is the AprilTag going out
         // of view; here it is ground truth, like the bearing and the range (PHYSICS 9.10).
-        upCellOpenDeg: this.upCellOpenAngleDeg(),
+        upCellOpenDeg: this.upCellOpenAngleDeg(r),
         // Bin plus magazine: a ball waiting at the nip is still a ball you can fire.
         hopper: r.heldBalls().length,
         flywheelRpm: r.reportedFlywheelRpm,
       },
+    };
+  }
+
+  /**
+   * What each alliance would score if the buzzer went now. Cheap enough to call once a frame
+   * -- it is the same census `finaliseMatch` uses -- and it is what the scoreboard shows
+   * while the clock is running, labelled as a projection.
+   */
+  projectedScore(): Record<Alliance, number> {
+    return {
+      red: this.scorer.project('red', this.endOfMatchCounts('red')),
+      blue: this.scorer.project('blue', this.endOfMatchCounts('blue')),
     };
   }
 
@@ -743,6 +874,15 @@ export class World {
         y: ftc[1],
         heading: worldYawToFtcHeadingDeg(this.robot.yaw),
       }),
+      opponent: this.opponent
+        ? this.opponent.snapshot(
+            this.opponentBattery!.volts, this.opponentBattery!.soc, this.opponentBattery!.amps,
+            (() => {
+              const of = worldToFtc(this.opponent!.pos);
+              return { x: of[0], y: of[1], heading: worldYawToFtcHeadingDeg(this.opponent!.yaw) };
+            })(),
+          )
+        : undefined,
       score: this.scorer.state,
       telemetry: this.telemetry,
       shots: this.shotLog,
@@ -778,6 +918,10 @@ export class World {
     this.seq = 0;
     this.finalised = false;
     this.imuBuffer.length = 0;
+    this.oppImuBuffer.length = 0;
+    this.opponent?.reset();
+    this.opponentBattery?.reset();
+    this.oppActuators = { seq: 0, motors: {}, servos: {} };
     this.telemetry = [];
     this.leftStart = { red: false, blue: false };
     this.outOfPlay = 0;

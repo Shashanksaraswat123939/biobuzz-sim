@@ -61,28 +61,32 @@ export class Scorer {
   /** Called once when the match ends; everything positional is assessed here, not before. */
   finalise(alliance: Alliance, c: EndOfMatchCounts): void {
     const s = this.state[alliance];
-    s.upCell = c.upCell;
-    s.garden = c.garden;
-    s.park = c.parked;
-
-    let flowerElements = 0;
-    // THE TOP-MOST NECTAR OWNS THE FLOWER, not the most of them.
-    //
-    // Manual 10.5.2, FLOWER Owner: "The ALLIANCE that has the TOP-MOST NECTAR of its color ...
-    // owns that FLOWER." This used to compare counts, which gives the flower to whoever put
-    // more in -- so an alliance that caps the opponent's three with one of its own was scored
-    // as the LOSER of that flower. That made the whole endgame of STRATEGY.md section 8 --
-    // plug early, cap late, saturate the tube -- invisible to the scorer, and capping looked
-    // worthless. The FLOWER is a vertical tube; height is the criterion and it is the one
-    // thing a late ball can still change.
-    c.flowers.forEach((f) => {
-      if (f.topNectar === alliance) flowerElements += f.elements; // owner takes everything in it
-    });
-    s.flower = flowerElements;
-
-    const bottoms = c.bottomNectar.filter((b) => b.alliance === alliance).length;
-    s.bottomNectar = this.bottomNectarPerFlower ? bottoms : Math.min(1, bottoms);
+    const p = positional(alliance, c);
+    s.upCell = p.upCell;
+    s.garden = p.garden;
+    s.park = p.parked;
+    s.flower = p.flower;
+    s.bottomNectar = this.bottomNectarPerFlower ? p.bottoms : Math.min(1, p.bottoms);
     this.recompute();
+  }
+
+  /**
+   * WHAT THE SCORE WOULD BE IF THE BUZZER WENT NOW, without touching the real one.
+   *
+   * Everything positional is assessed at the buzzer and not before, which is the rule -- and
+   * which meant the scoreboard read 0 to 0 for two and a half minutes while balls piled up in
+   * the CELLs. That reads as a broken scoreboard, not as a rule. The projection is the same
+   * arithmetic on the same census, so it cannot disagree with the final answer; the UI labels
+   * it as a projection until the clock stops.
+   */
+  project(alliance: Alliance, c: EndOfMatchCounts): number {
+    const s = this.state[alliance];
+    const p = positional(alliance, c);
+    const bottoms = this.bottomNectarPerFlower ? p.bottoms : Math.min(1, p.bottoms);
+    const auto = s.autoTips * 20 + (s.leave ? 3 : 0) + (s.park ? 5 : 0);
+    const teleop = (s.tips - s.autoTips) * 20 + p.upCell * 2 + p.flower * 2 + p.garden + bottoms * 5
+      + (p.parked ? 5 : 0);
+    return auto + teleop;
   }
 
   private recompute(): void {
@@ -102,6 +106,32 @@ export class Scorer {
     Object.assign(this.state.blue, empty());
     this.state.fouls.length = 0;
   }
+}
+
+/**
+ * The positional half of the score, from one census: everything assessed by where things are
+ * rather than by what happened. One function so the final answer and the live projection are
+ * the same arithmetic and can never disagree.
+ */
+function positional(alliance: Alliance, c: EndOfMatchCounts) {
+  // THE TOP-MOST NECTAR OWNS THE FLOWER, not the most of them.
+  //
+  // Manual 10.5.2, FLOWER Owner: "The ALLIANCE that has the TOP-MOST NECTAR of its color ...
+  // owns that FLOWER." This used to compare counts, which gives the flower to whoever put
+  // more in -- so an alliance that caps the opponent's three with one of its own was scored
+  // as the LOSER of that flower. That made the whole endgame of STRATEGY.md section 8 --
+  // plug early, cap late, saturate the tube -- invisible to the scorer, and capping looked
+  // worthless. The FLOWER is a vertical tube; height is the criterion and it is the one
+  // thing a late ball can still change.
+  let flower = 0;
+  for (const f of c.flowers) if (f.topNectar === alliance) flower += f.elements;
+  return {
+    upCell: c.upCell,
+    garden: c.garden,
+    parked: c.parked,
+    flower,
+    bottoms: c.bottomNectar.filter((b) => b.alliance === alliance).length,
+  };
 }
 
 /** Is a ball inside a FLOWER's scoring volume (between the middle and top rings)? */

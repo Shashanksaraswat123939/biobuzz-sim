@@ -52,7 +52,7 @@ export async function main(): Promise<void> {
   };
   const stick = (fwd: number, left: number, turn = 0): GamepadState => {
     const g = emptyGamepad();
-    g.y = true;   // robot-centric: these moves are written relative to the robot's nose
+    // robot-centric is the brain's default now, so these moves are already on the nose
     g.left_stick_y = -fwd;
     g.left_stick_x = -left;
     g.right_stick_x = -turn;
@@ -62,7 +62,7 @@ export async function main(): Promise<void> {
   // Toggle the flywheel on once (edge-detected, exactly like a real trigger press).
   step(emptyGamepad());
   const press = emptyGamepad();
-  press.a = true;
+  press.dpad_up = true;
   step(press);
 
   // Stand in front of the opening, at the middle of the shot table's usable range, derived

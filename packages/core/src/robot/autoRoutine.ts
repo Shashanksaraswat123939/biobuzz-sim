@@ -53,10 +53,10 @@ export function driveTo(
   faceX: number,
   faceY: number,
 ): number {
-  // ROBOT-CENTRIC, because this function does the field-to-robot rotation itself. The
-  // driver's default is field-centric, and letting it rotate a vector that is already in the
-  // robot frame applies the heading twice -- the robot drives off at its own heading error.
-  g.y = true;
+  // This function does the field-to-robot rotation itself, so it needs the ROBOT-CENTRIC
+  // interpretation of the sticks -- which is now the brain's default, so there is nothing to
+  // press. (It used to press Y for it. Y is the speed gear now: holding it here would have
+  // wound the gear up every frame and never selected the frame it wanted.)
   const ex = x - s.localizer.x;
   const ey = y - s.localizer.y;
   const dist = Math.hypot(ex, ey);
@@ -140,9 +140,10 @@ export class AutoRoutine {
 
     // SPIN THE WHEEL UP WHILE DRIVING. Two motors reach the table's 2300 rpm in about 2.9 s
     // (tools/slew.ts: 794 rpm/s), and AUTO is thirty seconds long -- arriving at the shooting
-    // spot and only then starting the wheel spends a tenth of the period standing still. `a`
-    // is an edge-triggered latch in BuiltinTeleOp, so it is pressed once, on the first frame.
-    if (!this.armed) { g.a = true; this.armed = true; }
+    // spot and only then starting the wheel spends a tenth of the period standing still.
+    // D-pad up is the edge-triggered pre-spin latch in BuiltinTeleOp, pressed once, on the
+    // first frame.
+    if (!this.armed) { g.dpad_up = true; this.armed = true; }
 
     // PARKING IS WORTH MORE THAN THE SHOT IT INTERRUPTS. Leave enough to cross the field:
     // the drive does about 1.5 m/s and the far corner is under 4 m away, so five seconds is

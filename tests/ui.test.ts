@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import params from '../config/params.json';
 import robotSpec from '../config/robot.json';
 import { TUNABLES } from '../packages/ui/src/tune.js';
-import type { Params, RobotSpec } from '../packages/core/src/types.js';
+import { remap, type Paddles } from '../packages/ui/src/input.js';
+import { emptyGamepad } from '../packages/core/src/physics/world.js';
+import type { GamepadState, Params, RobotSpec } from '../packages/core/src/types.js';
 
 const p = params as unknown as Params;
 const r = robotSpec as unknown as RobotSpec;
@@ -58,6 +60,68 @@ describe('the Variables sliders', () => {
       expect(t.max, t.label).toBeGreaterThan(t.min);
       expect(t.step, t.label).toBeGreaterThan(0);
       expect(t.hint.length, t.label).toBeGreaterThan(20);
+    }
+  });
+});
+
+/**
+ * THE DRIVER LAYOUT, as a mapping rather than as a comment.
+ *
+ * This is the layer that has broken twice: the brain's `GamepadState` is the wire the Java
+ * OpMode sees and its field names are fixed, so every time the driver's layout changed, some
+ * scripted press somewhere was still talking about the old meaning of a button. `remap` is the
+ * single place the translation happens, and these are the four claims that matter.
+ */
+describe('the pad-to-brain remap', () => {
+  const pad = (over: Partial<GamepadState> = {}): GamepadState => ({ ...emptyGamepad(), ...over });
+  const none: Paddles = { m1: false, m2: false };
+
+  it('X and B become the yaw axis, opposite ways round, and nothing else moves', () => {
+    const left = remap(pad({ x: true }), none);
+    const right = remap(pad({ b: true }), none);
+    expect(left.right_stick_x).toBeLessThan(0);
+    expect(right.right_stick_x).toBeGreaterThan(0);
+    expect(left.left_stick_x).toBe(0);
+    expect(left.left_stick_y).toBe(0);
+  });
+
+  it('R1 is the trigger the brain reads, and never the auto-fire latch', () => {
+    const g = remap(pad({ right_bumper: true }), none);
+    expect(g.b, 'R1 must arrive as the hold-to-fire input').toBe(true);
+    expect(g.right_bumper, 'R1 must not toggle the latch as well').toBe(false);
+  });
+
+  it('M1 and M2 are the two toggles, and neither is a face button', () => {
+    const g = remap(pad(), { m1: true, m2: true });
+    expect(g.x, 'M1 is auto-aim').toBe(true);
+    expect(g.right_bumper, 'M2 is the auto-fire latch').toBe(true);
+    const plain = remap(pad({ x: true, b: true }), none);
+    expect(plain.x, 'pressing X must not toggle auto-aim').toBe(false);
+    expect(plain.right_bumper).toBe(false);
+  });
+
+  it('leaves Y and A alone: they are the speed gear the brain reads directly', () => {
+    expect(remap(pad({ y: true }), none).y).toBe(true);
+    expect(remap(pad({ a: true }), none).a).toBe(true);
+  });
+
+  it('every button the brain acts on is driven by exactly one physical control', () => {
+    // One press, one action. The old layout had Y doing the auto-fill AND the drive frame,
+    // and L3 doing pause AND the re-zero; both fired together and neither was discoverable.
+    const sources: [string, GamepadState][] = [
+      ['X', pad({ x: true })], ['B', pad({ b: true })], ['Y', pad({ y: true })],
+      ['A', pad({ a: true })], ['R1', pad({ right_bumper: true })],
+      ['L3', pad({ left_stick_button: true })], ['R3', pad({ right_stick_button: true })],
+      ['dpad up', pad({ dpad_up: true })],
+    ];
+    const watched = ['x', 'b', 'y', 'a', 'right_bumper', 'left_stick_button', 'right_stick_button', 'dpad_up'] as const;
+    const hits: Record<string, string[]> = {};
+    for (const [name, g] of sources) {
+      const out = remap(g, none) as unknown as Record<string, unknown>;
+      for (const f of watched) if (out[f] === true) (hits[f] ??= []).push(name);
+    }
+    for (const [field, from] of Object.entries(hits)) {
+      expect(from, `${field} is driven by ${from.join(' and ')}`).toHaveLength(1);
     }
   });
 });

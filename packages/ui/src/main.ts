@@ -26,6 +26,8 @@ import { loadLandCal } from '@core/robot/loadCal.js';
 import { buildMotor } from '@core/physics/motor.js';
 import { AutoDriver, defaultPlan, type AutoPlan } from '@core/robot/autoDriver.js';
 import { AutoRoutine } from '@core/robot/autoRoutine.js';
+import { OpponentBot } from '@core/robot/opponentBot.js';
+import { worldToFtc } from '@core/field/ftcFrame.js';
 import { simulateShot, rpmToSpeed } from '@core/physics/ballistics.js';
 import { knobs, predict, type Prediction } from '@core/analysis/sensitivity.js';
 import { analyse, toCsv, type Report } from '@core/analysis/report.js';
@@ -33,7 +35,7 @@ import { Trace } from '@core/analysis/trace.js';
 import { M_TO_IN, DEG, RAD, inches } from '@core/units.js';
 import { Scene, type CameraMode, type ZonePayload } from '@render/scene.js';
 import type { ActuatorFrame, Alliance, BallKind, GamepadState, Params, RobotSpec, Snapshot, Vec3 } from '@core/types.js';
-import { readKeyboard, installKeyboard, type Keys, type Paddles } from './input.js';
+import { readKeyboard, installKeyboard, remap, type Keys, type Paddles } from './input.js';
 import { m, cm, cmSigned, mps } from './units.js';
 import { Joysticks } from './joystick.js';
 import { buildTunePanel, type Tunable } from './tune.js';
@@ -98,8 +100,12 @@ async function boot(): Promise<void> {
 }
 
 function build(): void {
-  world = new World({ params, robot: robotSpec, staging, alliance, seed: params.sim.seed, preload: 4 });
+  world = new World({ params, robot: robotSpec, staging, alliance, seed: params.sim.seed, preload: 4, opponent: opponentOn });
   brain = new BuiltinTeleOp(robotSpec, shotTable, loadLandCal());
+  // The opponent gets its own brain, not a share of yours: it has its own flywheel to spin,
+  // its own aim to hold and its own readiness to wait for.
+  oppBrain = world.opponent ? new BuiltinTeleOp(robotSpec, shotTable, loadLandCal()) : null;
+  bot = world.opponent ? new OpponentBot() : null;
   // ZERO THE FIELD FRAME ON THE DRIVER, not on the world's axes.
   //
   // Field-centric rotates the stick by (yaw - headingZero). With headingZero at 0 that makes
@@ -122,7 +128,7 @@ function build(): void {
   // the gate, and it already models the facing (a shooter behind the pocket gets a negative
   // near range, so those squares read zero).
   const zone0 = scene?.showShotZone ?? true;
-  scene = new Scene($<HTMLCanvasElement>('#view'), world.geom, specs, robotSpec);
+  scene = new Scene($<HTMLCanvasElement>('#view'), world.geom, specs, robotSpec, alliance);
   scene.cameraMode = mode0;
   scene.showTrajectory = traj;
   // Off until asked for: it is a model map, and a coloured floor that is always on reads
@@ -189,33 +195,6 @@ function rampDigital(s: GamepadState, analogSticks = false): GamepadState {
 }
 
 /**
- * PHYSICAL buttons to what they DO, in one place.
- *
- * The pad the driver holds and the frame the brain reads are deliberately not the same thing.
- * The brain's `GamepadState` is the wire the Java OpMode sees, so its field names are fixed;
- * the driver's layout is not, and it changed:
- *
- *   left stick   translate            right stick  the VIEW (never the robot)
- *   X / B        turn left / right    Y / A        speed gear up / down
- *   R1           fire                 L1(+L3)      crawl / re-zero the field frame
- *   M1 / M2      auto-aim / auto-fire R3           hold for robot-centric
- *
- * Turning moved off the right stick because the right stick now moves the camera, and the
- * brain's yaw command is still `right_stick_x` -- so X/B are synthesised into it here, BEFORE
- * `rampDigital`, which means a button press ramps the yaw exactly like a stick deflection
- * instead of stepping it. Nothing downstream of this function knows the layout changed.
- */
-function remap(phys: GamepadState, pad: Paddles): GamepadState {
-  return {
-    ...phys,
-    right_stick_x: (phys.b ? 1 : 0) - (phys.x ? 1 : 0),  // B right, X left
-    x: pad.m1,                       // M1: auto-aim toggle
-    right_bumper: pad.m2,            // M2: auto-fire latch
-    b: phys.right_bumper,            // R1: fire while held
-  };
-}
-
-/**
  * Free-running top speed of the drivetrain, m/s: the drive motor's free speed through its
  * gearing, times the wheel radius. This is the ceiling the gear bar is a fraction OF. The
  * robot never quite reaches it under load, which is the honest thing for a speed LIMIT to
@@ -267,7 +246,7 @@ function gamepadState(): GamepadState {
 }
 
 /** Same sticks, edge-triggered buttons released: a toggle fires once per animation frame. */
-const neutralEdges = (g: GamepadState): GamepadState => ({ ...g, a: false, x: false, y: false, right_bumper: false });
+const neutralEdges = (g: GamepadState): GamepadState => ({ ...g, a: false, x: false, y: false, right_bumper: false, dpad_up: false, left_stick_button: false });
 
 /** The gamepad's own mode and utility buttons, read once per animation frame. */
 let padPrev: GamepadState | null = null;
@@ -281,8 +260,10 @@ function padShortcuts(g: GamepadState): void {
   // are still on the deck and the keyboard.
   if (edge(g.start, p.start)) primary();                            // Start: the green button
   if (edge(g.back, p.back)) cycleMode();                            // Select: next mode
-  if (edge(g.dpad_up, p.dpad_up)) cycleCamera(1);                   // D-pad up/down: camera
-  if (edge(g.dpad_down, p.dpad_down)) cycleCamera(-1);
+  // The camera used to cycle on the D-pad. The right stick IS the camera now, and D-pad up is
+  // the flywheel pre-spin the brain reads, so cycling here would be a second job for it.
+  // Keys 1-5 and the View menu still switch modes.
+  if (edge(g.dpad_down, p.dpad_down)) cycleCamera(1);
 }
 
 // ---------------------------------------------------------------- loop
@@ -323,6 +304,10 @@ function loop(now: number): void {
           ? routine.update(sensors, frame, world.robot.shots, world.clock.remaining)
           : first ? human : neutralEdges(human);
       world.setGamepads(g, emptyGamepad());
+      if (bot && oppBrain && world.opponent) {
+        const os = world.opponentSensors();
+        world.setOpponentActuators(oppBrain.update(os, bot.update(os, frame, opponentField(), opponentSight()), world.seq, frame));
+      }
       lastAct = useJavaBrain ? bridge.exchange(sensors) : brain.update(sensors, g, world.seq, frame);
       world.telemetry = lastAct.telemetry ?? [];
       world.step(lastAct);
@@ -345,6 +330,15 @@ function loop(now: number): void {
     paint(snap);
   }
 }
+
+/**
+ * THE OPPONENT. Off by default -- a second robot on the field changes every measurement the
+ * Data and Test modes take, so it is a thing you switch on to practise against, not a thing
+ * that is quietly always there.
+ */
+let opponentOn = false;
+let oppBrain: BuiltinTeleOp | null = null;
+let bot: OpponentBot | null = null;
 
 let trajCache: Vec3[] | null = null;
 let trajAge = 0;
@@ -394,8 +388,19 @@ function paint(s: Snapshot): void {
   const secs = Math.floor(s.remaining % 60);
   $('#period').textContent = s.period;
   $('#time').textContent = `${mins}:${String(secs).padStart(2, '0')}`;
-  $('#red-total').textContent = String(s.score.red.total);
-  $('#blue-total').textContent = String(s.score.blue.total);
+  // THE SCOREBOARD, LIVE. Everything positional is credited at the buzzer and not before,
+  // which is the rule and which left the header reading 0 to 0 for two and a half minutes
+  // while the CELLs filled up. The projection is the same arithmetic on the same census, so
+  // the number never jumps at the buzzer -- it just stops being a projection.
+  const finished = s.period === 'FINISHED';
+  const proj = finished ? { red: s.score.red.total, blue: s.score.blue.total } : world.projectedScore();
+  $('#red-total').textContent = String(proj.red);
+  $('#blue-total').textContent = String(proj.blue);
+  const board = $<HTMLElement>('.scores');
+  board.title = finished
+    ? 'Final score.'
+    : 'What each alliance would score if the buzzer went now. Balls in a CELL, a FLOWER or a GARDEN are credited at the END of the match, so this is a projection until the clock stops.';
+  board.classList.toggle('projected', !finished);
 
   const rangeIn = Math.hypot(world.aimPoint()[0] - r.p[0], world.aimPoint()[2] - r.p[2]) * M_TO_IN;
   // Whichever autonomous holds the sticks says what it is doing; otherwise the brain does.
@@ -408,6 +413,9 @@ function paint(s: Snapshot): void {
   set('#st-rpm', `${r.flywheel.rpm.toFixed(0)}`, brain.state.ready ? 'on' : '');
   set('#st-hopper', `${r.hopper.count}/${r.hopper.capacity}`, r.hopper.count ? '' : 'off');
   set('#st-batt', `${r.battery.volts.toFixed(1)} V`, r.battery.volts < 11.5 ? 'off' : '');
+  const oppRow = $<HTMLElement>('#st-opp-row');
+  oppRow.style.display = bot ? '' : 'none';
+  if (bot) set('#st-opp', bot.note, bot.phase === 'shoot' ? 'on' : '');
   // DRIVE SPEED GEAR. The bar is the fraction; the number is what that fraction is worth in
   // m/s, derived from the drive motor's free speed and the wheel radius rather than written
   // down, so changing either in config/robot.json moves the readout with it.
@@ -717,6 +725,7 @@ const DECK: Record<Mode, Action[]> = {
   practice: [
     { label: 'Auto-aim (M1)', title: 'Turret and hood solve for the CELL continuously, including a lead for the robot’s own motion. Off means , and . aim it by hand. M1 on the pad, T on the keyboard.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
     { label: 'Auto-fire (M2)', title: 'Latch. Spins the flywheel, waits for it to be in tolerance and the turret to be on target, then feeds at the cycle time until you press it again. M2 on the pad, G on the keyboard. R1 (space) fires by hand instead, for as long as you hold it.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
+    { label: 'Opponent', title: 'Put a real robot on the other alliance and play against it. It collects, lines up on its own CELL’s opening, fires through the same readiness gate you do, tips its own HIVE and PARKs at the buzzer — driving a real chassis through a real brain, so nothing it does is something you could not. Toggling it rebuilds the match.', run: () => { opponentOn = !opponentOn; build(); }, on: () => opponentOn },
     { label: 'Auto-fill hopper', title: 'Practice aid, not a game rule: quietly picks up the nearest POLLEN off the floor whenever the hopper has room, so you can work on aiming without driving a collection lap.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
     { label: 'Joystick', title: 'On-screen sticks: left translates, right looks around. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
     { label: 'Shot zone', title: 'Green where a perfectly aimed shot clears the land-probability gate, red where it does not, using the hood and rpm the table commands at that range and the CELL mouth as seen from that spot. A MODEL map (tools/shotzone.ts), not a record of what this robot has hit.', run: () => (scene.showShotZone = !scene.showShotZone), on: () => scene.showShotZone },
@@ -929,7 +938,9 @@ function wireUi(): void {
     const k = e.key.toLowerCase();
     if (e.key === 'Enter') primary();
     else if (k === 'p') togglePause();
-    else if (k === 'r') build();
+    // N, not R: R is the speed gear now, and rebuilding the match under a driver's thumb
+    // because they reached for more speed is the worst possible key collision.
+    else if (k === 'n') build();
     else if (k === 'l') setAutoLoad(!autoLoad);
     else if (k === 'm') cycleMode();
     else if (k >= '1' && k <= '5') {
@@ -1000,6 +1011,40 @@ function setAutoLoad(on: boolean): void {
  * that has already been counted. This is a cheat either way; a cheat that stops working
  * after fifteen seconds is just a bug wearing a disclaimer.
  */
+/**
+ * What the opponent's routine steers by: its own hive's live mouth, its own LOADING zone, and
+ * the shot table's band. Rebuilt each frame because a TIP turns the mouth round, and a bot
+ * that cached it would spend the rest of the match firing at the back of its own goal.
+ */
+function opponentField() {
+  const opp = world.opponent!;
+  const hive = world.hives[opp.alliance];
+  const zone = world.geom.zones.find((z) => z.name === 'LOADING' && z.alliance === opp.alliance)!;
+  const ranges = shotTable.rows.map((r) => r.range_in);
+  return {
+    mouth: hive.upCellMouthWorld(),
+    mouthNormal: hive.upCellMouthNormalWorld(),
+    loading: [zone.min[0], zone.min[2], zone.max[0], zone.max[2]] as [number, number, number, number],
+    halfWidth_m: world.geom.halfWidth_m,
+    band_in: [Math.min(...ranges), Math.max(...ranges)] as [number, number],
+  };
+}
+
+/** The loose balls it is allowed to go for: on the floor, in play, and not our NECTAR. */
+function opponentSight() {
+  const opp = world.opponent!;
+  const theirs = opp.alliance === 'red' ? 'nectarBlue' : 'nectarRed';
+  const loose: [number, number][] = [];
+  for (const b of world.balls.balls) {
+    if (!b.body.isEnabled() || b.state !== 'free' || b.kind === theirs) continue;
+    const p = world.balls.pos(b);
+    if (p[1] * M_TO_IN > 12) continue;          // in a CELL or up a FLOWER, not on the floor
+    const f = worldToFtc(p);
+    loose.push([f[0], f[1]]);
+  }
+  return { loose, remaining: world.clock.remaining, period: world.clock.period, shotsTaken: opp.shots };
+}
+
 function topUpHopper(): void {
   const r = world.robot;
   if (r.hopper.length >= robotSpec.hopper.capacity) return;

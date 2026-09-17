@@ -146,6 +146,7 @@ code { background: #1e232a; padding: 1px 4px; border-radius: 3px; font-family: v
 .meter > span { display: block; height: 100%; width: 0; background: var(--blue); transition: width .1s linear; }
 .meter > span.near { background: var(--warn); }
 .meter > span.over { background: var(--go); }
+.scores.projected b::after { content: '*'; color: var(--dim); font-size: 10px; vertical-align: super; }
 .meter.gearbar { height: 8px; margin-top: 3px; }
 .meter.gearbar > span { background: linear-gradient(90deg, var(--go), var(--warn)); }
 .stat.gear { margin-top: 4px; }
@@ -170,11 +171,50 @@ code { background: #1e232a; padding: 1px 4px; border-radius: 3px; font-family: v
 
 /* ---------------------------------------------------------------- tune sliders */
 
-.tune { margin-bottom: 12px; }
-.tune label { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--dim); }
-.tune label b { color: var(--fg); font-family: var(--num); font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12.5px; }
-.tune input[type=range] { width: 100%; accent-color: var(--accent); margin: 2px 0 0; }
-.tune small { display: block; color: var(--dim); opacity: .75; font-size: 10.5px; line-height: 1.4; }
+/*
+ * A row is: name, an exact value you can TYPE, the slider, then the note.
+ *
+ * It was a bare browser range control with accent-color set, which is three different
+ * controls on three platforms and none of them says where the value sits in its own span. The
+ * track is drawn here so the filled part IS the fraction of the range in use, and the number
+ * is an input rather than a readout because "no more guessing" means being able to enter 0.15
+ * rather than dragging until it rounds to it.
+ */
+.tune { margin: 0 0 10px; padding: 8px 9px; background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; }
+.tune .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tune .top span { font-size: 11.5px; color: var(--fg); }
+.tune input[type=number] {
+  width: 74px; flex: none; text-align: right;
+  font-family: var(--num); font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px;
+  color: var(--fg); background: var(--bar); border: 1px solid var(--line); border-radius: 4px;
+  padding: 2px 5px; -moz-appearance: textfield;
+}
+.tune input[type=number]:focus { outline: none; border-color: var(--accent); }
+.tune input[type=number]::-webkit-outer-spin-button,
+.tune input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+.tune input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  display: block; width: 100%; height: 18px; margin: 6px 0 4px; background: none; cursor: pointer;
+}
+.tune input[type=range]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--fill, 0%), #1e232a var(--fill, 0%));
+}
+.tune input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #1e232a; }
+.tune input[type=range]::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
+.tune input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; margin-top: -4.5px; border-radius: 50%;
+  background: var(--fg); border: 2px solid var(--accent);
+}
+.tune input[type=range]::-moz-range-thumb {
+  width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--accent); background: var(--fg);
+}
+.tune input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(245, 130, 31, .3); }
+.tune .ends { display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); opacity: .6; font-variant-numeric: tabular-nums; }
+.tune small { display: block; margin-top: 5px; color: var(--dim); opacity: .8; font-size: 10.5px; line-height: 1.45; }
+.tune.changed { border-color: var(--accent); }
 
 /* ---------------------------------------------------------------- buttons */
 

@@ -65,10 +65,38 @@ export function readKeyboard(keys: Keys): GamepadState & { paddles: Paddles } {
   g.right_bumper = on(' ');    // R1: fire
   g.left_bumper = on('shift'); // momentary crawl
   g.left_trigger = on('z') ? 1 : 0;  // reverse the intake
+  g.dpad_up = keys.pressed.has('v');   // pre-spin the flywheel
   g.dpad_left = on(',');       // manual turret slew
   g.dpad_right = on('.');
   g.left_stick_button = keys.pressed.has('backspace'); // re-zero the field frame
   g.right_stick_button = on('control');                // hold: robot-centric
   g.paddles = { m1: keys.pressed.has('t'), m2: keys.pressed.has('g') };
   return g;
+}
+
+/**
+ * PHYSICAL buttons to what they DO, in one place.
+ *
+ * The pad the driver holds and the frame the brain reads are deliberately not the same thing.
+ * The brain's `GamepadState` is the wire the Java OpMode sees, so its field names are fixed;
+ * the driver's layout is not, and it changed:
+ *
+ *   left stick   translate            right stick  the VIEW (never the robot)
+ *   X / B        turn left / right    Y / A        speed gear up / down
+ *   R1           fire                 L1(+L3)      crawl / re-zero the field frame
+ *   M1 / M2      auto-aim / auto-fire R3           hold for robot-centric
+ *
+ * Turning moved off the right stick because the right stick now moves the camera, and the
+ * brain's yaw command is still `right_stick_x` -- so X/B are synthesised into it here, BEFORE
+ * `rampDigital`, which means a button press ramps the yaw exactly like a stick deflection
+ * instead of stepping it. Nothing downstream of this function knows the layout changed.
+ */
+export function remap(phys: GamepadState, pad: Paddles): GamepadState {
+  return {
+    ...phys,
+    right_stick_x: (phys.b ? 1 : 0) - (phys.x ? 1 : 0),  // B right, X left
+    x: pad.m1,                       // M1: auto-aim toggle
+    right_bumper: pad.m2,            // M2: auto-fire latch
+    b: phys.right_bumper,            // R1: fire while held
+  };
 }

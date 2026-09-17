@@ -80,7 +80,7 @@ export async function main(): Promise<void> {
       const brain = new BuiltinTeleOp(spec, table, loadLandCal());
       const step = (g = emptyGamepad()) => { w.setGamepads(g, emptyGamepad()); w.step(brain.update(w.sensors(), g, w.seq)); };
       step();
-      const press = emptyGamepad(); press.a = true; step(press);
+      const press = emptyGamepad(); press.dpad_up = true; step(press);
       for (let f = 0; f < 420; f++) step();
       // Holding right_bumper toggles the latch on its rising edge; setting state.firing as
       // well would toggle it straight back off.

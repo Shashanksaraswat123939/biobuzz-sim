@@ -253,6 +253,8 @@ export interface Snapshot {
     lastShot: { v_exit: number; elevDeg: number; azDeg: number; spin: number; t: number } | null;
     flags: string[];
   };
+  /** The opponent robot, when the match has one. Same shape; it is the same class. */
+  opponent?: Snapshot['robot'];
   score: ScoreState;
   telemetry: [string, string][];
   /** Every shot this match, oldest first. */

@@ -380,6 +380,7 @@ export class BuiltinTeleOp {
       // still there on top of it for a momentary dab.
       if (edge(g.y, p.y)) st.speedScale = gear(st.speedScale + SPEED_STEP);
       if (edge(g.a, p.a)) st.speedScale = gear(st.speedScale - SPEED_STEP);
+      if (edge(g.dpad_up, p.dpad_up)) st.flywheelOn = !st.flywheelOn;
       if (edge(g.x, p.x)) st.autoAim = !st.autoAim;
       // RE-ZERO THE FIELD FRAME. Field-centric is only as good as the heading it rotates by,
       // and a real IMU drifts; every driver wants a "forward is where I am pointing now"

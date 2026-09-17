@@ -140,13 +140,13 @@ export async function run(opts: {
     world.step(brain.update(world.sensors(), g, world.seq));
   };
 
-  const arm = emptyGamepad(); step(arm); arm.a = true; step(arm);
+  const arm = emptyGamepad(); step(arm); arm.dpad_up = true; step(arm);
   for (let f = 0; f < 150; f++) step(emptyGamepad());   // spin the wheel up standing still
 
   const t1 = world.t;
   const hold = (): GamepadState => {
     const g = emptyGamepad();
-    g.y = true;                              // robot-centric: drive is written on its own axes
+    // robot-centric is the default; drive is written on the robot's own axes
     g.left_stick_x = opts.drive[0];
     const fwd = opts.drive[1] + opts.wobble * Math.sin(2 * Math.PI * 0.5 * (world.t - t1));
     g.left_stick_y = -Math.max(-1, Math.min(1, fwd));

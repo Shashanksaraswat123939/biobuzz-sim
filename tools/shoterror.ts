@@ -110,15 +110,14 @@ async function run(drive: [number, number], wobble: number, startIn: number, sec
       prevT = world.t;
     }
   };
-  const arm = emptyGamepad(); step(arm); arm.a = true; step(arm);
+  const arm = emptyGamepad(); step(arm); arm.dpad_up = true; step(arm);
   for (let f = 0; f < 150; f++) step(emptyGamepad());
   const t1 = world.t;
   const hold = (): GamepadState => {
     const g = emptyGamepad();
     // Robot-centric: these cases are written relative to the nose of a robot placed facing
     // the hive, not to the field. The driver's default is field-centric.
-    g.y = true;
-    g.left_stick_x = drive[0];
+        g.left_stick_x = drive[0];
     g.left_stick_y = -Math.max(-1, Math.min(1, drive[1] + wobble * Math.sin(2 * Math.PI * 0.5 * (world.t - t1))));
     // A driver swinging the robot while the turret holds the goal: the most ordinary way to
     // be "moving" and the one no case here had ever covered.

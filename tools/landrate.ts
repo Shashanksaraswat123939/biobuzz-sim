@@ -63,7 +63,7 @@ export async function landRate(
   };
   step();
   const press = emptyGamepad();
-  press.a = true;
+  press.dpad_up = true;
   step(press);
   for (let f = 0; f < 300; f++) step();
 

@@ -57,7 +57,7 @@ export async function group(p: Params, spec: RobotSpec, shots: number, seed: num
   };
   step();
   const a = emptyGamepad();
-  a.a = true;
+  a.dpad_up = true;
   step(a);
   const fire = emptyGamepad();
   fire.right_bumper = true;

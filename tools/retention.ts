@@ -78,7 +78,7 @@ async function run(name: string, table: ShotTable, seconds: number, range_in = 7
   };
   step();
   const press = emptyGamepad();
-  press.a = true;
+  press.dpad_up = true;
   step(press);
 
   const fire = emptyGamepad();

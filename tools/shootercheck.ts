@@ -99,7 +99,7 @@ export async function main(): Promise<void> {
     };
     step();
     const press = emptyGamepad();
-    press.a = true;
+    press.dpad_up = true;
     step(press);
     for (let i = 0; i < 300; i++) step();
     const want = w.sensors().game.upCellAzimuthDeg;
@@ -128,7 +128,7 @@ export async function main(): Promise<void> {
     };
     step();
     const press = emptyGamepad();
-    press.a = true;
+    press.dpad_up = true;
     step(press);
     for (let i = 0; i < 300; i++) step();
     // Push the robot sideways at a fixed speed and fire.

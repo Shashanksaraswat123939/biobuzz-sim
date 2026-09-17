@@ -7,6 +7,7 @@
 import { clamp, DEG, RAD, inches, wrapPi, rpmToRadS } from '../units.js';
 import { pThread } from '../physics/ballistics.js';
 import type { LandCalibration } from './entryModel.js';
+import type { HoodCell, HoodTable } from './hoodTable.js';
 import type { ActuatorFrame, GamepadState, RobotSpec, SensorFrame } from '../types.js';
 
 export interface ShotRow {
@@ -169,6 +170,8 @@ export interface TeleOpState {
   /** Match time of the last feed pulse, and whether one is running. Transfer.java's timers. */
   lastFeedT: number;
   pulsing: boolean;
+  /** Closing speed on the mouth, m/s. The fixed-speed table's second axis. */
+  vRadial: number;
 }
 
 export const newTeleOpState = (): TeleOpState => ({
@@ -176,7 +179,7 @@ export const newTeleOpState = (): TeleOpState => ({
   turretManualDeg: 0, flywheelOn: false,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, leadDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
-  lastFeedT: -999, pulsing: false,
+  lastFeedT: -999, pulsing: false, vRadial: 0,
 });
 
 const edge = (now: boolean, was: boolean) => now && !was;
@@ -194,6 +197,12 @@ export class BuiltinTeleOp {
      * not mean what it says.
      */
     private readonly landCal: LandCalibration | null = null,
+    /**
+     * The FIXED-SPEED table. When present the wheel is held at one speed all match and the
+     * hood does the aiming, which takes the flywheel out of the control loop entirely -- it
+     * never chases a target, so it never lags one, and its tachometer stops gating shots.
+     */
+    private readonly hoodTable: HoodTable | null = null,
   ) {}
 
   /** Recent flywheel readings, for the moving average the gate compares against tolRpm. */
@@ -201,6 +210,22 @@ export class BuiltinTeleOp {
   /** Last velocity sample and the filtered acceleration built from it, for the lead. */
   private lastVel = { x: 0, y: 0, t: 0 };
   private accel = { x: 0, y: 0 };
+  /** The fixed-speed solution for this loop, or null when there is no shot from here. */
+  private hoodCell: HoodCell | null = null;
+
+  /** Servo position for a hood ANGLE, which is what the fixed-speed table deals in. */
+  private hoodCommand(fallbackPos: number): number {
+    const c = this.hoodCell;
+    if (!c) return fallbackPos;
+    const [lo, hi] = this.spec.hood.angleRange_deg;
+    return clamp((c.mid - lo) / Math.max(1e-6, hi - lo), 0, 1);
+  }
+
+  /** Hood angle the servo is actually at, from its reported position. */
+  private hoodActualDeg(pos: number): number {
+    const [lo, hi] = this.spec.hood.angleRange_deg;
+    return lo + pos * (hi - lo);
+  }
 
   /**
    * Robot-centric mecanum drive plus the mechanisms, from one gamepad.
@@ -303,6 +328,18 @@ export class BuiltinTeleOp {
       this.lastVel = { x: velX, y: velY, t: s.t };
     }
     const lead = leadShot(s.game.upCellAzimuthDeg, tableSpeed, hoodDeg, leadVx, leadVy, s.imu.yaw);
+
+    // ---- FIXED-SPEED PATH: the wheel holds one speed and the hood aims.
+    //
+    // The robot's radial velocity -- how fast it is closing on the mouth -- is the table's
+    // second axis rather than something to cancel. Positive is closing. Lateral motion barely
+    // moves the answer, which is why this is the only component that has to be known.
+    const bearingField = (s.imu.yaw + s.game.upCellAzimuthDeg) * DEG;
+    const vRadial = velX * Math.cos(bearingField) + velY * Math.sin(bearingField);
+    st.vRadial = vRadial;
+    this.hoodCell = this.hoodTable && !this.hoodTable.isEmpty
+      ? this.hoodTable.lookup(s.game.upCellRangeIn - cal.rangeTrim_in, vRadial)
+      : null;
     st.leadDeg = wrapPi((lead.azimuthDeg - s.game.upCellAzimuthDeg) * DEG) * RAD;
     // Where the turret ACTUALLY is, from its encoder -- not where it was told to go. The
     // axis is acceleration limited, so a 137 deg swing takes most of a second, and firing
@@ -329,7 +366,11 @@ export class BuiltinTeleOp {
     // ---- flywheel with a readiness gate (this is what FlywheelGate does on the hub)
     // The lead also changes how fast the ball has to leave: shooting while closing needs
     // less, shooting while retreating needs more.
-    const leadRpm = st.autoAim && tableSpeed > 0 ? (row.rpm * lead.speed) / tableSpeed : row.rpm;
+    // ONE SPEED, ALL MATCH, when the fixed-speed table is loaded: the lead's rpm correction is
+    // exactly the thing that made the wheel chase a moving target, so there is none.
+    const leadRpm = this.hoodTable && !this.hoodTable.isEmpty
+      ? this.hoodTable.fixedRpm
+      : st.autoAim && tableSpeed > 0 ? (row.rpm * lead.speed) / tableSpeed : row.rpm;
     // Firing implies spinning. Asking a driver to arm the wheel and then arm the feed is
     // two controls where the game only has one decision: shoot or do not.
     const wheelOn = st.flywheelOn || st.firing;
@@ -408,9 +449,21 @@ export class BuiltinTeleOp {
     const pAim = row.halfLat_m === undefined
       ? 1
       : pThread(-row.halfLat_m, row.halfLat_m, meanLat, sigmaLat);
-    const rawP = haveModel && wheelOn
-      ? pThread(row.speedLo as number, row.speedHi as number, exitNow, row.sigmaSpeed as number) * (row.pStay as number) * pAim
+    // FIXED-SPEED MODEL. The uncertainty has moved from the wheel to the hood, so the first
+    // factor is a normal integral over HOOD ANGLE instead of exit speed: the band the table
+    // measured, against the sigma it measured, centred on where the hood actually IS rather
+    // than where it was told to go. The wheel contributes nothing to this term, because it is
+    // not moving -- which was the entire point.
+    const cell = this.hoodCell;
+    const hoodNow = this.hoodActualDeg(s.servos.hood?.pos ?? 0.5);
+    const fixedP = cell && wheelOn
+      ? pThread(cell.lo, cell.hi, hoodNow, cell.sigmaHood) * cell.pStay * pAim
       : -1;
+    const rawP = this.hoodTable && !this.hoodTable.isEmpty
+      ? fixedP
+      : haveModel && wheelOn
+        ? pThread(row.speedLo as number, row.speedHi as number, exitNow, row.sigmaSpeed as number) * (row.pStay as number) * pAim
+        : -1;
     st.pLandRaw = rawP;
     // Calibrated if a measurement is available, raw otherwise -- and `calibrated` says which,
     // so a threshold is never quietly compared against the wrong kind of number.
@@ -427,15 +480,26 @@ export class BuiltinTeleOp {
     // RPM it happened to be at. Keeping the window as a floor means a threshold of 0 is
     // exactly the old behaviour, and every value above it is a real added restriction.
     const inWindow = Math.abs(rpm - st.targetRpm) < f.tolRpm && rpm > st.targetRpm * f.minRpmFrac;
-    const probOk = !haveModel || st.pLand >= minP;
-    const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk;
+    // With the fixed-speed table the readiness question changes: the wheel is always at its
+    // one speed, so what has to arrive is the HOOD. A servo settles in tens of milliseconds
+    // against the flywheel's tenths of a second, and it is a commanded position rather than a
+    // measured speed -- there is nothing in the loop to be wrong about.
+    const usingHood = !!(this.hoodTable && !this.hoodTable.isEmpty);
+    const hoodThere = !usingHood || (!!cell && hoodNow >= cell.lo && hoodNow <= cell.hi);
+    const haveShot = !usingHood || !!cell;
+    const probOk = usingHood ? st.pLand >= minP : !haveModel || st.pLand >= minP;
+    const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
     st.readyCount = atSpeed ? st.readyCount + 1 : 0;
     st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretErrDeg) < 3 && !s.game.hiveTipping;
 
     st.hold = !wheelOn ? ''
       : s.game.hiveTipping ? 'hive is tipping'
       : Math.abs(st.turretErrDeg) >= 3 ? `turret ${st.turretErrDeg.toFixed(0)} deg off`
-      : !haveModel ? ''
+      // No cell is a real answer, not a failure: there is no hood angle that scores from here
+      // at this closing speed, and saying so beats holding with an unexplained low number.
+      : usingHood && !cell ? 'no shot from here at this speed'
+      : usingHood && !hoodThere ? `hood ${hoodNow.toFixed(0)} deg, want ${cell?.mid.toFixed(0)}`
+      : !haveModel && !usingHood ? ''
       // A threshold ABOVE THE MEASURED CEILING cannot be met by any shot this shooter can
       // take, so the robot sits there forever printing a number that reads like bad luck.
       // Name it, or the honest answer (the shooter cannot do it) looks like a jam.
@@ -487,7 +551,7 @@ export class BuiltinTeleOp {
       seq,
       motors,
       servos: {
-        hood: st.autoAim ? row.hoodPos : 0.5,
+        hood: st.autoAim ? this.hoodCommand(row.hoodPos) : 0.5,
         gate: mayFire ? this.spec.transfer.gate.open : this.spec.transfer.gate.closed,
       },
       telemetry: [

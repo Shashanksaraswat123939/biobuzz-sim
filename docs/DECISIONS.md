@@ -934,3 +934,57 @@ shot table regenerated as hood-versus-(range, radial velocity) at a fixed rpm, t
 commanding a constant wheel speed, and the readiness gate reduced to "is the hood there yet",
 which is a servo position and settles in tens of milliseconds rather than tenths of a second.
 
+## BUILT AND MEASURED: the fixed-speed shooter is worse. Here is why, exactly.
+
+Built end to end -- `tools/hoodtable.ts` generates hood-versus-(range, radial velocity) at one
+wheel speed, `HoodTable` interpolates it, `BuiltinTeleOp` takes it as a fourth argument and
+switches the wheel to a constant target with readiness on the HOOD instead of the wheel, and
+`tools/shooterab.ts` runs both shooters over identical seeds and scripted driving.
+
+It loses, and not narrowly:
+
+| case | speed-solving | fixed-speed + hood |
+|---|---|---|
+| stopped | 0.28 landed/s | **0.02** |
+| steady closing | 0.33 | 0.00, "no shot from here at this speed" |
+| steady strafing | 0.24 | 0.07 |
+| accelerating | 0.00 | 0.00 |
+
+### The reason, which is the useful part
+
+A fixed speed forces a single tradeoff and there is no setting that wins it:
+
+| fixed rpm | exit | cells with a solution | mean hood band | mean sigma | cells where band/2 > sigma |
+|---|---|---|---|---|---|
+| 2600 | 5.88 m/s | 40 | 6.62 deg | 3.30 deg | **63%** |
+| 3000 | 6.79 | 71 | 4.80 | 2.84 | 39% |
+| 3400 | 7.69 | 103 | 3.41 | 2.60 | 18% |
+| 3800 | 8.60 | 120 | 1.56 | 1.85 | 4% |
+| 4200 | 9.50 | 117 | 0.92 | 1.10 | **0%** |
+
+COVERAGE NEEDS SPEED AND PRECISION NEEDS SLOWNESS. A slow wheel gives a forgiving hood band
+but only reaches a third of the envelope; a fast one reaches everything and the band closes to
+under a degree, narrower than the 1 deg of launch elevation scatter.
+
+And the deeper point: **the error I moved was never the dominant one.** The wheel's 1.5%
+speed scatter is present in BOTH designs and is worth 13 cm of range in the speed-solving
+shooter and 18 cm in the fixed-speed one -- against a pocket 22.5 cm deep. Changing which axis
+compensates does not remove it; it just re-expresses it, and at a higher wheel speed it makes
+it worse.
+
+What the fixed-speed design DOES remove is the wheel's tracking LAG, which is the thing that
+kills the accelerating case. That was the right diagnosis. It is simply worth less than the
+coverage and precision it costs.
+
+### So the real lever
+
+`flywheel.scatter.speedFrac = 0.015`, which is an UNMEASURED guess. Everything above is
+downstream of it. A shooter that puts the same speed on every ball -- a dual-wheel nip, a
+consistent compression, a hood that does not let the ball skip -- moves every number in this
+document, standing still or moving. Nothing in the aiming can fix a ball that leaves at a
+different speed each time.
+
+The fixed-speed path is left in the code behind `BuiltinTeleOp`'s fourth argument, unused by
+the app: it is a working implementation of a measured dead end, and cheap to re-test if the
+shooter's consistency ever changes.
+

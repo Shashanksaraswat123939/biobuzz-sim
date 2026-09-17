@@ -420,13 +420,17 @@ export class Robot {
     const f = this.spec.flywheel;
     this.lastTargetRpm = this.targetFlywheelRpm(act);
     const duty = this.commandDuty(m, act.motors?.['flywheel'], dt);
-    const tau = motorTorque(m.model, duty, m.omega, volts, false); // a flywheel always floats
-    const I = f.I_fly_kgm2 + m.model.inertia;
+    // TWO MOTORS ON ONE WHEEL is the usual answer to a flywheel that cannot keep up, and it
+    // is not free: each one adds its rotor inertia to the thing it is trying to accelerate,
+    // and each one draws its own current from the same battery.
+    const n = Math.max(1, Math.round(f.motorCount ?? 1));
+    const tau = n * motorTorque(m.model, duty, m.omega, volts, false); // a flywheel always floats
+    const I = f.I_fly_kgm2 + n * m.model.inertia;
     const drag = f.dragQuad_Nms2 * m.omega * Math.abs(m.omega) + f.coulomb_Nm * Math.sign(m.omega);
     m.omega = Math.max(0, m.omega + ((tau - drag) / I) * dt);
     m.rad += m.omega * dt;
     m.torque = tau;
-    m.amps = motorCurrent(m.model, tau);
+    m.amps = n * motorCurrent(m.model, tau / n);
     this.flywheelOmega = m.omega;
     return m.amps;
   }
@@ -1055,13 +1059,18 @@ export class Robot {
           slots.push([
             sx * step,
             this.binFloorY + b.radius + 0.005 + layer * b.radius * 2.1,
-            // OPEN BUG. Place the robot, preload four POLLEN, arm NOTHING and step: three of the four
-            // leave through the intake mouth within a tenth of a second at over a metre a
-            // second. They are already at z = +0.20 one frame after placement, which is NOT
-            // where this formula puts them (+0.068), so the cause is upstream of the
-            // arithmetic -- standing them further off the tube wall does not move them.
-            // Every harness hides it by topping the hopper up each frame, which is why no
-            // test has ever caught it. The robot cannot hold a magazine.
+            // RETRACTED BUG REPORT, left here because the mistake is worth not repeating.
+            //
+            // This was written up as "the robot cannot hold a magazine": place it, preload
+            // four POLLEN, arm nothing, and three of the four appeared to leave through the
+            // intake mouth. They did not. The probe placed the robot at z = 2.38 m against a
+            // 1.80 m field half-width -- outside the wall, where there is no floor. The robot
+            // fell, the balls fell with it, and their UNCHANGED position relative to a
+            // departing robot was read as balls leaving the robot. tools/landrate.ts has the
+            // on-field guard; the probe did not. Placed legally, all four sit still.
+            //
+            // The relative frame is the trap: "the balls did not move relative to the robot"
+            // and "the balls left the robot" look identical if the robot is what moved.
             sh.z + sz * (sh.half + b.radius + 0.012 + layer * 0.004),
           ]);
         }

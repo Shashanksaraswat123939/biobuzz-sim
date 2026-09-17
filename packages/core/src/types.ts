@@ -62,6 +62,11 @@ export interface RobotSpec {
      * 28 ticks a rev, so one count is about 107 rpm -- averaging is how a team gets a number
      * worth comparing against a tolerance, at the cost of lag.
      */
+    /**
+     * How many motors drive the flywheel. Torque scales with it and so does the rotor inertia
+     * they add, which is what decides whether the wheel can TRACK a shot-on-the-move lead.
+     */
+    motorCount?: number;
     rpmFilterFrames?: number;
     /** Open-loop feedforward, MEASURED: duty = kS + kV * rpm, with kP trimming the error. */
     kS?: number; kV?: number; kP?: number;

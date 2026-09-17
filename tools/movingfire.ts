@@ -1,0 +1,149 @@
+/**
+ * Can this robot shoot while it is moving? Not "on a sweep" -- at a STEADY speed.
+ *
+ *   npm run tool -- tools/movingfire.ts [--seconds 20]
+ *
+ * tools/collect.ts --moving fires one shot in forty, and the obvious reading is that shooting
+ * while driving is impossible. tools/slew.ts says otherwise, and says exactly what the limit
+ * is: the lead moves the target rpm by 688-1431 per m/s of RADIAL speed, so
+ *
+ *     d(target rpm)/dt  =  (rpm per m/s)  x  (radial acceleration)
+ *
+ * Velocity is not in that expression. A steady 1.5 m/s holds the target rpm perfectly still;
+ * only CHANGING the closing speed moves it. The wheel slews about 1100 rpm/s, which buys
+ * roughly 1.2 m/s^2 of radial acceleration at the current hood -- and `collect --moving`
+ * drives a range sweep, accelerating and braking the whole way, so it is over that budget
+ * continuously and the gate refuses almost every shot.
+ *
+ * This holds the stick still instead, lets the speed settle, and then fires.
+ */
+import params from '../config/params.json' with { type: 'json' };
+import robotSpec from '../config/robot.json' with { type: 'json' };
+import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/world.js';
+import { BuiltinTeleOp, ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
+import { loadLandCal } from '../packages/core/src/robot/loadCal.js';
+import { inches, M_TO_IN } from '../packages/core/src/units.js';
+import { readFileSync } from 'node:fs';
+import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
+
+const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
+
+interface Run { name: string; fired: number; radialMps: number; radialAccel: number; rpmErr: number; landed: number; secs: number }
+
+/**
+ * @param drive  what the stick is held at: [strafe, forward]. Forward is toward the hive.
+ * @param wobble stick amplitude of a 0.5 Hz oscillation, to spend the acceleration budget.
+ */
+async function run(name: string, drive: [number, number], wobble: number, seconds: number): Promise<Run> {
+  await initPhysics();
+  const p = structuredClone(params) as unknown as Params;
+  const spec = structuredClone(robotSpec) as unknown as RobotSpec;
+  // The QUESTION is whether the wheel and the gate can keep up with a moving lead, which is a
+  // mechanism question. The land-probability threshold is policy, and with it closed the first
+  // version of this test fired nothing even STANDING STILL -- the start was 2.4 m out, past
+  // the range any shot clears 90% from, so every case read zero and proved nothing.
+  spec.flywheel.minLandProb = 0;
+  const staging = Array.from({ length: 80 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
+  const world = new World({ params: p, robot: spec, staging, alliance: 'red', seed: 7 });
+  for (const b of world.balls.balls) world.balls.park(b);
+
+  const mouth = world.hives.red.upCellMouthWorld();
+  // ON THE FIELD. The first version started at z = 2.38 m against a 1.80 m half-width --
+  // outside the wall, where there is no floor. The robot fell, the balls fell with it, every
+  // case read zero shots, and the balls' unchanged position relative to a departing robot
+  // read as "the magazine empties itself". That was reported as a bug in the robot. It was a
+  // bug in this line.
+  const limit = world.geom.halfWidth_m - 0.35;
+  const start: Vec3 = [
+    mouth[0],
+    spec.chassis.height_m / 2 + spec.chassis.clearance_m,
+    Math.min(mouth[2] + inches(62), limit),
+  ];
+  world.robot.place(start, 180);
+  const brain = new BuiltinTeleOp(spec, table, loadLandCal());
+  let loaded = 0;
+  const step = (g: GamepadState) => {
+    while (world.robot.heldBalls().length < 7 && loaded < staging.length) {
+      if (!world.robot.preload(world.balls, world.balls.balls[loaded])) break;
+      loaded++;
+    }
+    world.setGamepads(g, emptyGamepad());
+    world.step(brain.update(world.sensors(), g, world.seq));
+  };
+
+  const arm = emptyGamepad();
+  step(arm);
+  arm.a = true;
+  step(arm);
+
+  // Let the wheel and the drive settle before anything is judged.
+  const hold = (t: number): GamepadState => {
+    const g = emptyGamepad();
+    g.left_stick_x = drive[0];
+    g.left_stick_y = -(drive[1] + wobble * Math.sin(2 * Math.PI * 0.5 * t));  // -y is forward
+    return g;
+  };
+  for (let f = 0; f < 90; f++) step(hold(world.t));
+
+  const fire = (t: number): GamepadState => ({ ...hold(t), right_bumper: true });
+  const radial: number[] = [];
+  let prevRadial = 0;
+  const accels: number[] = [];
+  const t0 = world.t;
+  for (let f = 0; f < Math.round(seconds * 60); f++) {
+    const before = world.robot.shots;
+    step(fire(world.t));
+    const r = world.robot.pos;
+    const dx = mouth[0] - r[0];
+    const dz = mouth[2] - r[2];
+    const n = Math.hypot(dx, dz) || 1;
+    const v = world.robot.body.linvel();
+    const vr = (v.x * dx + v.z * dz) / n;             // closing speed, + is toward the mouth
+    radial.push(vr);
+    if (f > 0) accels.push(Math.abs(vr - prevRadial) * 60);
+    prevRadial = vr;
+    if (world.robot.shots > before) { /* fired this frame */ }
+    if (n < inches(30)) break;                        // arrived; stop before it drives through
+  }
+  for (let f = 0; f < 60 * 6; f++) step(emptyGamepad());
+
+  const log = world.snapshot().shots.filter((s) => s.result !== 'flight');
+  const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+  return {
+    name,
+    secs: world.t - t0,
+    fired: world.robot.shots,
+    radialMps: mean(radial),
+    radialAccel: mean(accels),
+    rpmErr: mean(log.map((s) => Math.abs(s.rpm - s.targetRpm))),
+    landed: log.filter((s) => s.result === 'cell').length,
+  };
+}
+
+export async function main(argv: string[] = []): Promise<void> {
+  const i = argv.indexOf('--seconds');
+  const seconds = i >= 0 ? Number(argv[i + 1]) : 20;
+
+  console.log('SHOOTING ON THE MOVE — is it the speed, or the change in speed?');
+  console.log(`  ${seconds} s per case, same start, hopper kept loaded, gate at its configured threshold.`);
+  console.log('');
+  // Shots per second, not shots: a closing run crosses the usable field in a couple of
+  // seconds and then has to stop, so raw counts compare a short run against a long one.
+  console.log('  case                     secs   shots/s   landed/s   mean closing   |d(closing)/dt|   rpm err');
+  const cases: [string, [number, number], number][] = [
+    ['stopped', [0, 0], 0],
+    ['steady closing, slow', [0, 0.18], 0],
+    ['steady strafing', [0.6, 0], 0],
+    ['closing, stick wobbling', [0, 0.18], 0.30],
+  ];
+  for (const [name, drive, wobble] of cases) {
+    const r = await run(name, drive, wobble, seconds);
+    console.log(
+      `  ${r.name.padEnd(24)} ${r.secs.toFixed(1).padStart(5)}   ${(r.fired / r.secs).toFixed(2).padStart(7)}   ${(r.landed / r.secs).toFixed(2).padStart(8)}   ` +
+      `${r.radialMps.toFixed(2).padStart(9)} m/s   ${r.radialAccel.toFixed(2).padStart(12)} m/s^2   ${r.rpmErr.toFixed(0).padStart(4)} rpm`,
+    );
+  }
+  console.log('');
+  console.log('  If steady motion fires like standing still and only the wobbling case starves,');
+  console.log('  then "cannot shoot on the move" was never true -- the budget is acceleration.');
+}

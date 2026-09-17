@@ -687,7 +687,41 @@ the ceiling, and that pointing 12 degrees off scores worse than pointing at the 
 assertions became 24, and a drift between the two halves now fails the Java build rather than
 being discovered in a match.
 
-## OPEN: the robot cannot hold a magazine
+## RETRACTED: "the robot cannot hold a magazine" was a bug in the probe
+
+Reported here as the top open defect, twice. It was wrong.
+
+The probe placed the robot at **z = 2.38 m against a field half-width of 1.80 m** -- outside
+the wall, where there is no floor. The robot free-fell at 9.81 m/s^2 from the first step, the
+balls fell with it, and their unchanged position *relative to the robot* was read as the balls
+leaving. `tools/landrate.ts` guards placement with `Math.abs(c[2]) < limit`; the probe did not.
+Placed legally the robot settles at y = 0.154 m and all four POLLEN sit still indefinitely.
+
+The trap is the relative frame: "the balls did not move relative to the robot" and "the balls
+left the robot" produce identical numbers when the robot is the thing that moved. The tell was
+there and I read past it -- the balls' vertical velocity was NEGATIVE and growing by 9.81 m/s
+per second, which is not what being flung out of a bin looks like, it is what falling looks
+like.
+
+## OPEN: the indexer cannot feed from a nearly empty bin
+
+Found while chasing the above, and this one is real. Same rig, robot on the field, shooter
+armed, gate open, varying only how many POLLEN are preloaded:
+
+| preloaded | reaches the magazine | shots in 6 s |
+|---|---|---|
+| 4 | **never** (`shaft=0` throughout) | **0** |
+| 6 | yes | 1 |
+| 8 | yes | 1 |
+
+With four balls the indexer pushes the nearest one to about 40 mm from the tube and it stalls
+there. With six, the extra weight and jostling get one in. So the robot stops feeding when it
+is down to its last few -- which in a match is exactly when it is trying to finish a cycle.
+
+Every harness hides it by topping the hopper up every frame from an unlimited supply, which is
+why 82 tests pass and none of them sees it.
+
+## SUPERSEDED: the robot cannot hold a magazine
 
 Place the robot, preload four POLLEN, arm nothing at all and step the world. Three of the four
 are outside the robot within a tenth of a second, moving at over a metre a second, having left
@@ -762,4 +796,43 @@ thing to draw twice over: the useful question for a floor map is "if I go there,
 not "if I were there moving as I am now", and the measurement says the robot would not take the
 shot at all. The per-cell parameters still ship and `repaintZone` still takes a velocity, so it
 is one line to turn back on when firing on the move works.
+
+## Shooting on the move: it is an ACCELERATION budget, not a speed limit
+
+The lead changes the required exit speed, and for this shooter exit speed is `k*r*omega`, so
+the target rpm moves by a fixed amount per m/s of RADIAL closing speed -- 442/cos(hood), which
+is 688 rpm per m/s at a 50 deg hood and 1431 at 72 deg. Therefore:
+
+    d(target rpm)/dt  =  (rpm per m/s)  x  (radial ACCELERATION)
+
+Velocity does not appear. A steady 1.5 m/s holds the target rpm perfectly still; only changing
+the closing speed moves it. `tools/slew.ts` measures both halves:
+
+| | speeding up | slowing down | acceleration budget at 61 deg hood |
+|---|---|---|---|
+| 1 motor | 1102 rpm/s | 1588 rpm/s | **1.2 m/s^2** |
+| 2 motors | 1687 rpm/s | 2700 rpm/s | 1.9 m/s^2 |
+| 3 motors | 2077 rpm/s | 3600 rpm/s | 2.3 m/s^2 |
+
+That is why `tools/collect.ts --moving` fired 1 shot in 40: the AutoDriver drives a range
+sweep, accelerating and braking the whole way, so it is over the budget continuously. It was
+never a test of shooting at a steady speed.
+
+`tools/movingfire.ts` holds the stick still instead:
+
+| case | shots/s | landed/s | rpm error at fire |
+|---|---|---|---|
+| stopped | 0.63 | 0.33 | 45 rpm |
+| steady STRAFING | 0.37 | **0.30** | 318 rpm |
+| steady CLOSING at 0.24 m/s | 0.17 | 0.17 | **486 rpm** |
+
+**Strafing lands at the stationary rate.** Shooting while crossing the hive's face already
+works, because lateral motion has almost no radial component and the target rpm barely moves.
+Closing is what hurts, and it hurts through the rpm error, exactly as the arithmetic predicts.
+
+So "shoot on the move" is not one capability. Moving across the shot line is available now;
+moving along it needs the acceleration budget widened -- a second flywheel motor (the motor
+count is at 8 of 8, so it costs a mechanism; the turret is the obvious one to hand to a servo),
+a flatter hood, or both, plus a gate that compares against the target at RELEASE instead of
+resetting every time the target shifts.
 

@@ -220,3 +220,39 @@ button.on { background: var(--accent); border-color: #d9740f; color: #1b1f25; fo
 @media (max-width: 1000px) {
   .scores, .field.hide-narrow { display: none; }
 }
+
+/* ------------------------------------------------------------------ on-screen sticks
+   Over the canvas, not in the layout: the view is absolutely positioned and sized to the
+   window, so a stick in the flow would push it. Pinned to the bottom corners, which is where
+   thumbs are on a phone held in landscape. */
+.sticks {
+  position: absolute; left: 0; bottom: calc(var(--act-h) + 26px);
+  /* Stop where the side panel starts, or the right-hand stick sits underneath it and cannot
+     be touched. Same variable the panel sizes itself from, so a resized panel takes the
+     sticks with it. */
+  right: var(--panel-w, 380px);
+  display: flex; justify-content: space-between; padding: 0 18px;
+  pointer-events: none;                     /* only the pads take input, not the gap */
+}
+.sticks[hidden] { display: none; }
+.stick {
+  position: relative; width: 116px; height: 116px; border-radius: 50%;
+  background: rgba(16, 22, 30, 0.55); border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(2px);
+  pointer-events: auto; touch-action: none;  /* or the page scrolls instead of driving */
+  user-select: none; -webkit-user-select: none;
+}
+.stick::after {
+  content: attr(data-label);
+  position: absolute; left: 0; right: 0; bottom: -16px; text-align: center;
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--dim, #8b97a6); pointer-events: none;
+}
+.stick.live { border-color: var(--accent, #ffa733); }
+.knob {
+  position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px;
+  border-radius: 50%; background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  transition: transform 70ms ease-out;       /* snap home when released, follow when held */
+}
+.stick.live .knob { transition: none; background: var(--accent, #ffa733); }

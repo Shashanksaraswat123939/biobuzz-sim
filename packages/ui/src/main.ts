@@ -31,6 +31,7 @@ import { M_TO_IN, DEG, inches } from '@core/units.js';
 import { Scene, type CameraMode } from '@render/scene.js';
 import type { ActuatorFrame, Alliance, BallKind, GamepadState, Params, RobotSpec, Snapshot, Vec3 } from '@core/types.js';
 import { readKeyboard, installKeyboard, type Keys } from './input.js';
+import { Joysticks } from './joystick.js';
 import { buildTunePanel, type Tunable } from './tune.js';
 import { WorldBridge } from './bridge.js';
 import { CONTROLS, renderGuide } from './guide.js';
@@ -50,6 +51,8 @@ let params: Params = structuredClone(baseParams);
 let robotSpec: RobotSpec = structuredClone(baseRobot);
 let world: World;
 let scene: Scene;
+/** On-screen sticks, folded into the same gamepad frame as the keyboard and a real pad. */
+let sticks: Joysticks;
 let brain: BuiltinTeleOp;
 let auto: AutoDriver | null = null;
 let plan: AutoPlan = defaultPlan();
@@ -80,6 +83,7 @@ async function boot(): Promise<void> {
   build();
   buildTunePanel($('#tune-rows'), params, robotSpec, onTune);
   renderGuide($('#guide'));
+  sticks = new Joysticks($('#app'));
   wireUi();
   setMode('practice');
   requestAnimationFrame(loop);
@@ -127,9 +131,9 @@ function onTune(t: Tunable): void {
 function gamepadState(): GamepadState {
   const g = navigator.getGamepads?.().find((p) => p);
   const k = readKeyboard(keys);
-  if (!g) return k;
+  if (!g) return sticks.merge(k);
   const dz = (v: number) => (Math.abs(v) < 0.09 ? 0 : v);
-  return {
+  const merged: GamepadState = {
     left_stick_x: dz(g.axes[0] ?? 0) || k.left_stick_x,
     left_stick_y: dz(g.axes[1] ?? 0) || k.left_stick_y,
     right_stick_x: dz(g.axes[2] ?? 0) || k.right_stick_x,
@@ -151,6 +155,7 @@ function gamepadState(): GamepadState {
     left_stick_button: g.buttons[10]?.pressed ?? false,
     right_stick_button: g.buttons[11]?.pressed ?? false,
   };
+  return sticks.merge(merged);
 }
 
 /** Same sticks, edge-triggered buttons released: a toggle fires once per animation frame. */
@@ -500,6 +505,7 @@ const DECK: Record<Mode, Action[]> = {
     { label: 'Auto-aim', title: 'Turret and hood solve for the CELL continuously, including a lead for the robot’s own motion. Off means the arrow keys aim it.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
     { label: 'Fire', title: 'Latch. Spins the flywheel, waits for it to be in tolerance and the turret to be on target, then feeds at the cycle time until you press it again.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
     { label: 'Auto-fill hopper', title: 'Practice aid, not a game rule: quietly picks up the nearest POLLEN off the floor whenever the hopper has room, so you can work on aiming without driving a collection lap.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
+    { label: 'Joystick', title: 'On-screen sticks: left translates, right turns. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
     { label: 'Shot zone', title: 'Green where a perfectly aimed shot clears the land-probability gate, red where it does not, using the hood and rpm the table commands at that range and the CELL mouth as seen from that spot. A MODEL map (tools/shotzone.ts), not a record of what this robot has hit.', run: () => (scene.showShotZone = !scene.showShotZone), on: () => scene.showShotZone },
     { label: 'Pause', title: 'Freeze the physics. The view still moves.', run: () => togglePause(), on: () => paused },
     { label: 'Reset', title: 'Rebuild the match: robot back on its start tile, balls re-staged, score and shot log cleared.', run: () => build() },

@@ -40,7 +40,9 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   // ACROSS the mouth between +-30 deg of its axis.
   const nrm: Vec3 = [0, 0, 1];
   const R = inches(38);
-  const x0 = mouth[0] + nrm[0] * R, z0 = mouth[2] + nrm[2] * R;
+  // A pass starts at the sector's far edge so the whole crossing is at speed.
+  const b0 = process.argv.includes('--pass') ? -50 * Math.PI / 180 : 0;
+  const x0 = mouth[0] + R * Math.sin(b0), z0 = mouth[2] + R * Math.cos(b0);
   w.robot.place([x0, spec.chassis.height_m / 2 + spec.chassis.clearance_m, z0], Math.atan2(mouth[0] - x0, mouth[2] - z0) * RAD);
   const brain = new BuiltinTeleOp(spec, table, loadLandCal());
   brain.state.firing = true;
@@ -70,6 +72,10 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
     const bearingOff = wrapPi(Math.atan2(dx, dz) - Math.atan2(nrm[0], nrm[2]) + Math.PI) * RAD;
     // Turn round at the sector's edge, once, with hysteresis: flipping every frame past the
     // edge is a robot that stands still and reads as 0.04 m/s.
+    // --pass: ONE crossing at full stick, starting at the sector's edge and ending at the
+    // other, which is the 0.7 s a driver actually gets at 1.2 m/s. A patrol cannot reach
+    // that speed -- a mecanum takes half a second to reverse, so it oscillates at the edge.
+    if (process.argv.includes('--pass') && i > 30 && bearingOff > 50) break;
     const edge = process.argv.includes('--nohold') ? 45 : 30;
     if (bearingOff < -edge) dir = -1;
     else if (bearingOff > edge) dir = 1;

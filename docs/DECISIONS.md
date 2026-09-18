@@ -1955,6 +1955,13 @@ Costs/risks: 1.5 m/s is not this drivetrain: four 5203-312s on 48 mm wheels free
              deg upstream of the hive, by the opponent's, while the real ball went in. "It
              aims at the wrong hive most of the time" was the curve, not the aim. It now
              adds v_cg + omega x r, the same term Robot.launch() has.
+
+             FULL STICK, MEASURED. Sixteen single crossings of a +-50 deg sector at 38 in
+             with no range hold (tools/zonerun.ts --pass --nohold), 0.95 m/s actual, latch
+             on, real rocker: 103 shots, 96 credited, 93%, 1.00 balls a second, long
+             -0 +- 11 cm, lateral -2 +- 9. The patrol could not reach that speed -- a
+             mecanum takes half a second to reverse and oscillates at the sector's edge --
+             which is why the earlier table tops out at 0.84.
 Who/where:   tools/zonerun.ts, tools/bandcheck.ts (new), packages/core/src/robot/builtinTeleOp.ts
              (feed-forwards, aimEst), packages/core/src/physics/ballistics.ts (steps),
              packages/core/src/physics/world.ts (tip credit), config/robot.json

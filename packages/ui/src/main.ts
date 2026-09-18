@@ -696,7 +696,33 @@ function paintMatch(s: Snapshot): void {
       + (ceiling !== undefined && gate > ceiling ? ' — THE GATE IS ABOVE THE CEILING: no shot can meet it.' : '');
 }
 
+/**
+ * THE SCOREBOARD, itemised and live, both alliances side by side.
+ *
+ * A total tells you how you are doing and nothing about what to do next. The breakdown says
+ * which avenue is empty -- and it is how the opponent bot was caught scoring exactly 0 from
+ * FLOWERs and, before that, exactly 0 from LEAVE because nobody was assessing it.
+ */
+function paintBoard(s: Snapshot): void {
+  const done = s.period === 'FINISHED';
+  const parts = done
+    ? { red: { ...s.score.red, bottomNectar: s.score.red.bottomNectar * 5, tips: s.score.red.tips * 20, leave: s.score.red.leave ? 3 : 0, park: s.score.red.park ? 5 : 0, upCell: s.score.red.upCell * 2, flower: s.score.red.flower * 2, garden: s.score.red.garden, total: s.score.red.total },
+        blue: { ...s.score.blue, bottomNectar: s.score.blue.bottomNectar * 5, tips: s.score.blue.tips * 20, leave: s.score.blue.leave ? 3 : 0, park: s.score.blue.park ? 5 : 0, upCell: s.score.blue.upCell * 2, flower: s.score.blue.flower * 2, garden: s.score.blue.garden, total: s.score.blue.total } }
+    : world.projectedParts();
+  const rows: [string, keyof typeof parts.red][] = [
+    ['TIPS', 'tips'], ['LEAVE', 'leave'], ['PARK', 'park'],
+    ['balls in the up CELL', 'upCell'], ['FLOWERs owned', 'flower'],
+    ['bottom NECTAR', 'bottomNectar'], ['GARDEN', 'garden'],
+  ];
+  const cell = (v: number) => `<td class="${v ? '' : 'zero'}">${v}</td>`;
+  $('#a-board').innerHTML =
+    `<tr><th>${done ? 'final' : 'projected'}</th><th class="red">RED</th><th class="blue">BLUE</th></tr>`
+    + rows.map(([label, k]) => `<tr><td>${label}</td>${cell(Number(parts.red[k]))}${cell(Number(parts.blue[k]))}</tr>`).join('')
+    + `<tr class="sum ${alliance === 'red' ? 'mine' : ''}"><td>total</td><td>${parts.red.total}</td><td>${parts.blue.total}</td></tr>`;
+}
+
 function paintAnalysis(s: Snapshot): void {
+  paintBoard(s);
   paintMatch(s);
   const running = !!auto && auto.phase !== 'done';
   $('#a-plan').innerHTML = [

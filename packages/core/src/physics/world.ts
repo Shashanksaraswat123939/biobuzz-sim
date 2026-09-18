@@ -962,6 +962,14 @@ export class World {
     };
   }
 
+  /** The same projection itemised, for the scoreboard. */
+  projectedParts(): Record<Alliance, ReturnType<Scorer['projectParts']>> {
+    return {
+      red: this.scorer.projectParts('red', this.endOfMatchCounts('red')),
+      blue: this.scorer.projectParts('blue', this.endOfMatchCounts('blue')),
+    };
+  }
+
   snapshot(): Snapshot {
     const p = this.robot.pos;
     const ftc = worldToFtc(p);

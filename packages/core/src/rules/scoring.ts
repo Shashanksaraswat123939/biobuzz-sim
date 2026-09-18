@@ -80,13 +80,29 @@ export class Scorer {
    * it as a projection until the clock stops.
    */
   project(alliance: Alliance, c: EndOfMatchCounts): number {
+    const b = this.projectParts(alliance, c);
+    return b.total;
+  }
+
+  /**
+   * The same projection, itemised. A total says how you are doing and nothing about what to
+   * do next; the breakdown says which avenue is empty, which is the question a driver and a
+   * bot both have. `project` sums this, so the headline and the itemisation cannot disagree.
+   */
+  projectParts(alliance: Alliance, c: EndOfMatchCounts) {
     const s = this.state[alliance];
     const p = positional(alliance, c);
     const bottoms = this.bottomNectarPerFlower ? p.bottoms : Math.min(1, p.bottoms);
-    const auto = s.autoTips * 20 + (s.leave ? 3 : 0) + (s.park ? 5 : 0);
-    const teleop = (s.tips - s.autoTips) * 20 + p.upCell * 2 + p.flower * 2 + p.garden + bottoms * 5
-      + (p.parked ? 5 : 0);
-    return auto + teleop;
+    const parts = {
+      tips: s.tips * 20,
+      leave: s.leave ? 3 : 0,
+      park: (s.park ? 5 : 0) + (p.parked ? 5 : 0),
+      upCell: p.upCell * 2,
+      flower: p.flower * 2,
+      bottomNectar: bottoms * 5,
+      garden: p.garden,
+    };
+    return { ...parts, total: Object.values(parts).reduce((x, y) => x + y, 0) };
   }
 
   private recompute(): void {

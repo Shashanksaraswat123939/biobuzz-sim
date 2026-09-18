@@ -94,6 +94,18 @@ select {
 .stat b.on { color: var(--go); }
 .stat b.off { color: var(--warn); }
 
+/* ---------------------------------------------------------------- scoreboard */
+#a-board { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-bottom: 10px; }
+#a-board th { text-align: right; font-weight: 600; padding: 2px 0 4px; font-size: 11px; }
+#a-board th:first-child { text-align: left; color: var(--dim); font-weight: 400; }
+#a-board th.red { color: var(--red); }
+#a-board th.blue { color: var(--blue); }
+#a-board td { padding: 2px 0; text-align: right; font-family: var(--num); font-variant-numeric: tabular-nums; }
+#a-board td:first-child { text-align: left; color: var(--dim); font-family: var(--ui); }
+#a-board tr.sum td { border-top: 1px solid var(--line); padding-top: 4px; font-weight: 700; }
+#a-board td.zero { opacity: .35; }
+#a-board tr.mine td:first-child::after { content: " (you)"; color: var(--accent); font-size: 9.5px; font-weight: 400; }
+
 /* ------------------------------------------------------- shot-zone legend */
 /* Four colours went onto the field with nothing to read them by, which is how
    "the goal does not open this way" got reported as a bug. */

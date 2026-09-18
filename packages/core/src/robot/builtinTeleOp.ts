@@ -373,6 +373,20 @@ export class BuiltinTeleOp {
   private accel = { x: 0, y: 0 };
   /** The gimbal's held bearing: filtered and deadbanded, so the axis locks instead of hunting. */
   private aimHold = 0;
+  /**
+   * The solution with the per-loop noise taken out but none of the motion: the estimate
+   * of where the muzzle SHOULD be pointing that the gate measures the axis against.
+   *
+   * `aimRawDeg` is one localizer sample's worth of solution. At a 27 deg lead, 0.04 m/s
+   * of velocity noise is 1.1 deg of bearing, so measuring the axis against the raw sample
+   * tripped the 3 deg gate on noise 5-10% of the loops on a steady 1 m/s leg while the axis
+   * was within a degree of where the filtered command had put it (tools/zonerun.ts
+   * --aimtrace). Measuring against the filtered COMMAND hid the real lag instead, which is
+   * how the wobbling case threw 37 cm wide. This carries the known rates forward the same
+   * way the command does and takes only the noise out, with a faster pole than the command
+   * so a real lag still shows.
+   */
+  private aimEst = 0;
   /** One-pole filtered localizer velocity. The lead is only ever as good as this. */
   private velFilt = { x: 0, y: 0 };
   /** The fixed-speed solution for this loop, or null when there is no shot from here. */
@@ -635,7 +649,20 @@ export class BuiltinTeleOp {
       // now measuring the true pointing error -- refused 80% of the spinning case's loops for
       // "turret N deg off". The turn rate is known from the IMU, so the accumulator is moved
       // by it first and the filter is left with only the part it is for.
-      this.aimHold += -s.localizer.omega * dt;
+      //
+      // AND THE BEARING'S OWN RATE FROM TRANSLATION, for the same reason. A robot crossing the
+      // mouth at v sees the bearing to a fixed target turn at (v x r) / R^2 -- 0.84 m/s at
+      // 38 in is 50 deg/s -- which the filter lagged just as it lagged the yaw. With the cap
+      // raised to where the shots land, "turret N deg off" became the top hold at speed:
+      // 22-35% of loops at 0.6-0.85 m/s (tools/zonerun.ts --cap). Both rates are known from
+      // the localizer, so both go through the accumulator before the filter sees anything.
+      const rangeNowM = Math.max(0.3, inches(s.game.upCellRangeIn));
+      const bearingRate = ((velX * Math.sin(bearingField) - velY * Math.cos(bearingField)) / rangeNowM) * RAD;
+      this.aimHold += (bearingRate - s.localizer.omega) * dt;
+      this.aimEst += (bearingRate - s.localizer.omega) * dt;
+      this.aimEst += wrapPi((raw - this.aimEst) * DEG) * RAD * 0.6;
+      this.aimEst = wrapPi(this.aimEst * DEG) * RAD;
+      aimRawDeg = this.aimEst;
       const dead = this.spec.turret.aimDeadband_deg ?? 0.25;
       if (Math.abs(wrapPi((raw - this.aimHold) * DEG) * RAD) > dead) {
         const a = clamp(this.spec.turret.aimFilterAlpha ?? 0.35, 0.01, 1);

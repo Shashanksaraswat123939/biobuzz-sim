@@ -450,6 +450,21 @@ function paint(s: Snapshot): void {
   set('#st-speed', `${(gearFrac * topSpeed_ms).toFixed(2)} m/s`, gearFrac < 1 ? 'off' : 'on');
   $<HTMLElement>('#st-speedbar').style.width = `${gearFrac * 100}%`;
 
+  // THE SHOT-ZONE LEGEND, with live counts. Four colours went onto the field with nothing to
+  // read them by, which is how "the CELL does not open this way" -- 474 of 841 squares, and
+  // correct -- came to be reported as the map being broken. The counts are taken at the
+  // CURRENT velocity, so the green number falls as you drive.
+  const lg = $<HTMLElement>('#legend');
+  lg.hidden = !scene.showShotZone;
+  if (scene.showShotZone) {
+    const t = scene.zoneTally();
+    $('#lg-good').textContent = String(t.good);
+    $('#lg-near').textContent = String(t.tooNear);
+    $('#lg-far').textContent = String(t.tooFar);
+    $('#lg-behind').textContent = String(t.behind);
+  }
+
+
   paintDeck();
 
   const tab = $('.tabs button.on').dataset.tab;

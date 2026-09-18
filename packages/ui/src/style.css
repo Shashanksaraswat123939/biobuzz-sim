@@ -94,6 +94,25 @@ select {
 .stat b.on { color: var(--go); }
 .stat b.off { color: var(--warn); }
 
+/* ------------------------------------------------------- shot-zone legend */
+/* Four colours went onto the field with nothing to read them by, which is how
+   "the goal does not open this way" got reported as a bug. */
+#legend {
+  position: absolute; left: 10px; bottom: calc(var(--act-h) + 10px);
+  background: rgba(35, 39, 46, .92); border: 1px solid var(--line); border-radius: 5px;
+  padding: 8px 10px; width: 232px; font-size: 11px; line-height: 1.5;
+}
+#legend[hidden] { display: none; }
+#legend b { display: block; font-size: 11.5px; margin-bottom: 5px; }
+#legend div { display: flex; align-items: center; gap: 7px; color: var(--dim); }
+#legend small { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--fg); opacity: .8; }
+#legend .sw { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+#legend .sw.good { background: hsl(132, 72%, 46%); }
+#legend .sw.near { background: rgb(150, 96, 24); }
+#legend .sw.far { background: rgb(140, 32, 32); }
+#legend .sw.behind { background: rgb(70, 78, 90); }
+#legend .cap { margin: 6px 0 0; font-size: 10px; line-height: 1.4; }
+
 /* ---------------------------------------------------------------- side panel */
 
 #panel {

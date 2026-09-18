@@ -419,6 +419,36 @@ export class Scene {
   }
 
   /**
+   * How many squares are in each state right now, for the legend. Counted at the CURRENT
+   * velocity, so the green number falls as you drive -- which is what the map is for and
+   * what a static picture cannot say.
+   */
+  zoneTally(): { good: number; tooNear: number; tooFar: number; behind: number } {
+    const out = { good: 0, tooNear: 0, tooFar: 0, behind: 0 };
+    const z = this.zone;
+    if (!z) return out;
+    const cells = (this.zoneSide === 1 ? z.cellsTipped : z.cells) ?? z.cells;
+    const v = this.zoneVel;
+    const sigmaYaw = Math.tan((z.yawScatterDeg * Math.PI) / 180);
+    for (const c of cells) {
+      const k = c.k;
+      if (!k) { out[c.why === 'tooNear' ? 'tooNear' : c.why === 'behind' ? 'behind' : 'tooFar']++; continue; }
+      const horiz = k.commanded * k.cosEl;
+      const required = Math.hypot(horiz * k.ux - v[0], horiz * k.uz - v[1]) / k.cosEl;
+      let p = 0;
+      if (required <= z.maxSpeed) {
+        const sigma = k.sigma * (required / Math.max(k.commanded, 1e-6));
+        const raw = pThread(k.lo, k.hi, k.commanded, sigma) * pThread(-k.halfLat, k.halfLat, 0, k.dist * sigmaYaw) * k.pStay;
+        p = this.zoneCal ? this.zoneCal.apply(raw) : raw;
+      }
+      if (p >= z.threshold) out.good++;
+      else out.tooFar++;
+    }
+    return out;
+  }
+
+
+  /**
    * Follow the rocker. A TIP puts it on its other stop and the up CELL becomes the other
    * one, so the mouth swings across the pivot and the zone goes with it. An overlay that did
    * not switch would send the driver to the wrong half of the field for the rest of the match.

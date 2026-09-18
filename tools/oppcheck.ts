@@ -24,8 +24,10 @@ const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/sh
 const balls = (staging.balls as { kind: string; pos: number[] }[]).map((b) => ({ kind: b.kind as BallKind, pos: b.pos as Vec3 }));
 
 let phaseT: Record<string, number> = {};
+let why: Record<string, number> = {};
 async function one(seed: number, trace = false) {
   phaseT = {};
+  why = {};
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
   const world = new World({ params: p, robot: spec, staging: balls, alliance: 'red', seed, preload: spec.hopper.capacity, opponent: true });
@@ -54,6 +56,17 @@ async function one(seed: number, trace = false) {
     world.setGamepads(emptyGamepad(), emptyGamepad());
     world.step({ seq: world.seq, motors: {}, servos: {} });
     phaseT[bot.phase] = (phaseT[bot.phase] ?? 0) + dt;
+    // WHY IT IS NOT SHOOTING, while it is in the phase whose whole job is shooting. Numbers
+    // collapsed out so "12 deg of lead" and "19 deg" are one answer.
+    if (bot.phase === 'shoot') {
+      // Measured once and worth recording: the latch is on for essentially every loop of
+      // this phase and the gate is clear for about 72% of them, yet the bot only manages
+      // 0.37 shots a second. It is not the bot's logic and it is not the gate -- it is the
+      // shooter's own feed cycle, which is the same ceiling the human robot has.
+      const h = oppBrain.state.hold;
+      const k = !h ? 'clear to fire' : h.replace(/-?[\d.]+/g, 'N');
+      why[k] = (why[k] ?? 0) + 1;
+    }
     if (trace) {
       if (world.seq % 120 === 0) console.log(`    t=${world.t.toFixed(0)}s ${world.clock.period} ${bot.phase.padEnd(8)} hop=${os.game.hopper} rng=${os.game.upCellRangeIn.toFixed(0)} open=${os.game.upCellOpenDeg.toFixed(0)} rpm=${os.game.flywheelRpm.toFixed(0)} hold=${oppBrain.state.hold || '-'} at=(${os.localizer.x.toFixed(0)},${os.localizer.y.toFixed(0)}) want=(${bot.target[0].toFixed(0)},${bot.target[1].toFixed(0)}) world=(${opp.pos.map((v)=>(v*M_TO_IN).toFixed(0)).join(',')}) red=(${world.robot.pos.map((v)=>(v*M_TO_IN).toFixed(0)).join(',')}) v=${Math.hypot(opp.vel[0],opp.vel[2]).toFixed(3)}`);
     }
@@ -67,7 +80,7 @@ async function one(seed: number, trace = false) {
     // touches a FLOWER leaves the whole endgame on the table and a total does not say so.
     leave: sc.leave, park: sc.park, upCell: sc.upCell, flower: sc.flower,
     garden: sc.garden, bottom: sc.bottomNectar,
-    phaseT: { ...phaseT },
+    phaseT: { ...phaseT }, why: { ...why },
   };
 }
 
@@ -95,6 +108,14 @@ export async function main(argv: string[] = []): Promise<void> {
   console.log(`    up CELL     ${m((r) => r.upCell * 2).padStart(6)}   (${m((r) => r.upCell)} balls at the buzzer)`);
   console.log(`    FLOWERs     ${m((r) => r.flower * 2 + r.bottom * 5).padStart(6)}   (${m((r) => r.flower)} owned elements, ${m((r) => r.bottom)} bottom bonuses)`);
   console.log(`    GARDEN      ${m((r) => r.garden).padStart(6)}`);
+  console.log('');
+  console.log('  while IN the shoot phase, why it was not firing (share of loops):');
+  const tot = runs.reduce((a, r) => a + Object.values(r.why).reduce((x, y) => x + y, 0), 0);
+  const agg: Record<string, number> = {};
+  for (const r of runs) for (const [k, v] of Object.entries(r.why)) agg[k] = (agg[k] ?? 0) + v;
+  for (const [k, v] of Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+    console.log(`    ${((v / Math.max(1, tot)) * 100).toFixed(0).padStart(3)}%  ${k}`);
+  }
   console.log('');
   console.log('  seconds per phase, mean:');
   for (const k of new Set(runs.flatMap((r) => Object.keys(r.phaseT)))) {

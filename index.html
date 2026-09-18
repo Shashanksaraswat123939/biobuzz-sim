@@ -70,6 +70,17 @@
         <div class="meter gearbar" title="Drive speed gear. Y raises it, A lowers it; the number is the top speed the wheels are allowed at this setting, derived from the motor free speed and wheel radius in config/robot.json."><span id="st-speedbar"></span></div>
       </aside>
 
+      <!-- ----------------------------------------------------- shot-zone legend -->
+      <aside id="legend" hidden>
+        <b>Where you can score</b>
+        <div><i class="sw good"></i>a shot from here lands<small id="lg-good"></small></div>
+        <div><i class="sw near"></i>too close &mdash; inside the table&rsquo;s nearest row<small id="lg-near"></small></div>
+        <div><i class="sw far"></i>too far, or no launch fits<small id="lg-far"></small></div>
+        <div><i class="sw behind"></i>the CELL does not open this way<small id="lg-behind"></small></div>
+        <p class="cap">Redrawn at the speed you are actually doing: the green shrinks as the
+          shot has to leave faster. A TIP turns the mouth round and the whole map with it.</p>
+      </aside>
+
       <!-- ------------------------------------------------------------- side panel -->
       <div id="grip" title="Drag to resize the panel."></div>
       <aside id="panel">

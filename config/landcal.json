@@ -1,53 +1,53 @@
 {
  "_about": "MEASURED by tools/landcal.ts: the mapping from the model's raw P(land) score to the frequency with which shots at that score ACTUALLY land. BuiltinTeleOp applies it so that flywheel.minLandProb is a real probability instead of a score.",
  "_method": "701 settled shots over 4 seeds, 6 ranges and 4 driving states (still, strafing, shuttling, fast wobble) with the gate open. Bins forced monotone. The app shoots on the move, so the curve has to have been fitted on the move.",
- "generated": "2026-09-18T17:38:48.300Z",
+ "generated": "2026-09-18T17:49:54.530Z",
  "samples": 701,
- "ceiling": 0.9230769230769231,
+ "ceiling": 0.9358974358974359,
  "points": [
   {
-   "score": 0.11852777122140153,
+   "score": 0.19328922329788914,
    "observed": 0.8974358974358975,
    "n": 78
   },
   {
-   "score": 0.2591715252408404,
+   "score": 0.4168634763773885,
    "observed": 0.8974358974358975,
    "n": 78
   },
   {
-   "score": 0.3649953119645476,
-   "observed": 0.9230769230769231,
+   "score": 0.5875337888815592,
+   "observed": 0.9358974358974359,
    "n": 78
   },
   {
-   "score": 0.4737964967879004,
-   "observed": 0.9230769230769231,
+   "score": 0.7668463503094248,
+   "observed": 0.9358974358974359,
    "n": 78
   },
   {
-   "score": 0.5422501478101394,
-   "observed": 0.9230769230769231,
+   "score": 0.8861666245379248,
+   "observed": 0.9358974358974359,
    "n": 78
   },
   {
-   "score": 0.5707727457089286,
-   "observed": 0.9230769230769231,
+   "score": 0.9178649885617747,
+   "observed": 0.9358974358974359,
    "n": 78
   },
   {
-   "score": 0.5895461852210104,
-   "observed": 0.9230769230769231,
+   "score": 0.948609826891859,
+   "observed": 0.9358974358974359,
    "n": 78
   },
   {
-   "score": 0.595748705935575,
-   "observed": 0.9230769230769231,
+   "score": 0.9654593272246405,
+   "observed": 0.9358974358974359,
    "n": 78
   },
   {
-   "score": 0.6022827450365895,
-   "observed": 0.9230769230769231,
+   "score": 0.9744046669413085,
+   "observed": 0.9358974358974359,
    "n": 77
   }
  ]

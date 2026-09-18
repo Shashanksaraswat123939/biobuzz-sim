@@ -1856,9 +1856,12 @@ Costs/risks: 30 in with the 2 in range trim is now "outside the table": the effe
              tell them apart. Re-sweep it with tools/movingtune.ts --rangelead if the flywheel
              changes. The calibration curve is nearly flat (0.78-0.89), so the calibrated map
              reads 0.86 almost everywhere a shot exists; the map's shape test now reads the raw
-             score. The wobble case still throws 26 +- 55 cm laterally in movingfire; the
-             harness cannot separate that from the pile, and shoterror's rebuilt version of it
-             is the next thing to read.
+             score. The wobble case's 26 +- 55 cm lateral in movingfire WAS the pile: the
+             rebuilt shoterror, ending each pass when the pocket holds six, reads closing +
+             wobble at 62 in as long 6 +- 9, lateral -6 +- 10, nothing wild (14 shots); stopped
+             3 +- 10 / -1 +- 5, shuttling 7 +- 9 / -2 +- 8, closing 76 in 3 +- 10 / -2 +- 5,
+             none wild; turning 3 wild of 48 (was 7 of 62), median 4 cm. movingfire still fills
+             the pocket and its wobble column should be read with that in mind.
 Who/where:   tools/flightcheck.ts (new), tests/ballistics.test.ts (new),
              packages/core/src/robot/builtinTeleOp.ts (row at now, wheel-only lead, inTable,
              rowHoodDeg/rowRpm), packages/core/src/physics/ballistics.ts (maxHoodJumpDeg),

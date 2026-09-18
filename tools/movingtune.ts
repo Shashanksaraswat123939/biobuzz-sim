@@ -359,7 +359,15 @@ export async function main(argv: string[] = []): Promise<void> {
   const picked = fastOnly ? cases.filter(([n]) => n.startsWith('FAST')) : cases;
   const rows = [];
   const noGate = argv.includes('--nogate');
-  for (const [name, drive, wobble, range, bear, spin] of picked) rows.push(await pool(name, drive, wobble, range, seeds, undefined, bear, spin, noGate));
+  // --gate <p> overrides the configured fire threshold, so the gate can be swept against the
+  // only two numbers that matter together: what fraction goes IN, and how many land per
+  // second. A gate that lifts the first by shooting less is not an improvement.
+  const gi = argv.indexOf('--gate');
+  const gate = gi >= 0 ? Number(argv[gi + 1]) : null;
+  const mutate = gate === null ? undefined : (_p: Params, r: RobotSpec) => { r.flywheel.minLandProb = gate; };
+  if (gate !== null) console.log(`  fire gate forced to ${gate}
+`);
+  for (const [name, drive, wobble, range, bear, spin] of picked) rows.push(await pool(name, drive, wobble, range, seeds, mutate, bear, spin, noGate));
   report(rows);
 
   const all = rows.flatMap((r) => r.shots);

@@ -134,6 +134,8 @@ export interface ZoneCellData {
   x_in: number;
   z_in: number;
   p: number;
+  /** Why there is no shot here. See tools/shotzone.ts. */
+  why?: 'behind' | 'tooFar' | 'tooNear' | 'noShot';
   k?: {
     lo: number; hi: number; sigma: number; pStay: number; halfLat: number;
     ux: number; uz: number; dist: number; commanded: number; cosEl: number;
@@ -395,9 +397,16 @@ export class Scene {
       // so thresholding it turned neighbouring squares that differ by a percent into a
       // red/green checkerboard -- the map looked like confetti rather than a place to stand.
       const t = Math.min(1, p / Math.max(z.threshold, 1e-6));
-      g.fillStyle = p <= 0
-        ? 'rgba(140, 32, 32, 0.20)'               // no shot from here at all
-        : `hsla(${(8 + 124 * t).toFixed(0)}, 72%, 46%, ${(0.20 + 0.42 * t).toFixed(3)})`;
+      // THREE DIFFERENT DEAD SQUARES, THREE DIFFERENT COLOURS. They were all one red, so
+      // "the goal does not open this way" -- which is most of the field, and correct -- read
+      // as a broken map. Grey means turn round; the reds mean move.
+      g.fillStyle = p > 0
+        ? `hsla(${(8 + 124 * t).toFixed(0)}, 72%, 46%, ${(0.20 + 0.42 * t).toFixed(3)})`
+        : c.why === 'behind'
+          ? 'rgba(70, 78, 90, 0.26)'              // the CELL does not open this way
+          : c.why === 'tooNear'
+            ? 'rgba(150, 96, 24, 0.22)'           // inside the table's closest row
+            : 'rgba(140, 32, 32, 0.20)';          // too far, or no launch fits
       g.fillRect(toPx(c.x_in * 0.0254) - w / 2, toPx(c.z_in * 0.0254) - w / 2, w, w);
     }
 

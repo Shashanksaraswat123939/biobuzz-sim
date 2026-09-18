@@ -38,6 +38,12 @@ import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 export interface ZoneCell {
   x_in: number; z_in: number; range_in: number; offAxisDeg: number;
+  /**
+   * Why there is no shot here, when there is not one. `behind` means the CELL does not open
+   * this way and no launch can enter, which is a different instruction to the driver than
+   * `tooFar` or `tooNear` and used to be painted the same colour as both.
+   */
+  why?: 'behind' | 'tooFar' | 'tooNear' | 'noShot';
   /** P(land) for a STATIONARY robot, which is what the tool's own printout reports. */
   p: number;
   /**
@@ -102,16 +108,20 @@ export function buildZone(
       // Skipping them left the map full of holes, and a hole reads as "no information" when
       // what it means is "you cannot shoot from here" -- which is the single most useful
       // thing the map can tell a driver. A zero is drawn; a gap is not.
-      const blank = (x_in: number, z_in: number): ZoneCell =>
-        ({ x_in, z_in, range_in, offAxisDeg: 90, p: 0 });
-      if (range_in < minR || range_in > maxR) { cells.push(blank(x * M_TO_IN, z * M_TO_IN)); continue; }
+      // WHY a square is dead, not just that it is. All three reasons painted the same red,
+      // so "the goal does not open this way" looked exactly like "the map is broken" -- which
+      // is how it was read. They are different facts and the driver needs different things
+      // from them: one says turn round, one says drive closer, one says drive nearer still.
+      const blank = (x_in: number, z_in: number, why: ZoneCell['why']): ZoneCell =>
+        ({ x_in, z_in, range_in, offAxisDeg: 90, p: 0, why });
+      if (range_in < minR || range_in > maxR) { tally.band++; cells.push(blank(x * M_TO_IN, z * M_TO_IN, range_in < minR ? 'tooNear' : 'tooFar')); continue; }
       const row = table.lookup(range_in);
-      if (row.hoodDeg === undefined || row.rpm <= 0) { cells.push(blank(x * M_TO_IN, z * M_TO_IN)); continue; }
+      if (row.hoodDeg === undefined || row.rpm <= 0) { tally.norow++; cells.push(blank(x * M_TO_IN, z * M_TO_IN, 'tooFar')); continue; }
 
       // |uz| is the cosine of the angle off the hive's normal: 1 straight in front of it.
       const uz = dz / dist;
       const cosOff = Math.abs(uz);
-      if (cosOff < 0.15) { cells.push(blank(x * M_TO_IN, z * M_TO_IN)); continue; }
+      if (cosOff < 0.15) { tally.behind++; cells.push(blank(x * M_TO_IN, z * M_TO_IN, 'behind')); continue; }
       const offAxisDeg = Math.acos(Math.min(1, cosOff)) / DEG;
 
       const muzzleZ = z + spec.turret.muzzleOffset_m * uz;
@@ -126,7 +136,7 @@ export function buildZone(
         farHeight: lips.far.y - ballR,
       };
       const here = { x_in: x * M_TO_IN, z_in: z * M_TO_IN, range_in, offAxisDeg };
-      if (aperture.nearRange <= 0 || aperture.farRange <= aperture.nearRange) { cells.push({ ...here, p: 0 }); continue; }
+      if (aperture.nearRange <= 0 || aperture.farRange <= aperture.nearRange) { tally.aperture++; cells.push({ ...here, p: 0, why: 'behind' }); continue; }
 
       // The shot the TABLE commands here, tested against the aperture as seen from here.
       const solved = bestShot(p, {
@@ -146,7 +156,7 @@ export function buildZone(
         entryRate: entry ? (v, d) => entry.lookup(v, d) : undefined,
         scatter: { speedFrac: f.scatter.speedFrac, angle_deg: f.scatter.angle_deg },
       });
-      if (!solved) { cells.push({ ...here, p: 0 }); continue; }
+      if (!solved) { tally.unsolved++; cells.push({ ...here, p: 0, why: 'noShot' }); continue; }
 
       const commanded = f.k * f.r_fly_m * rpmToRadS(row.rpm);
       // What the shot has to LEAVE at once the robot's own velocity is taken out of it. The
@@ -159,7 +169,7 @@ export function buildZone(
       const horiz = commanded * cosEl;
       const required = Math.hypot(horiz * (dx / dist) - vx, horiz * (dz / dist) - vz) / cosEl;
       const maxSpeed = f.k * f.r_fly_m * rpmToRadS(f.maxRpm);
-      if (required > maxSpeed) { cells.push({ ...here, p: 0 }); continue; }
+      if (required > maxSpeed) { tally.toofast++; cells.push({ ...here, p: 0, why: 'noShot' }); continue; }
       const sigma = solved.sigmaSpeed * (required / Math.max(commanded, 1e-6));
       const speed = pThread(solved.speedLo, solved.speedHi, commanded, sigma);
       // Across the shot line, the opening is the mouth's width foreshortened by the approach.
@@ -184,6 +194,8 @@ const trim = (c: ZoneCell) => ({
   x_in: +c.x_in.toFixed(1),
   z_in: +c.z_in.toFixed(1),
   p: +c.p.toFixed(4),
+  // Only on the dead squares: it is what the driver needs from those and nothing else.
+  ...(c.p > 0 ? {} : { why: c.why }),
   k: c.k && {
     lo: +c.k.lo.toFixed(4), hi: +c.k.hi.toFixed(4), sigma: +c.k.sigma.toFixed(5),
     pStay: +c.k.pStay.toFixed(4), halfLat: +c.k.halfLat.toFixed(4),
@@ -191,6 +203,8 @@ const trim = (c: ZoneCell) => ({
     commanded: +c.k.commanded.toFixed(4), cosEl: +c.k.cosEl.toFixed(4),
   },
 });
+
+const tally = { band: 0, norow: 0, behind: 0, aperture: 0, unsolved: 0, toofast: 0, ok: 0 };
 
 export async function main(argv: string[] = []): Promise<void> {
   const i = argv.indexOf('--step');
@@ -281,4 +295,7 @@ export async function main(argv: string[] = []): Promise<void> {
   }, null, 1) + String.fromCharCode(10));
   console.log('');
   console.log('  wrote config/shotzone.json');
+  console.log('');
+  console.log('  why each square has no shot:');
+  for (const [k, v] of Object.entries(tally)) if (v) console.log(`    ${k.padEnd(10)} ${String(v).padStart(5)}`);
 }

@@ -1609,3 +1609,55 @@ Costs/risks: The unused-parameter rule means a genuinely-unused argument now has
               `_x` on purpose, which is the point.
 Who/where:   tsconfig.json, packages/core/src/physics/{balls,battery,hive,robot,world}.ts,
               tools/{entrycheck,fixedspeed,hoodtable,leadcheck,shootercheck,shoterror,shotzone}.ts
+
+## 2026-09-18 — Rebuilding the shot table around the entry model: TRIED AND REJECTED BY MEASUREMENT
+
+Plan said:   `tools/entrycheck.ts` reported the table asking for arrival conditions worth 33%
+             retention when the best cell in the grid is 92%. That gap looked like free
+             points: put the measured entry rate in the objective and the table stops
+             choosing shots that thread the mouth and bounce straight back out.
+
+Found:       The objective ALREADY multiplies `entry.lookup(v, d)` in -- it has since the
+             entry model existed. What was stale was the grid, not the code. So the change
+             actually under test was "re-solve the table against a denser measurement".
+
+             The grid was re-measured at 64 balls a cell (up from 24; 9m25s). That mattered:
+             the two grids disagree substantially, which means the 24-ball one was
+             noise-dominated and any conclusion drawn from it was too. With the denser grid
+             the table re-solved from an arrival of 6.2 m/s at 75 deg down to 3.5 m/s at
+             33 deg -- squarely into the high-retention corner, exactly as intended.
+
+             And it measured WORSE end to end. Same harness, same seeds, only the table
+             changed:
+
+               case        before   after
+               stopped        88%     84%
+               wobbling       91%     80%
+               spinning       89%     91%
+               FAST wobble    79%     81%
+               closing/receding/strafing  100%  100%
+
+             No case improved beyond binomial noise and the largest single move, wobbling at
+             -11 points, went the wrong way.
+
+Did instead: Reverted `shottable.csv`. KEPT the 64-ball `entry.json`, because more samples is
+             strictly better data and the measurement is worth having whatever is done with
+             it. Note that the CSV's own `pStay` column therefore predates the current grid:
+             it records what the shipped table's choices were worth under the 24-ball
+             measurement, not under this one.
+
+Why it probably failed, for whoever tries again: `entryRate` injects balls AT the mouth with
+             a chosen speed and descent and the aim jittered by a ball radius. A real shot
+             does not arrive from that distribution -- its lateral offset, spin axis and
+             arrival angle are all correlated through the trajectory that produced them, and
+             the grid treats them as independent axes. Optimising hard against a marginal
+             distribution can easily move the answer somewhere the joint distribution does not
+             reward. The fix is not a denser grid; it is measuring retention along REAL
+             trajectories (fire from the shot pose, vary the table, score the outcome), which
+             is what `tools/landrate.ts` already does end to end and costs far more per sample.
+
+Costs/risks: The entry model still earns its place -- without it the objective is margin-only
+             and picks 81 deg lobs. This says the model is worth having and not worth
+             re-optimising against at this sample size.
+Who/where:   config/entry.json (regenerated, n=64), java/teamcode/assets/shottable.csv
+             (unchanged), tools/entrycheck.ts, tools/shottable.ts

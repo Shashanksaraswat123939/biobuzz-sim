@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import params from '../config/params.json';
 import robotSpec from '../config/robot.json';
+import motors from '../config/motors.json';
 import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/world.js';
 import { BuiltinTeleOp, ShotTable, SPEED_STEP } from '../packages/core/src/robot/builtinTeleOp.js';
 import { M_TO_IN, RAD, DEG, wrapPi } from '../packages/core/src/units.js';
@@ -52,8 +53,13 @@ describe('drivetrain (PLAN.md phase 2)', () => {
       world.step(act);
       v = Math.max(v, world.snapshot().robot.speed * M_TO_IN);
     }
-    // 312 rpm through 96 mm wheels = 62 in/s.
-    const free = (312 / 60) * 2 * Math.PI * robotSpec.drivetrain.wheelRadius_m * M_TO_IN;
+    // FROM THE CONFIGURED MOTOR, not a number typed in. This said 312 rpm, and stayed saying
+    // it when ROBOT_BUILD.md section 4.2's 5203-2402-0014 (13.7:1, 435 rpm) went into the
+    // config -- so the test failed for the one reason it should not, the robot getting the
+    // motor its own build spec calls for. 435 rpm through 96 mm wheels is 86.2 in/s free;
+    // the rig measures 84.1, which is the build's own "loaded 2.14 m/s" (section 4.2).
+    const rpm = (motors.variants as Record<string, { freeRpm: number }>)[robotSpec.drivetrain.motors.fl.variant].freeRpm;
+    const free = (rpm / 60) * 2 * Math.PI * robotSpec.drivetrain.wheelRadius_m * M_TO_IN;
     expect(v).toBeGreaterThan(free * 0.9);
     expect(v).toBeLessThan(free * 1.1);
   });

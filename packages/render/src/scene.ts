@@ -1021,7 +1021,12 @@ export class Scene {
     let _flywheel!: THREE.Mesh;
     let _roller!: THREE.Group;
     let _wheels: THREE.Object3D[] = [];
-    const c = { L: 0.43, W: 0.43, H: 0.30 };
+    // FROM THE CONFIG, WHICH IS FROM ROBOT_BUILD.md. These were three literals describing a
+    // 16.9 in square box -- a placeholder that stopped matching the moment the build spec's
+    // 15.5 x 17.5 x 11.6 in footprint went into config/robot.json. A model that does not
+    // change with the robot is a picture, not a view of it.
+    const rc = this.robotSpec.chassis;
+    const c = { L: rc.length_m, W: rc.width_m, H: rc.height_m };
     const frame = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.5, roughness: 0.45 });
     const panel = new THREE.MeshStandardMaterial({ color: bodyColour, metalness: 0.2, roughness: 0.4, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
     const rubber = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 });
@@ -1049,7 +1054,8 @@ export class Scene {
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
         const hub = new THREE.Group();
-        const tyre = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.038, 18), rubber);
+        const wr = this.robotSpec.drivetrain.wheelRadius_m;
+        const tyre = new THREE.Mesh(new THREE.CylinderGeometry(wr, wr, 0.038, 18), rubber);
         tyre.rotation.z = Math.PI / 2;
         hub.add(tyre);
         for (let i = 0; i < 8; i++) {
@@ -1062,7 +1068,9 @@ export class Scene {
           r.rotateOnAxis(new THREE.Vector3(0, 1, 0), (sx * sz > 0 ? 1 : -1) * Math.PI / 4);
           hub.add(r);
         }
-        hub.position.set((sx * (c.W + 0.03)) / 2, -c.H / 2 + 0.028, (sz * 0.33) / 2);
+        // Axles where ROBOT_BUILD.md section 4.2 puts them: track 13.5 in across, wheelbase
+        // 11.0 in along. The Z was the literal 0.33 m, which is neither.
+        hub.position.set((sx * (c.W + 0.03)) / 2, -c.H / 2 + this.robotSpec.drivetrain.wheelRadius_m, (sz * this.robotSpec.drivetrain.wheelbase_m) / 2);
         _group.add(hub);
         _wheels.push(hub);
       }

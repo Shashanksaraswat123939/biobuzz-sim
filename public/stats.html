@@ -1,0 +1,117 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1180px;background:#12151a;color:#e8ecf2;font:14px/1.5 "Segoe UI",system-ui,sans-serif;padding:34px 38px}
+h1{font-size:27px;font-weight:700;letter-spacing:-.3px}
+.sub{color:#8b95a5;font-size:13px;margin:5px 0 22px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.card{background:#1a1f27;border:1px solid #2a323d;border-radius:9px;padding:16px 18px}
+.card.wide{grid-column:1/3}
+h2{font-size:14px;font-weight:700;color:#7dd3fc;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
+.note{color:#8b95a5;font-size:12px;margin-bottom:11px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;color:#8b95a5;font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding-bottom:6px;border-bottom:1px solid #2a323d}
+td{padding:5px 0;border-bottom:1px solid #20262f}
+tr:last-child td{border-bottom:none}
+td.n{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.good{color:#4ade80}.mid{color:#fbbf24}.bad{color:#f87171}.dim{color:#8b95a5}
+.big{font-size:30px;font-weight:700;line-height:1.1}
+.row{display:flex;gap:26px;margin-top:4px}
+.row div{flex:1}
+.lbl{font-size:11.5px;color:#8b95a5;text-transform:uppercase;letter-spacing:.05em}
+ul{list-style:none;font-size:13px}
+li{padding:4px 0 4px 15px;position:relative;color:#c3ccd8}
+li:before{content:"›";position:absolute;left:0;color:#7dd3fc;font-weight:700}
+.foot{margin-top:20px;color:#6b7684;font-size:11.5px;border-top:1px solid #2a323d;padding-top:11px}
+</style></head><body>
+<h1>BIOBUZZ Simulator — how well it works right now</h1>
+<div class="sub">Every number below was measured by running the simulator, not estimated. 19 September 2026 · build 8e752f2</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Does it hit the goal?</h2>
+    <div class="note">Shots fired, and how many stayed in the CELL.</div>
+    <table>
+      <tr><th>Situation</th><th style="text-align:right">Balls</th><th style="text-align:right">Went in</th></tr>
+      <tr><td>Standing still, on a green square</td><td class="n">90</td><td class="n good">98%</td></tr>
+      <tr><td>Rolling slowly (0.4 m/s)</td><td class="n">25</td><td class="n good">92%</td></tr>
+      <tr><td>Medium (0.6 m/s)</td><td class="n">26</td><td class="n good">88%</td></tr>
+      <tr><td>Fast (0.8 m/s)</td><td class="n">25</td><td class="n good">84%</td></tr>
+      <tr><td>Driving past at 0.95 m/s</td><td class="n">103</td><td class="n good">93%</td></tr>
+      <tr><td>Swinging round the hive, 0.9 m/s</td><td class="n">49</td><td class="n mid">67%</td></tr>
+      <tr><td>Flat out in a straight line</td><td class="n dim">0</td><td class="n dim">—</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Does it aim at the right place?</h2>
+    <div class="note">The turret used to swing onto the wrong hive. It doesn't now.</div>
+    <table>
+      <tr><td>How far off it points while driving</td><td class="n good">0–3°</td></tr>
+      <tr><td>Time pointing badly wrong (was 12.7%)</td><td class="n good">2.1%</td></tr>
+      <tr><td>Spinning on the spot at 66°/s</td><td class="n good">94% in</td></tr>
+      <tr><td>Turret can swing</td><td class="n">1½ turns</td></tr>
+      <tr><td>It refuses the shot if turning faster than</td><td class="n">70°/s</td></tr>
+      <tr><td>…or more than this far off the goal's opening</td><td class="n">60°</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>How fast can it shoot?</h2>
+    <div class="note">Just improved. Balls that actually score, per second.</div>
+    <div class="row">
+      <div><div class="lbl">Was</div><div class="big dim">0.70<span style="font-size:15px">/s</span></div></div>
+      <div><div class="lbl">Now</div><div class="big good">0.97<span style="font-size:15px">/s</span></div></div>
+      <div><div class="lbl">Faster by</div><div class="big good">39%</div></div>
+    </div>
+    <div class="note" style="margin-top:12px">Gap between balls cut from 1.0 s to 0.6 s — the fastest the
+    lift and gate can physically go. Accuracy barely changed (63% → 55%), but far more balls score.</div>
+  </div>
+
+  <div class="card">
+    <h2>Does it know where it is?</h2>
+    <div class="note">New: it reads a camera and an AprilTag, like a real robot. It is no longer told the answer.</div>
+    <table>
+      <tr><td>Position error after 30 s of driving</td><td class="n good">1.1 in</td></tr>
+      <tr><td>Worst it gets</td><td class="n">3.3 in</td></tr>
+      <tr><td>Camera fixes used / thrown away</td><td class="n">405 / 0</td></tr>
+      <tr><td>Part of the field where it can see the tag</td><td class="n bad">26%</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>The green map</h2>
+    <div class="note">Stand on green and shoot — we tested that promise by standing on it.</div>
+    <table>
+      <tr><td>Green squares we stood on</td><td class="n">24</td></tr>
+      <tr><td>Ones it actually fired from</td><td class="n good">23</td></tr>
+      <tr><td>Balls fired / went in</td><td class="n good">90 / 88</td></tr>
+      <tr><td>Grey squares that wrongly fired</td><td class="n good">0</td></tr>
+      <tr><td>Size of the shooting area</td><td class="n mid">13 sq ft</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Practice modes</h2>
+    <div class="note">What the computer-controlled robots manage on their own.</div>
+    <table>
+      <tr><td>Opponent, whole match</td><td class="n good">60 pts</td></tr>
+      <tr><td>&nbsp;&nbsp;<span class="dim">shots / hive tips</span></td><td class="n dim">24.5 / 2.0</td></tr>
+      <tr><td>Auto, 30 s (5 runs)</td><td class="n good">8 pts</td></tr>
+      <tr><td>&nbsp;&nbsp;<span class="dim">leaves the line / parks</span></td><td class="n good">5/5 · 5/5</td></tr>
+      <tr><td>Points from FLOWERs</td><td class="n bad">0</td></tr>
+    </table>
+  </div>
+
+  <div class="card wide">
+    <h2>What still isn't done — and what's simply not possible</h2>
+    <ul>
+      <li><b>FLOWERs score nothing.</b> We proved why: the intake physically cannot push a ball back out — 4 balls in, roller reversed 6 seconds, 4 balls still there, at every flower. But a soft lob into the top of the tube <b>does</b> work (1061 rpm, hood 62°, 12 in away). The behaviour isn't built yet.</li>
+      <li><b>No shots at full speed in a straight line.</b> At 1.56 m/s you cross the shooting area in under a second and spend most of it 60°+ off the goal's opening. It used to fire there anyway and miss every ball; now it correctly holds.</li>
+      <li><b>The shooting area is small</b> (13 sq ft) because the hive sits only 54 in from the back wall and the shot table starts at 32 in. That is the field's shape, not a bug.</li>
+      <li><b>Six physics constants are still guesses</b> — air drag, ball bounce, wheel grip, launch scatter, hive weight. Every number above inherits them, and real-robot measurements would replace them.</li>
+      <li><b>Not started:</b> the robot model built from ROBOT_BUILD.md, and the rest of the interface work.</li>
+    </ul>
+  </div>
+</div>
+<div class="foot">168 automated tests pass · no type errors · live at shashanksaraswat123939.github.io/biobuzz-simulator/</div>
+</body></html>

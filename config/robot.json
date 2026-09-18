@@ -3,47 +3,47 @@
  "name": "box-v1",
  "version": 1,
  "chassis": {
-  "length_m": 0.43,
-  "width_m": 0.43,
-  "height_m": 0.3,
-  "mass_kg": 14.0,
+  "length_m": 0.3937,
+  "width_m": 0.4445,
+  "height_m": 0.29528,
+  "mass_kg": 14.4,
   "Izz_kgm2": null,
   "cgOffset_m": [
-   0,
-   -0.05,
-   0
+   0.0,
+   0.00222,
+   0.00762
   ],
-  "clearance_m": 0.02,
-  "_source": "guess: a typical 18 in FTC box robot, 14 kg (30.9 lb) with the CG 50 mm below the box centre. This note had been OVERWRITTEN with sensors.localizer.noise._source, where the same words still sit, so the chassis mass, inertia and CG were documented -- in docs/VARIABLES.md, which is generated from this field -- as coming from an odometry puck. The restored note also drops the old claim that 14 kg is 'at the weight limit': R104 says 'There is no ROBOT weight limit', so any design trade made against a 42 lb ceiling was answering a rule that does not exist. Izz is null and derived from the box; measure the real robot on a bifilar pendulum - CALIBRATE."
+  "clearance_m": 0.01524,
+  "_source": "cited: ROBOT_BUILD.md, the build this simulator is FOR. Section 4.1 gives the footprint as 15.5 (X, fore-aft) x 17.5 (Y) in with bumpers and the top plate at Z 11.625; section 4.2 puts the axles at X +-5.5, Y +-6.75 (wheelbase 11.0, track 13.5) on goBILDA 96 mm mecanums; section 12 totals 14.4 kg with the CG 5.9 in up and +0.3 in forward. WAS a 16.93 in SQUARE box at 14 kg with the CG 50 mm below centre, described in its own note as 'a typical 18 in FTC box robot' -- a placeholder, not this robot. The real one is not square: the extra width is the intake mouth and the shorter length buys the intake 2.5 in at the front and the trough 3.5 in at the back."
  },
  "drivetrain": {
   "type": "mecanum",
   "wheelRadius_m": 0.048,
-  "wheelbase_m": 0.33,
-  "track_m": 0.33,
+  "wheelbase_m": 0.2794,
+  "track_m": 0.3429,
   "rollerAngle_deg": 45,
   "mu": 0.85,
   "eta": 0.8,
   "rollingRes_N": 3.0,
-  "_source": "goBILDA 96mm mecanum; mu/eta/rollingRes guessed - CALIBRATE",
+  "_source": "cited: ROBOT_BUILD.md section 4.2 -- four goBILDA 5203-2402-0014 (13.7:1, 435 rpm, 384.5 CPR at the wheel) direct-driving 96 mm mecanums, axles at X +-5.5 and Y +-6.75. WAS the 312 rpm variant on a 13.0 in square wheelbase, which is why this simulator measured a 1.56 m/s top speed against the build's own 2.19 m/s free and 2.14 loaded (section 4.2). Every speed measurement taken before 2026-09-19 was taken on a slower robot than the one being built.",
   "motors": {
    "fl": {
-    "variant": "5203-312",
+    "variant": "5203-435",
     "gearRatio": 1.0,
     "reversed": true
    },
    "fr": {
-    "variant": "5203-312",
+    "variant": "5203-435",
     "gearRatio": 1.0,
     "reversed": false
    },
    "bl": {
-    "variant": "5203-312",
+    "variant": "5203-435",
     "gearRatio": 1.0,
     "reversed": true
    },
    "br": {
-    "variant": "5203-312",
+    "variant": "5203-435",
     "gearRatio": 1.0,
     "reversed": false
    }

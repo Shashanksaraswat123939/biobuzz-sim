@@ -3,7 +3,9 @@ import params from '../config/params.json';
 import robotSpec from '../config/robot.json';
 import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/world.js';
 import { BuiltinTeleOp, ShotTable, SPEED_STEP } from '../packages/core/src/robot/builtinTeleOp.js';
-import { M_TO_IN } from '../packages/core/src/units.js';
+import { M_TO_IN, RAD, DEG, wrapPi } from '../packages/core/src/units.js';
+import { worldToFtc, worldYawToFtcHeadingDeg } from '../packages/core/src/field/ftcFrame.js';
+import { readKeyboard, remap, type Keys } from '../packages/ui/src/input.js';
 import type { ActuatorFrame, GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 beforeAll(async () => {
@@ -209,5 +211,87 @@ describe('the driver layout', () => {
     expect(Math.abs(left.yaw)).toBeGreaterThan(0.2);
     expect(left.d).toBeLessThan(0.08);
     expect(right.d).toBeLessThan(0.08);
+  });
+});
+
+/**
+ * THE WHOLE INPUT CHAIN, keys to wheels.
+ *
+ * The brain-level tests above drive `GamepadState` straight in, which proves the brain and
+ * proves nothing about the two layers in front of it. Every control complaint so far has been
+ * about those layers: which key sets which field, and what `remap` does to it afterwards. So
+ * this presses actual keys.
+ */
+describe('pressing a key really does the thing (keyboard -> remap -> brain -> wheels)', () => {
+  const keys = (...down: string[]): Keys => ({ down: new Set(down), pressed: new Set() });
+  const frame = (k: Keys): GamepadState => {
+    const phys = readKeyboard(k);
+    return remap(phys, phys.paddles);
+  };
+  /**
+   * Run the robot from a given heading with a set of keys held, and report what it did IN THE
+   * FTC FRAME -- +X toward the audience, +Y to the LEFT, heading CCW from +X. Left and right
+   * are only unambiguous in a frame that has a side; reading them off world X and Z means
+   * re-deriving the handedness in your head every time, and I got it backwards doing exactly
+   * that.
+   *
+   * The heading is accumulated UNWRAPPED. At full stick the chassis turns about 230 deg/s, so
+   * a 1.5 s run passes 180 deg and a raw end-minus-start reads the short way round: the first
+   * version of this test said Q turned RIGHT by 350 deg when it had turned LEFT by 350.
+   */
+  const run = (yawDeg: number, held: string[], frames = 90) => {
+    const w = rig();
+    w.robot.place([0, 0.17, 0], yawDeg);
+    const brain = new BuiltinTeleOp(robotSpec as unknown as RobotSpec, new ShotTable([]));
+    const k = keys(...held);
+    let prev = worldYawToFtcHeadingDeg(w.robot.yaw);
+    let turned = 0;
+    for (let i = 0; i < frames; i++) {
+      w.step(brain.update(w.sensors(), frame(k), i, 1 / 60));
+      const h = worldYawToFtcHeadingDeg(w.robot.yaw);
+      turned += wrapPi((h - prev) * DEG) * RAD;
+      prev = h;
+    }
+    const f = worldToFtc(w.robot.pos);
+    return { ftc: [f[0], f[1]] as [number, number], turnedDeg: turned, moved_in: Math.hypot(f[0], f[1]) };
+  };
+
+  it('W drives along the NOSE, whichever way the robot has been turned', () => {
+    // At heading 0 the nose is FTC +X; at heading 90 it is FTC +Y. If forward were pinned to
+    // the field the second run would go the same way as the first.
+    const ahead = run(0, ['w']);
+    const turned = run(90, ['w']);
+    expect(ahead.ftc[0], 'heading 0: forward is +X').toBeGreaterThan(12);
+    expect(Math.abs(ahead.ftc[1])).toBeLessThan(5);
+    expect(turned.ftc[1], 'heading 90: forward follows the nose to +Y').toBeGreaterThan(12);
+    expect(Math.abs(turned.ftc[0])).toBeLessThan(5);
+  });
+
+  it('A and D strafe to the robot’s own left and right, which turn with it too', () => {
+    const left0 = run(0, ['a']);
+    const right0 = run(0, ['d']);
+    expect(left0.ftc[1], 'heading 0: the robot’s left is FTC +Y').toBeGreaterThan(12);
+    expect(right0.ftc[1]).toBeLessThan(-12);
+    // Turned 90 deg, its left is now FTC -X.
+    const left90 = run(90, ['a']);
+    expect(left90.ftc[0]).toBeLessThan(-12);
+    expect(Math.abs(left90.ftc[1])).toBeLessThan(5);
+  });
+
+  it('the right stick does not touch the chassis — it is the view', () => {
+    for (const key of ['arrowright', 'arrowleft', 'arrowup', 'arrowdown']) {
+      const r = run(0, [key]);
+      expect(Math.abs(r.turnedDeg), `${key} rotated the robot ${r.turnedDeg.toFixed(1)} deg`).toBeLessThan(1);
+      expect(r.moved_in, `${key} moved the robot ${r.moved_in.toFixed(1)} in`).toBeLessThan(1);
+    }
+  });
+
+  it('X turns LEFT and B turns RIGHT, as asked, without driving off', () => {
+    const x = run(0, ['q']);   // Q is the X button
+    const b = run(0, ['e']);   // E is the B button
+    expect(x.turnedDeg, 'X must turn left, which is CCW, which is +heading').toBeGreaterThan(90);
+    expect(b.turnedDeg, 'B must turn right').toBeLessThan(-90);
+    expect(x.moved_in, 'turning in place should not translate').toBeLessThan(3);
+    expect(b.moved_in).toBeLessThan(3);
   });
 });

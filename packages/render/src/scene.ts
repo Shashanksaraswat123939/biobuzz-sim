@@ -190,7 +190,8 @@ export class Scene {
    */
   private ballTrail: THREE.Mesh;
   private trailPts: THREE.Vector3[] = [];
-  private trailBall = -1;
+  /** The shot the drawn trail belongs to. A new shot clears it; a recycled ball does not. */
+  private trailShot = -1;
   /** The convex boxes the physics actually uses. Hidden unless you ask for them. */
   private colliderMeshes: THREE.Object3D[] = [];
   /** Stand-in geometry, shown only until the CAD arrives (or if it never does). */
@@ -1177,14 +1178,40 @@ export class Scene {
       this.aimMarker.visible = false;
     }
 
-    // ---- the live trail: follow whichever ball is in flight, and keep the last one drawn
-    // until the next shot, so a miss can be looked at after it has landed.
-    const flying = s.balls.find((b) => b.state === 'flight');
-    if (flying) {
-      if (flying.id !== this.trailBall) { this.trailBall = flying.id; this.trailPts = []; }
+    // ---- the live trail: follow the ball from THIS shot, and keep it drawn until the next
+    // one, so a miss can be looked at after it has landed.
+    //
+    // KEYED ON THE SHOT COUNTER, not on the ball's id. Balls are recycled -- one that lands is
+    // picked up and fired again with the same id -- so `id !== trailBall` never fired for it
+    // and the new flight's points were appended to the old flight's. The curve then ran from
+    // the muzzle, out to wherever the first shot landed, back to the muzzle and out again:
+    // two arcs joined by a straight line, which is the "the blue line just freezes there"
+    // report. It was not frozen, it was two shots in one curve.
+    //
+    // And with a fast cycle there is more than one ball in the air, so `find` is not good
+    // enough either: it returns whichever sits earliest in the array, which is the OLDER
+    // shot. Follow the one nearest where this trail already is.
+    if (s.robot.flywheel.shots !== this.trailShot) {
+      this.trailShot = s.robot.flywheel.shots;
+      this.trailPts = [];
+    }
+    const inFlight = s.balls.filter((b) => b.state === 'flight');
+    if (inFlight.length) {
+      const anchor = this.trailPts.length
+        ? this.trailPts[this.trailPts.length - 1]
+        : new THREE.Vector3(s.robot.p[0], s.robot.p[1], s.robot.p[2]);
+      let flying = inFlight[0];
+      let best = Infinity;
+      for (const b of inFlight) {
+        const d = anchor.distanceToSquared(new THREE.Vector3(b.p[0], b.p[1], b.p[2]));
+        if (d < best) { best = d; flying = b; }
+      }
       const p = new THREE.Vector3(flying.p[0], flying.p[1], flying.p[2]);
       const last = this.trailPts[this.trailPts.length - 1];
       if (!last || last.distanceTo(p) > 0.02) this.trailPts.push(p);
+      // One flight is a couple of hundred samples at 2 cm; anything past that is a bug
+      // feeding it, and an unbounded array would take the frame rate down with it.
+      if (this.trailPts.length > 400) this.trailPts.shift();
     }
     if (this.showTrajectory && this.trailPts.length > 2) {
       this.ballTrail.geometry.dispose();

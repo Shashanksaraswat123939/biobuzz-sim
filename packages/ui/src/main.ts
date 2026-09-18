@@ -168,6 +168,21 @@ const VIEW_YAW_RATE = 2.4;   // rad/s at full stick: a half turn in 1.3 s
 const VIEW_PITCH_RATE = 1.4;
 const SLEW_UP = 5.0;    // full deflection in 0.2 s
 const SLEW_DOWN = 12.0; // and back to nothing in 0.08 s
+/**
+ * THE YAW BUTTON RAMPS SLOWER THAN THE DRIVE STICKS DO, and that is the whole point of it.
+ *
+ * X and B are buttons, so they have no middle. At the drive ramp they reached full rotation
+ * in 0.2 s, which is 279 deg/s measured -- and the fire gate refuses above
+ * `turret.fireYawCap_dps`, 70 deg/s, because past that the turret setpoint outruns the axis.
+ * So every turn input killed the shot, which is exactly the "sometimes it fires and sometimes
+ * it does not" report: it was not random, it was whether a thumb was on a turn button.
+ *
+ * At 1.6 per second a tap of about a sixth of a second lands near a quarter deflection, which
+ * is about the cap -- so short taps are a precise, still-firing correction and a held button
+ * still builds to full rotation for getting the nose round quickly. That is what the analog
+ * stick gave and what the button took away.
+ */
+const YAW_SLEW_UP = 1.6;
 const slewed = { lx: 0, ly: 0, rx: 0 };
 let lastFrameDt = 1 / 60;
 function slew(now: number, want: number, dt: number): number {
@@ -187,7 +202,10 @@ function rampDigital(s: GamepadState, analogSticks = false): GamepadState {
   // and an un-ramped button would slam the chassis to full rotation in one frame. The
   // translation sticks are only ramped when they are digital -- slewing a real analog stick
   // just adds 0.2 s of lag to an input that is already smooth.
-  slewed.rx = slew(slewed.rx, s.right_stick_x, dt);
+  const rate = Math.abs(s.right_stick_x) > Math.abs(slewed.rx) ? YAW_SLEW_UP : SLEW_DOWN;
+  const step = rate * dt;
+  const wantRx = s.right_stick_x;
+  slewed.rx = Math.abs(wantRx - slewed.rx) <= step ? wantRx : slewed.rx + Math.sign(wantRx - slewed.rx) * step;
   if (analogSticks) return { ...s, right_stick_x: slewed.rx };
   slewed.lx = slew(slewed.lx, s.left_stick_x, dt);
   slewed.ly = slew(slewed.ly, s.left_stick_y, dt);
@@ -214,28 +232,32 @@ function gamepadState(): GamepadState {
   }
   const dz = (v: number) => (Math.abs(v) < 0.09 ? 0 : v);
   const btn = (i: number) => g.buttons[i]?.pressed ?? false;
-  // M1/M2 past the standard 17 on the pads that have them; L1/L2 on the pads that do not.
+  // M1/M2 sit past the standard 17 on the pads that have them. On a pad that does not, they
+  // fall back to D-pad left and right -- which is where the manual turret nudge lived before,
+  // so nothing is lost and nothing is doubled up.
   const paddles: Paddles = {
-    m1: (btn(16) || (g.buttons.length <= 17 && btn(4))) || k.paddles.m1,
-    m2: (btn(17) || (g.buttons.length <= 17 && (g.buttons[6]?.value ?? 0) > 0.5)) || k.paddles.m2,
+    m1: btn(16) || btn(14) || k.paddles.m1,
+    m2: btn(17) || btn(15) || k.paddles.m2,
+    rezero: k.paddles.rezero,
   };
   const merged: GamepadState = {
     left_stick_x: dz(g.axes[0] ?? 0) || k.left_stick_x,
     left_stick_y: dz(g.axes[1] ?? 0) || k.left_stick_y,
     right_stick_x: dz(g.axes[2] ?? 0) || k.right_stick_x,
     right_stick_y: dz(g.axes[3] ?? 0) || k.right_stick_y,
-    left_trigger: Math.max(paddles.m2 ? 0 : (g.buttons[6]?.value ?? 0), k.left_trigger),
+    // L2 and R2 are the back and forward throttles now, read as the analog values they are.
+    left_trigger: Math.max(g.buttons[6]?.value ?? 0, k.left_trigger),
     right_trigger: Math.max(g.buttons[7]?.value ?? 0, k.right_trigger),
     a: (g.buttons[0]?.pressed ?? false) || k.a,
     b: (g.buttons[1]?.pressed ?? false) || k.b,
     x: (g.buttons[2]?.pressed ?? false) || k.x,
     y: (g.buttons[3]?.pressed ?? false) || k.y,
-    left_bumper: k.left_bumper,   // L1 is M1's fallback; crawl is shift/on-screen only there
+    left_bumper: btn(4) || k.left_bumper,   // L1: auto-aim toggle
     right_bumper: (g.buttons[5]?.pressed ?? false) || k.right_bumper,
     dpad_up: (g.buttons[12]?.pressed ?? false) || k.dpad_up,
     dpad_down: (g.buttons[13]?.pressed ?? false) || k.dpad_down,
-    dpad_left: (g.buttons[14]?.pressed ?? false) || k.dpad_left,
-    dpad_right: (g.buttons[15]?.pressed ?? false) || k.dpad_right,
+    dpad_left: false,    // read above as M1's fallback, not as a D-pad press
+    dpad_right: false,
     start: (g.buttons[9]?.pressed ?? false) || k.start,
     back: (g.buttons[8]?.pressed ?? false) || k.back,
     left_stick_button: btn(10) || k.left_stick_button,
@@ -247,6 +269,7 @@ function gamepadState(): GamepadState {
 
 /** Same sticks, edge-triggered buttons released: a toggle fires once per animation frame. */
 const neutralEdges = (g: GamepadState): GamepadState => ({ ...g, a: false, x: false, y: false, right_bumper: false, dpad_up: false, left_stick_button: false });
+
 
 /** The gamepad's own mode and utility buttons, read once per animation frame. */
 let padPrev: GamepadState | null = null;

@@ -67,14 +67,14 @@ describe('the Variables sliders', () => {
 /**
  * THE DRIVER LAYOUT, as a mapping rather than as a comment.
  *
- * This is the layer that has broken twice: the brain's `GamepadState` is the wire the Java
- * OpMode sees and its field names are fixed, so every time the driver's layout changed, some
- * scripted press somewhere was still talking about the old meaning of a button. `remap` is the
- * single place the translation happens, and these are the four claims that matter.
+ * This is the layer that keeps breaking: the brain's `GamepadState` is the wire the Java
+ * OpMode sees and its field names are fixed, so every time the driver's layout changes, some
+ * caller is still talking about the old meaning of a button. `remap` is the single place the
+ * translation happens, and these are the claims that matter.
  */
 describe('the pad-to-brain remap', () => {
   const pad = (over: Partial<GamepadState> = {}): GamepadState => ({ ...emptyGamepad(), ...over });
-  const none: Paddles = { m1: false, m2: false };
+  const none: Paddles = { m1: false, m2: false, rezero: false };
 
   it('X and B become the yaw axis, opposite ways round, and nothing else moves', () => {
     const left = remap(pad({ x: true }), none);
@@ -85,19 +85,38 @@ describe('the pad-to-brain remap', () => {
     expect(left.left_stick_y).toBe(0);
   });
 
+  it('R2 drives forward, L2 drives back, and they add to the stick rather than fight it', () => {
+    // Stick up is negative, so forward is negative on left_stick_y.
+    expect(remap(pad({ right_trigger: 1 }), none).left_stick_y).toBeLessThan(-0.9);
+    expect(remap(pad({ left_trigger: 1 }), none).left_stick_y).toBeGreaterThan(0.9);
+    expect(remap(pad({ right_trigger: 1, left_trigger: 1 }), none).left_stick_y, 'both cancel').toBeCloseTo(0, 6);
+    // Half a trigger on top of half a stick is full throttle, not a replaced stick.
+    expect(remap(pad({ left_stick_y: -0.5, right_trigger: 0.5 }), none).left_stick_y).toBeCloseTo(-1, 6);
+    // And it never runs past what the drive can be told.
+    expect(remap(pad({ left_stick_y: -1, right_trigger: 1 }), none).left_stick_y).toBeCloseTo(-1, 6);
+  });
+
   it('R1 is the trigger the brain reads, and never the auto-fire latch', () => {
     const g = remap(pad({ right_bumper: true }), none);
     expect(g.b, 'R1 must arrive as the hold-to-fire input').toBe(true);
     expect(g.right_bumper, 'R1 must not toggle the latch as well').toBe(false);
   });
 
-  it('M1 and M2 are the two toggles, and neither is a face button', () => {
-    const g = remap(pad(), { m1: true, m2: true });
-    expect(g.x, 'M1 is auto-aim').toBe(true);
-    expect(g.right_bumper, 'M2 is the auto-fire latch').toBe(true);
+  it('L1 toggles auto-aim and L3 the auto-fire latch', () => {
+    expect(remap(pad({ left_bumper: true }), none).x, 'L1 is auto-aim').toBe(true);
+    expect(remap(pad({ left_stick_button: true }), none).right_bumper, 'L3 is the auto-fire latch').toBe(true);
+    // And pressing the face buttons must not reach either of them.
     const plain = remap(pad({ x: true, b: true }), none);
-    expect(plain.x, 'pressing X must not toggle auto-aim').toBe(false);
+    expect(plain.x).toBe(false);
     expect(plain.right_bumper).toBe(false);
+  });
+
+  it('M1 and M2 nudge the turret, which the brain reads as the D-pad', () => {
+    expect(remap(pad(), { m1: true, m2: false, rezero: false }).dpad_left).toBe(true);
+    expect(remap(pad(), { m1: false, m2: true, rezero: false }).dpad_right).toBe(true);
+    // A real D-pad press is consumed as M1/M2's fallback upstream, so it must not arrive here
+    // as a second, independent turret nudge.
+    expect(remap(pad({ dpad_left: true }), none).dpad_left).toBe(false);
   });
 
   it('leaves Y and A alone: they are the speed gear the brain reads directly', () => {
@@ -108,17 +127,26 @@ describe('the pad-to-brain remap', () => {
   it('every button the brain acts on is driven by exactly one physical control', () => {
     // One press, one action. The old layout had Y doing the auto-fill AND the drive frame,
     // and L3 doing pause AND the re-zero; both fired together and neither was discoverable.
-    const sources: [string, GamepadState][] = [
-      ['X', pad({ x: true })], ['B', pad({ b: true })], ['Y', pad({ y: true })],
-      ['A', pad({ a: true })], ['R1', pad({ right_bumper: true })],
-      ['L3', pad({ left_stick_button: true })], ['R3', pad({ right_stick_button: true })],
-      ['dpad up', pad({ dpad_up: true })],
+    const sources: [string, GamepadState, Paddles][] = [
+      ['X', pad({ x: true }), none], ['B', pad({ b: true }), none],
+      ['Y', pad({ y: true }), none], ['A', pad({ a: true }), none],
+      ['R1', pad({ right_bumper: true }), none],
+      ['L1', pad({ left_bumper: true }), none],
+      ['L3', pad({ left_stick_button: true }), none],
+      ['R3', pad({ right_stick_button: true }), none],
+      ['D-pad up', pad({ dpad_up: true }), none],
+      ['D-pad down', pad({ dpad_down: true }), none],
+      ['M1', pad(), { m1: true, m2: false, rezero: false }],
+      ['M2', pad(), { m1: false, m2: true, rezero: false }],
+      ['Backspace', pad(), { m1: false, m2: false, rezero: true }],
     ];
-    const watched = ['x', 'b', 'y', 'a', 'right_bumper', 'left_stick_button', 'right_stick_button', 'dpad_up'] as const;
+    const watched = ['x', 'b', 'y', 'a', 'right_bumper', 'left_stick_button', 'right_stick_button',
+      'dpad_up', 'dpad_left', 'dpad_right'] as const;
     const hits: Record<string, string[]> = {};
-    for (const [name, g] of sources) {
-      const out = remap(g, none) as unknown as Record<string, unknown>;
+    for (const [name, g, p] of sources) {
+      const out = remap(g, p) as unknown as Record<string, unknown>;
       for (const f of watched) if (out[f] === true) (hits[f] ??= []).push(name);
+      if ((out.left_trigger as number) > 0) (hits.left_trigger ??= []).push(name);
     }
     for (const [field, from] of Object.entries(hits)) {
       expect(from, `${field} is driven by ${from.join(' and ')}`).toHaveLength(1);

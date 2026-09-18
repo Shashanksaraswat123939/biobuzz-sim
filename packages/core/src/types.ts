@@ -75,7 +75,13 @@ export interface RobotSpec {
     /** Hold fire when the motion lead exceeds this: the shot is mostly chassis, not launch. */
     fireLeadCap_deg?: number;
     /** Hold fire this far off the mouth's opening: the aperture closes with the cosine. */
-    fireOpenCap_deg?: number };
+    fireOpenCap_deg?: number;
+    /**
+     * Seconds ahead the wrap choice looks when the bearing crosses the axis's dead angle.
+     * A wrap the chassis's current rotation will drive off the end within this long is
+     * refused while the other one is still reachable.
+     */
+    unwindLookahead_s?: number };
   hood: { enabled: boolean; servo: string; angleRange_deg: [number, number]; fixedAngle_deg: number; speed_dps: number;
     /** How close the hood must be to the angle the shot needs before firing, degrees. */
     tolDeg?: number };

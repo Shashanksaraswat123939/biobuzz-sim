@@ -569,6 +569,8 @@ export class BuiltinTeleOp {
       if (Math.abs(wrapPi((raw - this.aimHold) * DEG) * RAD) > dead) {
         const a = clamp(this.spec.turret.aimFilterAlpha ?? 0.35, 0.01, 1);
         this.aimHold += wrapPi((raw - this.aimHold) * DEG) * RAD * a;
+        // And keep the accumulator on the circle. Letting it run is what walked it off.
+        this.aimHold = wrapPi(this.aimHold * DEG) * RAD;
       }
       // UNWIND RATHER THAN PIN. A bearing is only ever known modulo 360, so a turret with more
       // than a full turn of travel can reach most of them two ways -- and which way matters,
@@ -582,12 +584,56 @@ export class BuiltinTeleOp {
       // cone directly behind the robot is gone.
       const [lo, hi] = this.spec.turret.range_deg;
       const here = turretActualDeg;
-      let want = this.aimHold;
-      let bestGap = Infinity;
-      for (const cand of [this.aimHold, this.aimHold - 360, this.aimHold + 360]) {
+
+      // UNWIND BEFORE THE STOP, NOT AFTER IT.
+      //
+      // The axis has 370 deg of travel for a bearing that lives on a 360 deg circle, so the
+      // two wraps of a solution are BOTH reachable only in a 10 deg window either side of
+      // +-180. That window is the only moment there is a choice -- and the choice decides the
+      // whole of the next revolution. Taking the nearer one, which is what this did, picks
+      // the wrap the chassis is about to drive off the end of maybe half the time; from then
+      // on the axis is pinned against its stop, tracking nothing, until the robot happens to
+      // come back round.
+      //
+      // Measured over a 12 s spin with tools/turretcheck.ts: commanded past the stop 66% of
+      // the time, and the muzzle sat closer to the OPPONENT's hive than to ours 37% of the
+      // time, up to 180 deg off. That is the "it aims at the wrong hive" report -- it was
+      // never aiming anywhere, it had run out of travel.
+      //
+      // So at the crossing, look ahead: the required angle drifts at minus the chassis yaw
+      // rate, and a wrap that will be outside the travel in `lookahead` seconds is refused
+      // while the other one is still on offer. One decision per revolution, taken early,
+      // while both options are cheap.
+      //
+      // THE CANDIDATE LIST HAS TO START FROM A CANONICAL ANGLE. `aimHold` is an accumulator --
+      // it integrates a filtered delta and is never wrapped -- so a robot that keeps turning
+      // one way walks it off the circle: after two revolutions it is at 700 deg, none of
+      // 700 / 340 / 1060 is inside +-185, and the loop below finds no candidate at all. It
+      // then fell through to `want = this.aimHold`, which clamps hard against the stop and
+      // stays there. THAT is the bug behind "auto-aim is on and it is not aiming" and behind
+      // the muzzle sitting on the opponent's side: measured over a 12 s spin, commanded past
+      // the stop 66% of the time and pointing nearer the wrong hive 37% of the time.
+      //
+      // Wrapping to (-180, 180] first guarantees the base candidate is always reachable, so
+      // the choice below is a real choice between wraps rather than a fallback.
+      const base = wrapPi(this.aimHold * DEG) * RAD;
+      const drift = -s.localizer.omega;
+      const look = this.spec.turret.unwindLookahead_s ?? 1.5;
+      let want = base;
+      let bestScore = Infinity;
+      for (const cand of [base, base - 360, base + 360]) {
         if (cand < lo || cand > hi) continue;
-        const gap = Math.abs(cand - here);
-        if (gap < bestGap) { bestGap = gap; want = cand; }
+        // SECONDS OF TRACKING THIS WRAP BUYS, before the drift carries it off the end. A
+        // straight "does it run out within `look`" test is no use: spin hard enough and every
+        // wrap runs out, both get the same answer, and the choice falls back to whichever is
+        // nearer -- which is the behaviour being replaced.
+        const margin = drift >= 0 ? hi - cand : cand - lo;
+        const lasts = Math.abs(drift) > 1 ? margin / Math.abs(drift) : Infinity;
+        // Travel is charged at what it actually costs in seconds, so the two are comparable:
+        // going the long way round is 360 deg at the axis's own slew rate.
+        const cost = Math.abs(cand - here) / Math.max(1, this.spec.turret.speed_dps);
+        const score = cost - Math.min(look, lasts);
+        if (score < bestScore) { bestScore = score; want = cand; }
       }
       turretDeg = clamp(want, lo, hi);
       // HOW FAR PAST THE END STOP THE SHOT WANTED TO BE, which is not the same question as

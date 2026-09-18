@@ -36,7 +36,16 @@ export function installKeyboard(): Keys {
  * back to L1/L2 on a pad without them. Carried beside the frame rather than added to
  * `GamepadState`, which is the wire the Java OpMode sees and has no such button.
  */
-export interface Paddles { m1: boolean; m2: boolean }
+export interface Paddles {
+  m1: boolean;
+  m2: boolean;
+  /**
+   * Re-zero the field frame. Keyboard only: every one of the pad's 17 standard buttons now
+   * has a job, and inventing an 18th to put this on would be a button nobody's pad has.
+   * R3 gives field-centric on demand, so this is the rare correction rather than the control.
+   */
+  rezero: boolean;
+}
 
 /**
  * PHYSICAL keyboard state, in gamepad shape: which BUTTON is down, not what it does. The
@@ -53,24 +62,28 @@ export function readKeyboard(keys: Keys): GamepadState & { paddles: Paddles } {
   // Left stick: drive. W/S forward and back, A/D strafe.
   g.left_stick_y = (on('s') ? 1 : 0) - (on('w') ? 1 : 0);
   g.left_stick_x = (on('d') ? 1 : 0) - (on('a') ? 1 : 0);
-  // Right stick: the view. Arrows, because that is what a keyboard user reaches for to look
-  // around, and the turret has moved to , and . to make room for it.
+  // Right stick: the view. Arrows, because that is what a keyboard user reaches for.
   g.right_stick_x = (on('arrowright') ? 1 : 0) - (on('arrowleft') ? 1 : 0);
   g.right_stick_y = (on('arrowdown') ? 1 : 0) - (on('arrowup') ? 1 : 0);
+  // The TRIGGERS are forward and back as well, for a thumb that is busy strafing.
+  g.right_trigger = on('arrowup') && on('shift') ? 1 : 0;   // see the pad: R2 forward
+  g.left_trigger = on('arrowdown') && on('shift') ? 1 : 0;  //               L2 back
   // Face buttons: Q/E turn (X/B), R/F change gear (Y/A).
   g.x = on('q');
   g.b = on('e');
   g.y = keys.pressed.has('r');
   g.a = keys.pressed.has('f');
   g.right_bumper = on(' ');    // R1: fire
-  g.left_bumper = on('shift'); // momentary crawl
-  g.left_trigger = on('z') ? 1 : 0;  // reverse the intake
-  g.dpad_up = keys.pressed.has('v');   // pre-spin the flywheel
-  g.dpad_left = on(',');       // manual turret slew
-  g.dpad_right = on('.');
-  g.left_stick_button = keys.pressed.has('backspace'); // re-zero the field frame
-  g.right_stick_button = on('control');                // hold: robot-centric
-  g.paddles = { m1: keys.pressed.has('t'), m2: keys.pressed.has('g') };
+  g.left_bumper = keys.pressed.has('t');   // L1: auto-aim toggle
+  g.dpad_up = keys.pressed.has('v');       // pre-spin the flywheel
+  g.dpad_down = on('z');                   // reverse the intake
+  g.left_stick_button = keys.pressed.has('g');  // auto-fire latch
+  // Field-centric is a HOLD, and it used to be on Ctrl. A modifier is the one key whose
+  // keyup you reliably miss -- Ctrl+R, Ctrl+Shift+I, alt-tab -- and a missed keyup leaves
+  // the drive frame silently stuck in the mode you are not in.
+  g.right_stick_button = on('c');
+  // M1 / M2: nudge the turret anticlockwise and clockwise.
+  g.paddles = { m1: on(','), m2: on('.'), rezero: keys.pressed.has('backspace') };
   return g;
 }
 
@@ -79,24 +92,42 @@ export function readKeyboard(keys: Keys): GamepadState & { paddles: Paddles } {
  *
  * The pad the driver holds and the frame the brain reads are deliberately not the same thing.
  * The brain's `GamepadState` is the wire the Java OpMode sees, so its field names are fixed;
- * the driver's layout is not, and it changed:
+ * the driver's layout is not.
  *
- *   left stick   translate            right stick  the VIEW (never the robot)
- *   X / B        turn left / right    Y / A        speed gear up / down
- *   R1           fire                 L1(+L3)      crawl / re-zero the field frame
- *   M1 / M2      auto-aim / auto-fire R3           hold for robot-centric
+ *   left stick   translate              right stick  the VIEW (never the robot)
+ *   R2 / L2      forward / back         X / B        turn left / right
+ *   Y / A        speed gear up / down   R1           fire
+ *   L1           auto-aim toggle        L3           auto-fire latch
+ *   M1 / M2      turret anti/clockwise  R3           hold for field-centric
+ *   D-pad up     pre-spin the flywheel  D-pad down   reverse the intake
+ *   D-pad left/right are M1 and M2's fallback on a pad without paddles.
  *
- * Turning moved off the right stick because the right stick now moves the camera, and the
- * brain's yaw command is still `right_stick_x` -- so X/B are synthesised into it here, BEFORE
- * `rampDigital`, which means a button press ramps the yaw exactly like a stick deflection
- * instead of stepping it. Nothing downstream of this function knows the layout changed.
+ * Turning moved off the right stick because the right stick moves the camera, and the brain's
+ * yaw command is still `right_stick_x` -- so X/B are synthesised into it here, BEFORE the
+ * ramp, which means a button press feathers the yaw exactly like a stick deflection instead
+ * of slamming it. Nothing downstream of this function knows the layout changed.
  */
 export function remap(phys: GamepadState, pad: Paddles): GamepadState {
+  // THE TRIGGERS DRIVE FORWARD AND BACK, added to the stick rather than replacing it, so a
+  // driver can strafe on the stick and throttle on the triggers at the same time. Stick up is
+  // negative, which is why R2 subtracts.
+  const throttle = clamp(phys.left_stick_y + phys.left_trigger - phys.right_trigger, -1, 1);
   return {
     ...phys,
+    left_stick_y: throttle,
     right_stick_x: (phys.b ? 1 : 0) - (phys.x ? 1 : 0),  // B right, X left
-    x: pad.m1,                       // M1: auto-aim toggle
-    right_bumper: pad.m2,            // M2: auto-fire latch
+    x: phys.left_bumper,             // L1: auto-aim toggle
+    right_bumper: phys.left_stick_button,   // L3: auto-fire latch
     b: phys.right_bumper,            // R1: fire while held
+    left_bumper: false,              // the crawl button is gone; the speed gear replaced it
+    left_trigger: phys.dpad_down ? 1 : 0,   // D-pad down: reverse the intake
+    left_stick_button: pad.rezero,          // keyboard only: re-zero the field frame
+    // M1 / M2 nudge the turret by hand when auto-aim is off. The brain reads them as the
+    // D-pad, which is where that control used to live.
+    dpad_left: pad.m1,
+    dpad_right: pad.m2,
+    dpad_down: false,
   };
 }
+
+const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);

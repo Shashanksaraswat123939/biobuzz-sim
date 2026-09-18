@@ -2,7 +2,7 @@
  "_about": "MEASURED by tools/entrycheck.ts: of the balls that reach the up-CELL mouth at a given arrival speed and descent angle, what fraction STAY IN. tools/shottable.ts multiplies this into its objective, so the table stops choosing shots that thread the mouth and bounce straight back out.",
  "_method": "24 balls per cell injected at the mouth with the launcher's own spin convention, aim jittered by a ball radius, rocker pinned at 200 kg so a tip cannot empty the CELL mid-count.",
  "_caveat": "Binomial noise at this sample size is about +-10 points per cell. Read the shape, not individual cells.",
- "generated": "2026-09-17T12:16:27.010Z",
+ "generated": "2026-09-18T08:53:03.472Z",
  "ballsPerCell": 24,
  "speeds_mps": [
   2,

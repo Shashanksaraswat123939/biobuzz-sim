@@ -620,25 +620,49 @@ export class World {
   /** Previous-frame position per ball, kept only for shots being watched down. */
   private lastBallPos: Record<number, Vec3> = {};
 
+  /**
+   * LEAVE, FOR WHICHEVER ROBOTS ARE ON THE FIELD. This tracked `this.robot` against
+   * `this.alliance` and nothing else, so with an opponent playing, its LEAVE was never
+   * assessed at all -- measured at exactly 0 points across every match in tools/oppcheck.ts,
+   * which reads as the bot failing to drive off its wall when in fact nobody was looking.
+   */
   private trackLeave(): void {
     if (this.clock.period !== 'AUTO') return;
-    const sign = this.alliance === 'red' ? -1 : 1;
-    const x = this.robot.pos[0] * sign;
-    if (x < this.geom.halfWidth_m - inches(24)) this.leftStart[this.alliance] = true;
+    for (const r of this.robots()) {
+      const sign = r.alliance === 'red' ? -1 : 1;
+      if (r.pos[0] * sign < this.geom.halfWidth_m - inches(24)) this.leftStart[r.alliance] = true;
+    }
+  }
+
+  /** The robot playing for an alliance, or ours if that alliance has none on the field. */
+  private robotOf(a: Alliance): Robot {
+    return this.opponent && this.opponent.alliance === a ? this.opponent : this.robot;
+  }
+
+  /** Every robot actually on the field, ours first. */
+  private robots(): Robot[] {
+    return this.opponent ? [this.robot, this.opponent] : [this.robot];
   }
 
   private assessAuto(): void {
-    const parked = this.inLoadingZone();
-    this.scorer.setAutoResult(this.alliance, this.leftStart[this.alliance], parked);
+    for (const r of this.robots()) {
+      this.scorer.setAutoResult(r.alliance, this.leftStart[r.alliance], this.inLoadingZone(r));
+    }
   }
 
   /** PARK: the robot's footprint overlaps its own LOADING ZONE. */
-  private inLoadingZone(): boolean {
-    const p = this.robot.pos;
-    const z = this.geom.zones.find((q) => q.name === 'LOADING' && q.alliance === this.alliance);
+  /**
+   * PARK, for a given robot, against ITS OWN alliance's zone. This took no argument and
+   * always measured our robot against our zone, so an opponent was scored PARKED whenever the
+   * PLAYER happened to be standing in the player's own LOADING zone -- five points to the
+   * wrong alliance for something the other robot did.
+   */
+  private inLoadingZone(robot: Robot = this.robot): boolean {
+    const p = robot.pos;
+    const z = this.geom.zones.find((q) => q.name === 'LOADING' && q.alliance === robot.alliance);
     if (!z) return false;
-    const halfX = this.robot.spec.chassis.width_m / 2;
-    const halfZ = this.robot.spec.chassis.length_m / 2;
+    const halfX = robot.spec.chassis.width_m / 2;
+    const halfZ = robot.spec.chassis.length_m / 2;
     return p[0] + halfX > z.min[0] && p[0] - halfX < z.max[0] && p[2] + halfZ > z.min[2] && p[2] - halfZ < z.max[2];
   }
 
@@ -696,7 +720,7 @@ export class World {
       garden,
       flowers,
       bottomNectar: bottoms.map((b) => ({ flower: b.flower, alliance: b.alliance })),
-      parked: this.inLoadingZone(),
+      parked: this.inLoadingZone(this.robotOf(alliance)),
       left: this.leftStart[alliance],
     };
   }

@@ -26,10 +26,11 @@ const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/sh
 
 interface Run { speed: number; shots: number; credited: number; secs: number; why: Record<string, number>; long: number[]; lat: number[] }
 
-async function run(stick: number, secs: number, seed: number): Promise<Run> {
+async function run(stick: number, secs: number, seed: number, leadCap?: number): Promise<Run> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
+  if (leadCap !== undefined) spec.turret.fireLeadCap_deg = leadCap;
   const pool = Array.from({ length: 300 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
   const w = new World({ params: p, robot: spec, staging: pool, alliance: 'red', seed });
   for (const b of w.balls.balls) w.balls.park(b);
@@ -49,7 +50,13 @@ async function run(stick: number, secs: number, seed: number): Promise<Run> {
   let dist = 0;
   let prev: Vec3 = w.robot.pos;
   const dt = 1 / 60;
+  let ran = 0;
   for (let i = 0; i < secs * 60; i++) {
+    // A TIP swaps which CELL is up and the new mouth faces the other way; the driver's next
+    // job is to drive round, which is navigation, not aim. The pass ends there and the
+    // rates are per second actually spent in front of an open mouth.
+    if (w.hives.red.tips > 0) break;
+    ran = i + 1;
     while (w.robot.heldBalls().length < spec.hopper.capacity && loaded < pool.length) {
       if (!w.robot.preload(w.balls, w.balls.balls[loaded])) break;
       loaded++;
@@ -87,7 +94,7 @@ async function run(stick: number, secs: number, seed: number): Promise<Run> {
   for (let k = 0; k < 60 * 5; k++) { w.setGamepads(emptyGamepad(), emptyGamepad()); w.step(brain.update(w.sensors(), emptyGamepad(), w.seq, dt)); }
   const log = w.snapshot().shots;
   return {
-    speed: dist / secs, shots: w.robot.shots, credited: w.landedInUpCell('red'), secs, why,
+    speed: dist / Math.max(1, ran / 60), shots: w.robot.shots, credited: w.landedInUpCell('red'), secs: ran / 60, why,
     long: log.map((s) => s.long_in * 2.54).filter(Number.isFinite),
     lat: log.map((s) => s.lat_in * 2.54).filter(Number.isFinite),
   };
@@ -100,13 +107,21 @@ export async function main(argv: string[] = []): Promise<void> {
   const num = (k: string, d: number) => { const i = argv.indexOf(`--${k}`); return i >= 0 ? Number(argv[i + 1]) : d; };
   const secs = num('secs', 60), seeds = num('seeds', 3);
   console.log(`\nPATROLLING THE SHOOTING SECTOR AT SPEED, latch on, ${secs} s x ${seeds} seeds per speed, real rocker.\n`);
-  console.log('  stick   actual m/s   shots   credited   land%   balls/s   long cm        lat cm');
-  for (const stick of [0, 0.3, 0.5, 0.7, 0.9, 1.0]) {
+  // --cap: sweep the motion-lead cap where it actually bites. tools/movingtune.ts --lead
+  // never reaches 12 deg of lead in any of its cases, so it reads the same 106 shots at
+  // every cap; the patrol at 0.6-0.85 m/s is refused 89% of the time by the cap at 20.
+  const capSweep = argv.includes('--cap');
+  const grid: [number, number | undefined][] = capSweep
+    ? [0.5, 0.7, 1.0].flatMap((st) => [20, 30, 45, 90].map((c) => [st, c] as [number, number]))
+    : [0, 0.3, 0.5, 0.7, 0.9, 1.0].map((st) => [st, undefined]);
+  console.log(`  stick ${capSweep ? ' cap ' : ''}  actual m/s   shots   credited   land%   balls/s   long cm        lat cm`);
+  for (const [stick, cap] of grid) {
     const rs: Run[] = [];
-    for (let s = 0; s < seeds; s++) rs.push(await run(stick, secs, 11 + s * 7));
+    for (let s = 0; s < seeds; s++) rs.push(await run(stick, secs, 11 + s * 7, cap));
     const shots = rs.reduce((a, r) => a + r.shots, 0), cred = rs.reduce((a, r) => a + r.credited, 0);
     const long = rs.flatMap((r) => r.long), lat = rs.flatMap((r) => r.lat);
-    console.log(`  ${stick.toFixed(1).padStart(5)}   ${mean(rs.map((r) => r.speed)).toFixed(2).padStart(10)}   ${String(shots).padStart(5)}   ${String(cred).padStart(8)}   ${((cred / Math.max(1, shots)) * 100).toFixed(0).padStart(4)}%   ${(cred / (secs * seeds)).toFixed(2).padStart(7)}   ${mean(long).toFixed(0).padStart(4)} +-${sd(long).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(4)} +-${sd(lat).toFixed(0).padStart(3)}`);
+    const ranSecs = rs.reduce((a, r) => a + r.secs, 0);
+    console.log(`  ${stick.toFixed(1).padStart(5)} ${cap === undefined ? '' : String(cap).padStart(4) + ' '}  ${mean(rs.map((r) => r.speed)).toFixed(2).padStart(10)}   ${String(shots).padStart(5)}   ${String(cred).padStart(8)}   ${((cred / Math.max(1, shots)) * 100).toFixed(0).padStart(4)}%   ${(cred / Math.max(1, ranSecs)).toFixed(2).padStart(7)}   ${mean(long).toFixed(0).padStart(4)} +-${sd(long).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(4)} +-${sd(lat).toFixed(0).padStart(3)}`);
     const agg: Record<string, number> = {};
     let tot = 0;
     for (const r of rs) for (const [k, v] of Object.entries(r.why)) { agg[k] = (agg[k] ?? 0) + v; tot += v; }

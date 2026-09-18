@@ -238,11 +238,21 @@ export class World {
    */
   private censusUpCells(): void {
     for (const a of ['red', 'blue'] as const) {
+      // CREDIT THE PEAK, NOT THE LAST FRAME. Hive.tips increments when the rocker reaches 90%
+      // of the far stop, and the balls it is dumping left the CELL's volume a quarter of a
+      // second before that, while it was still swinging -- so "what was in the cell last
+      // frame" at the instant the tip counts is zero. tools/zonerun.ts read 28 shots, 0
+      // credited, on a stationary robot that had put its first six in and tipped the hive.
+      // The count that matters is the most the cell held since the last tip: that is what
+      // the rocker took over the top with it.
+      const now = this.balls.balls.filter((b) => this.inOwnUpCell(a, b)).length;
       if (this.hives[a].tips > this.tipsSeen[a]) {
-        this.dumpedAtTips[a] += this.inUpCellPrev[a];
+        this.dumpedAtTips[a] += Math.max(this.inUpCellPrev[a], now);
         this.tipsSeen[a] = this.hives[a].tips;
+        this.inUpCellPrev[a] = 0;
+      } else {
+        this.inUpCellPrev[a] = Math.max(this.inUpCellPrev[a], now);
       }
-      this.inUpCellPrev[a] = this.balls.balls.filter((b) => this.inOwnUpCell(a, b)).length;
     }
   }
 

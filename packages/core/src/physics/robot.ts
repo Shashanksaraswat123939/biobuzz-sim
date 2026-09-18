@@ -694,6 +694,7 @@ export class Robot {
    * out of step with the picture.
    */
   private censusBalls(balls: BallSet): void {
+    this.lastCensus = balls;
     const p = this.pos;
     const c = this.spec.chassis;
     const hw = c.width_m / 2;
@@ -1112,6 +1113,7 @@ export class Robot {
    * and the refusal comes from the geometry rather than from a capacity check.
    */
   preload(balls: BallSet, b: Ball): boolean {
+    this.lastCensus = balls;
     // NOT guarded on isEnabled() on purpose. Parking is how a harness clears the field, and
     // `park everything, then preload N` is the standard rig in tests/shoot.test.ts and half
     // the tools -- preload's whole job there is to bring a benched ball back into play.
@@ -1168,6 +1170,9 @@ export class Robot {
   }
 
   /** Balls the robot is holding, so the world can put them back on a reset. */
+  /** The set the census last ran over, so place() knows what it is carrying. */
+  private lastCensus: BallSet | null = null;
+
   heldBalls(): Ball[] {
     return [...this.hopper, ...this.inShaft];
   }
@@ -1200,11 +1205,33 @@ export class Robot {
   }
 
   /** Teleport, for the scenario editor and for "put me back on the wall". */
+  /**
+   * TELEPORT THE ROBOT AND WHAT IS INSIDE IT.
+   *
+   * The hopper is a census by POSITION -- a ball counts as held when it is inside the
+   * chassis box, which is why an intake that misses is an intake that misses. So moving
+   * the chassis alone leaves the balls standing in the old spot, and one step later the
+   * census calls them free: a robot placed with four preloaded POLLEN had an empty hopper
+   * by the next frame. Every measurement rig papered over that by re-preloading each step,
+   * which meant none of them could see it, and a rig that quietly refills the magazine is
+   * not measuring the shooter it claims to.
+   */
   place(p: Vec3, yawDeg: number): void {
+    const carried = this.lastCensus
+      ? this.heldBalls().map((b) => {
+        const bp = this.lastCensus!.pos(b);
+        const c = this.pos;
+        return { b, local: this.toLocal([bp[0] - c[0], bp[1] - c[1], bp[2] - c[2]]) };
+      })
+      : [];
     this.body.setTranslation({ x: p[0], y: p[1], z: p[2] }, true);
     this.body.setRotation(quatY(yawDeg * DEG), true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    for (const { b, local } of carried) {
+      const w = this.toWorld(local);
+      this.lastCensus!.release(b, [w[0] + p[0], w[1] + p[1], w[2] + p[2]], [0, 0, 0], [0, 0, 0], b.state);
+    }
   }
 }
 

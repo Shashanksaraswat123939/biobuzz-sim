@@ -48,6 +48,12 @@ const DRIVING: { name: string; stick: [number, number]; wobble: number }[] = [
   { name: 'still', stick: [0, 0], wobble: 0 },
   { name: 'strafing', stick: [0.45, 0], wobble: 0 },
   { name: 'shuttling', stick: [0, 0], wobble: 0.35 },
+  // A HARD case on purpose. The curve is used to gate shots the robot takes while being
+  // driven properly, and the previous fit's lowest bin was a score of 0.49 -- nothing worse
+  // than that was ever sampled, so the whole bottom half of the curve was extrapolation.
+  // This is the FAST wobble case from tools/movingtune.ts, which is where the gate now
+  // refuses about a third of the loops, so it is exactly the region that needs data.
+  { name: 'fast wobble', stick: [0, 0], wobble: 0.7 },
 ];
 
 /**
@@ -170,7 +176,13 @@ export async function main(argv: string[] = []): Promise<void> {
   // landed 65% over 87 shots). A bin thin enough to be noise should not be allowed to set
   // the number the whole policy is compared against.
   const sorted = [...all].sort((a, b) => a.predicted - b.predicted);
-  const nBins = Math.max(2, Math.min(6, Math.round(sorted.length / 60)));
+  // MORE DATA HAS TO BUY RESOLUTION. This was capped at six bins whatever the sample size, so
+  // a longer run only made the bins fatter -- and six bins over a 331-shot run is why the top
+  // four all read the same 0.964 and the curve could not tell 85% from 96% anywhere in the
+  // region the robot actually shoots from. About 80 samples a bin keeps the standard error
+  // near 5 points, which is the resolution worth having; the cap is there so a short run
+  // still produces something rather than a bin per shot.
+  const nBins = Math.max(2, Math.min(12, Math.round(sorted.length / 80)));
   const per = Math.ceil(sorted.length / nBins);
   console.log('');
   console.log('  predicted band        n   landed   observed   +-1 se   model error');

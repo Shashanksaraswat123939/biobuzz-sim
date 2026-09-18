@@ -1661,3 +1661,56 @@ Costs/risks: The entry model still earns its place -- without it the objective i
              re-optimising against at this sample size.
 Who/where:   config/entry.json (regenerated, n=64), java/teamcode/assets/shottable.csv
              (unchanged), tools/entrycheck.ts, tools/shottable.ts
+
+## 2026-09-18 — Re-fitting the land calibration, and finding the score does not predict
+
+Plan said:   the calibration had 6 bins from 331 shots and the top four all read 0.964, so it
+             could not tell 85% from 96% anywhere the robot actually shoots. Re-run it with
+             more samples and let the bins get finer.
+
+Found:       Both changes worked and the conclusion is not the one expected.
+
+             `nBins` was capped at 6 whatever the sample size, so a longer run only made the
+             bins fatter. Capped at 12 now, about 80 samples each. And the lowest bin had been
+             score 0.49 because nothing worse was ever sampled -- adding the FAST wobble
+             driving case (wobble 0.7, the one where the gate now refuses a third of the
+             loops) pulled the bottom of the sampled range down to 0.05.
+
+             839 settled shots, 10 bins of 84:
+
+               predicted    observed
+               0.05-0.48         85%
+               0.49-0.64         88%
+               0.64-0.67         82%
+               0.67-0.83         42%
+               0.83-0.85         77%
+               0.85-0.85         81%
+               0.85-0.85         82%
+               0.85-0.88         70%
+               0.88-0.95         71%
+               0.95-0.97         76%
+
+             THE SCORE CARRIES NO INFORMATION. Shots the model rates 5-48% land 85% of the
+             time; shots it rates 95-97% land 76%. It is not merely uncalibrated, it is
+             uncorrelated, and over the top half it is slightly INVERTED.
+
+             That explains a run of results that looked unrelated. Raising the gate refused
+             30% of the loops on the FAST wobble case and did not improve its hit rate,
+             because the gate is filtering on noise. The shot-zone map's colours are that same
+             score, so the green is not telling a driver where the shot is better. And the
+             monotone forcing -- which exists so a noisy bin cannot invert the curve -- turns
+             "no signal" into a flat line at 0.88 that LOOKS like a calibration.
+
+             The 0.67-0.83 bin at 42% over 84 shots is not noise (se 5 points) and is the
+             thread worth pulling: something specific about those shots is wrong.
+
+Did instead: Shipped the 839-shot fit, because it is the honest measurement and the previous
+             one was hiding this behind six coarse bins. The practical effect is that
+             `minLandProb` is a no-op again -- everything calibrates to about 0.88, so no
+             threshold under that refuses anything. That is now TRUE rather than an artefact
+             of the clamp fixed earlier today, and it should stay visible until the score is
+             worth gating on.
+
+Costs/risks: The gate is currently decoration. Do not raise `minLandProb` expecting it to do
+             anything; it will either do nothing or stop the robot shooting entirely at 0.89.
+Who/where:   tools/landcal.ts (bin cap, FAST wobble case), config/landcal.json

@@ -1,39 +1,59 @@
 {
  "_about": "MEASURED by tools/landcal.ts: the mapping from the model's raw P(land) score to the frequency with which shots at that score ACTUALLY land. BuiltinTeleOp applies it so that flywheel.minLandProb is a real probability instead of a score.",
- "_method": "331 settled shots over 4 seeds, 3 ranges and 3 driving states (still, strafing, shuttling) with the gate open. Bins forced monotone. The app shoots on the move, so the curve has to have been fitted on the move.",
- "generated": "2026-09-17T12:20:44.311Z",
- "samples": 331,
- "ceiling": 0.9642857142857143,
+ "_method": "839 settled shots over 6 seeds, 3 ranges and 4 driving states (still, strafing, shuttling, fast wobble) with the gate open. Bins forced monotone. The app shoots on the move, so the curve has to have been fitted on the move.",
+ "generated": "2026-09-18T11:23:22.888Z",
+ "samples": 839,
+ "ceiling": 0.8809523809523809,
  "points": [
   {
-   "score": 0.4900216259746695,
-   "observed": 0.8392857142857143,
-   "n": 56
+   "score": 0.21101516329661893,
+   "observed": 0.8452380952380952,
+   "n": 84
   },
   {
-   "score": 0.6986067620366294,
-   "observed": 0.8928571428571429,
-   "n": 56
+   "score": 0.5836613665911907,
+   "observed": 0.8809523809523809,
+   "n": 84
   },
   {
-   "score": 0.8017388906588085,
-   "observed": 0.9642857142857143,
-   "n": 56
+   "score": 0.6664719644283215,
+   "observed": 0.8809523809523809,
+   "n": 84
   },
   {
-   "score": 0.8169000255659823,
-   "observed": 0.9642857142857143,
-   "n": 56
+   "score": 0.7424264982673533,
+   "observed": 0.8809523809523809,
+   "n": 84
   },
   {
-   "score": 0.847243645356414,
-   "observed": 0.9642857142857143,
-   "n": 56
+   "score": 0.8411863547788072,
+   "observed": 0.8809523809523809,
+   "n": 84
   },
   {
-   "score": 0.946573663170079,
-   "observed": 0.9642857142857143,
-   "n": 51
+   "score": 0.8462666479824237,
+   "observed": 0.8809523809523809,
+   "n": 84
+  },
+  {
+   "score": 0.848011957143644,
+   "observed": 0.8809523809523809,
+   "n": 84
+  },
+  {
+   "score": 0.8511284179571438,
+   "observed": 0.8809523809523809,
+   "n": 84
+  },
+  {
+   "score": 0.9283043345574014,
+   "observed": 0.8809523809523809,
+   "n": 84
+  },
+  {
+   "score": 0.953177531281345,
+   "observed": 0.8809523809523809,
+   "n": 83
   }
  ]
 }

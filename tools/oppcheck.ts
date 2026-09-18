@@ -23,8 +23,9 @@ import type { BallKind, Params, RobotSpec, Vec3 } from '../packages/core/src/typ
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 const balls = (staging.balls as { kind: string; pos: number[] }[]).map((b) => ({ kind: b.kind as BallKind, pos: b.pos as Vec3 }));
 
-const phaseT: Record<string, number> = {};
+let phaseT: Record<string, number> = {};
 async function one(seed: number, trace = false) {
+  phaseT = {};
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
   const world = new World({ params: p, robot: spec, staging: balls, alliance: 'red', seed, preload: spec.hopper.capacity, opponent: true });
@@ -52,14 +53,22 @@ async function one(seed: number, trace = false) {
     world.setOpponentActuators(oppBrain.update(os, g, world.seq, dt));
     world.setGamepads(emptyGamepad(), emptyGamepad());
     world.step({ seq: world.seq, motors: {}, servos: {} });
+    phaseT[bot.phase] = (phaseT[bot.phase] ?? 0) + dt;
     if (trace) {
-      phaseT[bot.phase] = (phaseT[bot.phase] ?? 0) + dt;
       if (world.seq % 120 === 0) console.log(`    t=${world.t.toFixed(0)}s ${world.clock.period} ${bot.phase.padEnd(8)} hop=${os.game.hopper} rng=${os.game.upCellRangeIn.toFixed(0)} open=${os.game.upCellOpenDeg.toFixed(0)} rpm=${os.game.flywheelRpm.toFixed(0)} hold=${oppBrain.state.hold || '-'} at=(${os.localizer.x.toFixed(0)},${os.localizer.y.toFixed(0)}) want=(${bot.target[0].toFixed(0)},${bot.target[1].toFixed(0)}) world=(${opp.pos.map((v)=>(v*M_TO_IN).toFixed(0)).join(',')}) red=(${world.robot.pos.map((v)=>(v*M_TO_IN).toFixed(0)).join(',')}) v=${Math.hypot(opp.vel[0],opp.vel[2]).toFixed(3)}`);
     }
   }
   if (trace) console.log('    time per phase:', Object.entries(phaseT).map(([k, v]) => `${k} ${v.toFixed(0)}s`).join(', '));
   const sc = world.scorer.state[opp.alliance];
-  return { seed, shots: opp.shots, inCell: world.landedInUpCell(opp.alliance), tips: sc.tips, score: sc.total, phase: bot.phase, note: bot.note };
+  return {
+    seed, shots: opp.shots, inCell: world.landedInUpCell(opp.alliance),
+    tips: sc.tips, score: sc.total, phase: bot.phase, note: bot.note,
+    // WHERE THE POINTS CAME FROM, and more usefully where they did NOT. A bot that never
+    // touches a FLOWER leaves the whole endgame on the table and a total does not say so.
+    leave: sc.leave, park: sc.park, upCell: sc.upCell, flower: sc.flower,
+    garden: sc.garden, bottom: sc.bottomNectar,
+    phaseT: { ...phaseT },
+  };
 }
 
 export async function main(argv: string[] = []): Promise<void> {
@@ -68,7 +77,7 @@ export async function main(argv: string[] = []): Promise<void> {
   const n = i >= 0 ? Number(argv[i + 1]) : 3;
   console.log('\nTHE OPPONENT BOT, a full match per seed, with the human robot standing still.\n');
   console.log('  seed   shots   in its CELL   tips   points   ended');
-  const runs = [];
+  const runs: Awaited<ReturnType<typeof one>>[] = [];
   for (let k = 0; k < n; k++) {
     const r = await one(11 + k * 17, argv.includes('--trace'));
     runs.push(r);
@@ -77,4 +86,19 @@ export async function main(argv: string[] = []): Promise<void> {
   const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
   console.log(`\n  mean: ${mean(runs.map((r) => r.shots)).toFixed(1)} shots, ${mean(runs.map((r) => r.tips)).toFixed(1)} tips, ${mean(runs.map((r) => r.score)).toFixed(1)} points`);
   console.log(`  last note: ${runs[runs.length - 1]?.note ?? '-'}\n`);
+  console.log('');
+  console.log('  WHERE THE POINTS COME FROM (mean per match), and where they do not:');
+  const m = (f: (r: typeof runs[0]) => number) => mean(runs.map(f)).toFixed(1);
+  console.log(`    TIPS        ${m((r) => r.tips * 20).padStart(6)}   (${m((r) => r.tips)} tips)`);
+  console.log(`    LEAVE       ${m((r) => (r.leave ? 3 : 0)).padStart(6)}`);
+  console.log(`    PARK        ${m((r) => (r.park ? 5 : 0)).padStart(6)}`);
+  console.log(`    up CELL     ${m((r) => r.upCell * 2).padStart(6)}   (${m((r) => r.upCell)} balls at the buzzer)`);
+  console.log(`    FLOWERs     ${m((r) => r.flower * 2 + r.bottom * 5).padStart(6)}   (${m((r) => r.flower)} owned elements, ${m((r) => r.bottom)} bottom bonuses)`);
+  console.log(`    GARDEN      ${m((r) => r.garden).padStart(6)}`);
+  console.log('');
+  console.log('  seconds per phase, mean:');
+  for (const k of new Set(runs.flatMap((r) => Object.keys(r.phaseT)))) {
+    console.log(`    ${k.padEnd(10)} ${mean(runs.map((r) => r.phaseT[k] ?? 0)).toFixed(0).padStart(4)} s`);
+  }
+  console.log('');
 }

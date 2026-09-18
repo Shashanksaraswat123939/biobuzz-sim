@@ -628,6 +628,14 @@ export class BuiltinTeleOp {
       // to chase, because a tenth of a degree of aim is invisible next to a degree of scatter.
       const raw = lead.azimuthDeg - cal.turretTrim_deg;
       aimRawDeg = raw;
+      // FEED THE CHASSIS ROTATION FORWARD THROUGH THE FILTER. The one-pole filter below is
+      // for localizer noise, and it lags whatever it is fed; a chassis turning at w drags the
+      // required bearing at exactly -w, which is not noise and should not be filtered. Left
+      // to the filter, 66 deg/s of spin is about 2 deg of lag on the command, and the gate --
+      // now measuring the true pointing error -- refused 80% of the spinning case's loops for
+      // "turret N deg off". The turn rate is known from the IMU, so the accumulator is moved
+      // by it first and the filter is left with only the part it is for.
+      this.aimHold += -s.localizer.omega * dt;
       const dead = this.spec.turret.aimDeadband_deg ?? 0.25;
       if (Math.abs(wrapPi((raw - this.aimHold) * DEG) * RAD) > dead) {
         const a = clamp(this.spec.turret.aimFilterAlpha ?? 0.35, 0.01, 1);

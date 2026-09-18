@@ -91,9 +91,9 @@ export function buildHoodTable(p: Params, spec: RobotSpec, rpm: number, step = 4
     const muzzleZ = centreZ - spec.turret.muzzleOffset_m;
     const ap: Aperture = {
       nearRange: muzzleZ - lips.near.z,
-      nearHeight: lips.near.y + ballR,
+      nearHeight: lips.near.y + ballR * (p.hive.lipClearanceFrac ?? 1),
       farRange: muzzleZ - lips.far.z,
-      farHeight: lips.far.y - ballR,
+      farHeight: lips.far.y - ballR * (p.hive.lipClearanceFrac ?? 1),
     };
     if (ap.nearRange <= 0) continue;
 

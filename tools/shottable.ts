@@ -141,9 +141,9 @@ export function buildTable(
     const muzzle: Vec3 = [lips.x_m, spec.turret.muzzleHeight_m, centreZ - spec.turret.muzzleOffset_m];
     const aperture: Aperture = {
       nearRange: muzzle[2] - lips.near.z,
-      nearHeight: lips.near.y + ballR,
+      nearHeight: lips.near.y + ballR * (p.hive.lipClearanceFrac ?? 1),
       farRange: muzzle[2] - lips.far.z,
-      farHeight: lips.far.y - ballR,
+      farHeight: lips.far.y - ballR * (p.hive.lipClearanceFrac ?? 1),
     };
     if (aperture.nearRange <= 0) continue;
 

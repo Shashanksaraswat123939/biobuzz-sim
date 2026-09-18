@@ -19,6 +19,14 @@ export interface Params {
   hive: {
     /** Aim this fraction of the pocket's depth INSIDE the mouth. 0 aims at the lip. */
     aimDepthFrac?: number;
+    /**
+     * How much of a ball radius the solver keeps clear of each lip when it decides a
+     * trajectory threads the mouth. 1 is the geometric answer (the ball's centre passes a
+     * full radius inside each lip); the pocket as Rapier enforces it is more forgiving,
+     * because a ball that grazes a lip is deflected inward, not out. MEASURED by
+     * tools/bandcheck.ts. Scales the solved speed band and therefore the threading factor.
+     */
+    lipClearanceFrac?: number;
     massKg: number; cgOffset_m: Vec3; Ipivot_kgm2: number;
     pivotY_m: number; redX_m: number; blueX_m: number;
     restAngles_deg: [number, number]; frictionTorque_Nm: number;

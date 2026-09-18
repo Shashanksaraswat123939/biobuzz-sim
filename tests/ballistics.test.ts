@@ -91,7 +91,9 @@ describe('the world and the solver agree about a flight', () => {
     w.robot.place([mouth[0], spec.chassis.height_m / 2 + spec.chassis.clearance_m, z], Math.atan2(0, -1) * RAD);
     const brain = new BuiltinTeleOp(spec, table);
     let loaded = 0;
-    let track: { pts: Vec3[]; vel: Vec3; spin: number } | null = null;
+    // Boxed, because the assignment happens inside a closure and TypeScript's narrowing
+    // would otherwise decide it is still null at the loop condition.
+    const box: { track: { pts: Vec3[]; vel: Vec3; spin: number } | null } = { track: null };
     const step = (g: GamepadState) => {
       while (w.robot.heldBalls().length < 2 && loaded < staging.length) {
         if (!w.robot.preload(w.balls, w.balls.balls[loaded])) break;
@@ -100,19 +102,20 @@ describe('the world and the solver agree about a flight', () => {
       const before = w.robot.shots;
       w.setGamepads(g, emptyGamepad());
       w.step(brain.update(w.sensors(), g, w.seq));
-      if (!track && w.robot.shots > before) {
+      if (!box.track && w.robot.shots > before) {
         const b = w.balls.balls[w.robot.lastShotBallId];
         const v = b.body.linvel(), s = b.body.angvel();
-        track = { pts: [w.balls.pos(b)], vel: [v.x, v.y, v.z], spin: Math.hypot(s.x, s.y, s.z) };
-      } else if (track) {
-        track.pts.push(w.balls.pos(w.balls.balls[w.robot.lastShotBallId]));
+        box.track = { pts: [w.balls.pos(b)], vel: [v.x, v.y, v.z], spin: Math.hypot(s.x, s.y, s.z) };
+      } else if (box.track) {
+        box.track.pts.push(w.balls.pos(w.balls.balls[w.robot.lastShotBallId]));
       }
     };
     const arm = emptyGamepad(); step(arm); arm.dpad_up = true; step(arm);
     for (let f = 0; f < 150; f++) step(emptyGamepad());
-    for (let f = 0; f < 240 && (!track || track.pts.length < 90); f++) step({ ...emptyGamepad(), right_bumper: true });
-    expect(track, 'the robot fired').not.toBeNull();
-    const tr = track!;
+    for (let f = 0; f < 240 && (!box.track || box.track.pts.length < 90); f++) step({ ...emptyGamepad(), right_bumper: true });
+    const tr = box.track;
+    expect(tr, 'the robot fired').not.toBeNull();
+    if (!tr) return;
     // Where each integrator crosses the mouth's z plane, from the same first state.
     const crossZ = (pts: Vec3[]): number => {
       for (let i = 1; i < pts.length; i++) {

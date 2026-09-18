@@ -156,9 +156,9 @@ export function buildZone(
       const w = lips.facing;
       const aperture: Aperture = {
         nearRange: (w * (muzzleZ - lips.near.z)) / cosOff,
-        nearHeight: lips.near.y + ballR,
+        nearHeight: lips.near.y + ballR * (p.hive.lipClearanceFrac ?? 1),
         farRange: (w * (muzzleZ - lips.far.z)) / cosOff,
-        farHeight: lips.far.y - ballR,
+        farHeight: lips.far.y - ballR * (p.hive.lipClearanceFrac ?? 1),
       };
       const here = { x_in: x * M_TO_IN, z_in: z * M_TO_IN, range_in, offAxisDeg };
       if (aperture.nearRange <= 0 || aperture.farRange <= aperture.nearRange) { tally.aperture++; cells.push({ ...here, p: 0, why: 'behind' }); continue; }

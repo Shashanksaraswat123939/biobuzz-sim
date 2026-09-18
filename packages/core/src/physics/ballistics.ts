@@ -130,7 +130,10 @@ export function speedBand(
   spinPerSpeed: number,
   lo = 3,
   hi = 30,
-  steps = 216,
+  // 0.025 m/s. At 216 the step was 0.125 m/s, +-2.3% at 5.4 m/s -- coarser than the band it
+  // was resolving (+-3.5%), so the table's margins moved in jumps and the lip clearance
+  // could not be fitted to a measurement that reads to 1%.
+  steps = 1080,
 ): { lo: number; hi: number } | null {
   const ok = (speed: number): boolean => {
     const t = simulateShot(params, { ...base, speed, spin: spinPerSpeed * speed }, ap.farRange, 1 / 480, [ap.nearRange, ap.farRange]);

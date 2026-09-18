@@ -29,7 +29,8 @@ export async function main(argv: string[] = []): Promise<void> {
   brain.state.firing = !argv.includes('--nofire');
   const mouth = w.hives.red.upCellMouthWorld();
   const lim = w.geom.halfWidth_m - 0.40;
-  const R = 50 * 0.0254;
+  const ri = argv.indexOf('--range');
+  const R = (ri >= 0 ? Number(argv[ri + 1]) : 50) * 0.0254;
   const dz = Math.min(R, lim - mouth[2]);
   const dx = Math.sqrt(Math.max(0, R * R - dz * dz));
   const x = Math.min(mouth[0] + dx, lim);
@@ -38,13 +39,13 @@ export async function main(argv: string[] = []): Promise<void> {
   w.clock.start();
   const dt = 1 / 60;
   console.log(`\n  placed at (${(x * M_TO_IN).toFixed(0)}, ${(z * M_TO_IN).toFixed(0)}) in, mouth at (${(mouth[0] * M_TO_IN).toFixed(0)}, ${(mouth[2] * M_TO_IN).toFixed(0)})\n`);
-  console.log('     t   hop  shots   rng   open   rpm   aimErr   pLand   hold');
+  console.log('     t   hop  shots   rng   open   rpm   aimErr   pLand   pSpeed  exit m/s  band            hold');
   for (let i = 0; i < 20 * 60; i++) {
     const s = w.sensors();
     w.step(brain.update(s, still ? emptyGamepad() : driverInput(i * dt, true), i, dt));
     if (i % 60 === 0) {
       const st = brain.state;
-      console.log(`  ${(i * dt).toFixed(0).padStart(4)}   ${String(s.game.hopper).padStart(3)}  ${String(w.robot.shots).padStart(5)}  ${s.game.upCellRangeIn.toFixed(0).padStart(4)}  ${s.game.upCellOpenDeg.toFixed(0).padStart(5)}  ${s.game.flywheelRpm.toFixed(0).padStart(4)}  ${st.turretAimErrDeg.toFixed(1).padStart(6)}  ${st.pLand.toFixed(2).padStart(6)}   ${st.hold || '-'}`);
+      console.log(`  ${(i * dt).toFixed(0).padStart(4)}   ${String(s.game.hopper).padStart(3)}  ${String(w.robot.shots).padStart(5)}  ${s.game.upCellRangeIn.toFixed(0).padStart(4)}  ${s.game.upCellOpenDeg.toFixed(0).padStart(5)}  ${s.game.flywheelRpm.toFixed(0).padStart(4)}  ${st.turretAimErrDeg.toFixed(1).padStart(6)}  ${st.pLand.toFixed(2).padStart(6)}  ${st.pSpeed.toFixed(2).padStart(6)}  ${(spec.flywheel.k * spec.flywheel.r_fly_m * s.game.flywheelRpm * Math.PI / 30).toFixed(3).padStart(7)}   ${(() => { const r = table.lookup(s.game.upCellRangeIn - (spec.calibration?.rangeTrim_in ?? 0)); return `${(r.speedLo ?? 0).toFixed(3)}-${(r.speedHi ?? 0).toFixed(3)}`; })()}   ${st.hold || '-'}`);
     }
   }
   console.log(`\n  ended: ${w.robot.shots} shots, our CELL ${w.landedInUpCell('red')}, theirs ${w.landedInUpCell('blue')}\n`);

@@ -135,7 +135,7 @@ export interface ZoneCellData {
   z_in: number;
   p: number;
   /** Why there is no shot here. See tools/shotzone.ts. */
-  why?: 'behind' | 'tooFar' | 'tooNear' | 'noShot';
+  why?: 'behind' | 'tooFar' | 'tooNear' | 'noShot' | 'noRoom';
   k?: {
     lo: number; hi: number; sigma: number; pStay: number; halfLat: number;
     ux: number; uz: number; dist: number; commanded: number; cosEl: number;
@@ -402,11 +402,13 @@ export class Scene {
       // as a broken map. Grey means turn round; the reds mean move.
       g.fillStyle = p > 0
         ? `hsla(${(8 + 124 * t).toFixed(0)}, 72%, 46%, ${(0.20 + 0.42 * t).toFixed(3)})`
-        : c.why === 'behind'
-          ? 'rgba(70, 78, 90, 0.26)'              // the CELL does not open this way
-          : c.why === 'tooNear'
-            ? 'rgba(150, 96, 24, 0.22)'           // inside the table's closest row
-            : 'rgba(140, 32, 32, 0.20)';          // too far, or no launch fits
+        : c.why === 'noRoom'
+          ? 'rgba(20, 22, 26, 0.55)'              // the chassis does not fit this close to a wall
+          : c.why === 'behind'
+            ? 'rgba(70, 78, 90, 0.26)'            // the CELL does not open this way
+            : c.why === 'tooNear'
+              ? 'rgba(150, 96, 24, 0.22)'         // inside the table's closest row
+              : 'rgba(140, 32, 32, 0.20)';        // too far, or no launch fits
       g.fillRect(toPx(c.x_in * 0.0254) - w / 2, toPx(c.z_in * 0.0254) - w / 2, w, w);
     }
 
@@ -423,8 +425,8 @@ export class Scene {
    * velocity, so the green number falls as you drive -- which is what the map is for and
    * what a static picture cannot say.
    */
-  zoneTally(): { good: number; tooNear: number; tooFar: number; behind: number } {
-    const out = { good: 0, tooNear: 0, tooFar: 0, behind: 0 };
+  zoneTally(): { good: number; tooNear: number; tooFar: number; behind: number; noRoom: number } {
+    const out = { good: 0, tooNear: 0, tooFar: 0, behind: 0, noRoom: 0 };
     const z = this.zone;
     if (!z) return out;
     const cells = (this.zoneSide === 1 ? z.cellsTipped : z.cells) ?? z.cells;
@@ -432,7 +434,7 @@ export class Scene {
     const sigmaYaw = Math.tan((z.yawScatterDeg * Math.PI) / 180);
     for (const c of cells) {
       const k = c.k;
-      if (!k) { out[c.why === 'tooNear' ? 'tooNear' : c.why === 'behind' ? 'behind' : 'tooFar']++; continue; }
+      if (!k) { out[c.why === 'tooNear' ? 'tooNear' : c.why === 'behind' ? 'behind' : c.why === 'noRoom' ? 'noRoom' : 'tooFar']++; continue; }
       const horiz = k.commanded * k.cosEl;
       const required = Math.hypot(horiz * k.ux - v[0], horiz * k.uz - v[1]) / k.cosEl;
       let p = 0;

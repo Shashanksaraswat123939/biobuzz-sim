@@ -123,6 +123,7 @@ select {
 #legend .sw.near { background: rgb(150, 96, 24); }
 #legend .sw.far { background: rgb(140, 32, 32); }
 #legend .sw.behind { background: rgb(70, 78, 90); }
+#legend .sw.noroom { background: rgb(20, 22, 26); }
 #legend .cap { margin: 6px 0 0; font-size: 10px; line-height: 1.4; }
 
 /* ---------------------------------------------------------------- side panel */

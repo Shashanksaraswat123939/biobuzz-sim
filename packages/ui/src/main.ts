@@ -462,6 +462,7 @@ function paint(s: Snapshot): void {
     $('#lg-near').textContent = String(t.tooNear);
     $('#lg-far').textContent = String(t.tooFar);
     $('#lg-behind').textContent = String(t.behind);
+    $('#lg-noroom').textContent = String(t.noRoom);
   }
 
 

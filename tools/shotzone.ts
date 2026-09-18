@@ -43,7 +43,7 @@ export interface ZoneCell {
    * this way and no launch can enter, which is a different instruction to the driver than
    * `tooFar` or `tooNear` and used to be painted the same colour as both.
    */
-  why?: 'behind' | 'tooFar' | 'tooNear' | 'noShot';
+  why?: 'behind' | 'tooFar' | 'tooNear' | 'noShot' | 'noRoom';
   /** P(land) for a STATIONARY robot, which is what the tool's own printout reports. */
   p: number;
   /**
@@ -95,7 +95,18 @@ export function buildZone(
   const minR = table.rows[0].range_in;
   const maxR = table.rows[table.rows.length - 1].range_in;
 
-  const limit = g.halfWidth_m - 0.35;
+  // THE MAP COVERS THE WHOLE FIELD. It used to stop at halfWidth - 0.35 m, a 13.8 in inset
+  // copied from another tool, so the outer fourteen inches on every side were not painted at
+  // all -- and an unpainted square looks exactly like a square with no shot. That band is
+  // where a robot hugging the wall actually is, so it is the last place the map should go
+  // quiet, and it was reported as "why is this not in the green zone".
+  //
+  // The band is real, but the reason is different: a robot cannot put its CENTRE within its
+  // own half-diagonal of a wall at any heading. That comes from the chassis rather than from
+  // a constant, and it is drawn now instead of left blank.
+  const c0 = spec.chassis;
+  const noRoom_m = Math.hypot(c0.width_m, c0.length_m) / 2;
+  const limit = g.halfWidth_m;
   const cells: ZoneCell[] = [];
   for (let z = -limit; z <= limit; z += inches(step_in)) {
     for (let x = -limit; x <= limit; x += inches(step_in)) {
@@ -114,6 +125,12 @@ export function buildZone(
       // from them: one says turn round, one says drive closer, one says drive nearer still.
       const blank = (x_in: number, z_in: number, why: ZoneCell['why']): ZoneCell =>
         ({ x_in, z_in, range_in, offAxisDeg: 90, p: 0, why });
+      // No room for the robot at all: its centre cannot get this close to a wall.
+      if (Math.abs(x) > g.halfWidth_m - noRoom_m || Math.abs(z) > g.halfWidth_m - noRoom_m) {
+        tally.noRoom++;
+        cells.push(blank(x * M_TO_IN, z * M_TO_IN, 'noRoom'));
+        continue;
+      }
       if (range_in < minR || range_in > maxR) { tally.band++; cells.push(blank(x * M_TO_IN, z * M_TO_IN, range_in < minR ? 'tooNear' : 'tooFar')); continue; }
       const row = table.lookup(range_in);
       if (row.hoodDeg === undefined || row.rpm <= 0) { tally.norow++; cells.push(blank(x * M_TO_IN, z * M_TO_IN, 'tooFar')); continue; }
@@ -204,7 +221,7 @@ const trim = (c: ZoneCell) => ({
   },
 });
 
-const tally = { band: 0, norow: 0, behind: 0, aperture: 0, unsolved: 0, toofast: 0, ok: 0 };
+const tally = { band: 0, norow: 0, behind: 0, aperture: 0, unsolved: 0, toofast: 0, noRoom: 0, ok: 0 };
 
 export async function main(argv: string[] = []): Promise<void> {
   const i = argv.indexOf('--step');

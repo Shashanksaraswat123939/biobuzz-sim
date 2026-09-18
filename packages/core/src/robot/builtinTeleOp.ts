@@ -276,6 +276,20 @@ export interface TeleOpState {
   hold: string;
   targetRpm: number;
   turretErrDeg: number;
+  /**
+   * THE POINTING ERROR, which is not the servo error above.
+   *
+   * `turretErrDeg` is command minus axis, and the command is `aimHold` -- a one-pole filter
+   * on the solution. A filter lags whatever it is fed, so on a chassis that is yawing the
+   * command trails the true bearing and the axis sits neatly on a command that is itself
+   * wrong. The gate was reading that: it saw under 3 deg and called the shot aimed while the
+   * muzzle was pointing somewhere else entirely. Measured in tools/movingfire.ts as a
+   * +37 +- 57 cm LATERAL BIAS on the wobbling case, on a field whose two CELLs are 65 cm
+   * apart -- which is the whole of the 'it puts them in the other alliance's hive' report.
+   *
+   * This one is the raw solution minus the axis, so the lag is inside it.
+   */
+  turretAimErrDeg: number;
   /** Hood angle minus the angle this shot needs, degrees. The lead moves it every loop. */
   hoodErrDeg: number;
   /**
@@ -322,7 +336,7 @@ export interface TeleOpState {
 export const newTeleOpState = (): TeleOpState => ({
   autoAim: true, firing: false,
   turretManualDeg: 0, flywheelOn: false, speedScale: 1,
-  ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
+  ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, turretAimErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
   lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, pSpeed: -1, pStayNow: -1, pAim: -1, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0,
 });
@@ -570,6 +584,8 @@ export class BuiltinTeleOp {
     st.leadDeg = wrapPi((lead.azimuthDeg - azimuth) * DEG) * RAD;
     st.leadAzDeg = lead.azimuthDeg;
     let turretDeg: number;
+    /** The unfiltered solution, kept so the gate can see the filter's own lag. */
+    let aimRawDeg: number | null = null;
     if (st.autoAim) {
       // Lead-corrected bearing to the up CELL, relative to the robot's heading.
       // The lateral trim also absorbs a turret encoder zero that is a degree out, which
@@ -588,6 +604,7 @@ export class BuiltinTeleOp {
       // so the axis stops rather than creeping: below the launch yaw scatter there is nothing
       // to chase, because a tenth of a degree of aim is invisible next to a degree of scatter.
       const raw = lead.azimuthDeg - cal.turretTrim_deg;
+      aimRawDeg = raw;
       const dead = this.spec.turret.aimDeadband_deg ?? 0.25;
       if (Math.abs(wrapPi((raw - this.aimHold) * DEG) * RAD) > dead) {
         const a = clamp(this.spec.turret.aimFilterAlpha ?? 0.35, 0.01, 1);
@@ -687,6 +704,9 @@ export class BuiltinTeleOp {
       st.turretPastStopDeg = 0;
     }
     st.turretErrDeg = wrapPi((turretDeg - turretActualDeg) * DEG) * RAD;
+    // wrapPi takes the short way round, so this is the pointing error whichever wrap the
+    // axis is sitting on -- exactly the quantity the gate should have been using.
+    st.turretAimErrDeg = aimRawDeg === null ? st.turretErrDeg : wrapPi((aimRawDeg - turretActualDeg) * DEG) * RAD;
     if (this.spec.turret.enabled) {
       motors.turret = { mode: 'RUN_TO_POSITION', target: Math.round(turretDeg * ticksPerDeg), power: 1 };
     }
@@ -778,7 +798,7 @@ export class BuiltinTeleOp {
     // in at 40 in and 4 in at 70 in, against a half-width of 8 in.
     const rangeM = inches(s.game.upCellRangeIn);
     const sigmaLat = rangeM * Math.tan(f.scatter.yaw_deg * DEG);
-    const meanLat = rangeM * Math.tan(st.turretErrDeg * DEG);
+    const meanLat = rangeM * Math.tan(st.turretAimErrDeg * DEG);
     const pAim = row.halfLat_m === undefined
       ? 1
       : pThread(-row.halfLat_m, row.halfLat_m, meanLat, sigmaLat);
@@ -934,7 +954,7 @@ export class BuiltinTeleOp {
     st.accelBudget = Number.isFinite(halfBand) && halfBand > 0 ? dSpeedByRelease / halfBand : 0;
     const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
     st.readyCount = atSpeed ? st.readyCount + 1 : 0;
-    st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretErrDeg) < 3
+    st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretAimErrDeg) < 3
       && st.turretPastStopDeg < 0.5 && !s.game.hiveTipping && mouthOpen && accelOk && yawOk && aimPossible && leadOk;
 
     st.hold = !wheelOn ? ''
@@ -946,7 +966,7 @@ export class BuiltinTeleOp {
       : lead.outrun > 0.02 ? `moving sideways faster than the ball flies: ${lead.outrun.toFixed(2)} m/s over - SLOW DOWN or back off`
       : !aimPossible ? `no launch fits: the hood is ${lead.clamped.toFixed(0)} deg short of the shot this motion needs`
       : st.turretPastStopDeg >= 0.5 ? `turret cannot reach, ${st.turretPastStopDeg.toFixed(0)} deg past its stop`
-      : Math.abs(st.turretErrDeg) >= 3 ? `turret ${st.turretErrDeg.toFixed(0)} deg off`
+      : Math.abs(st.turretAimErrDeg) >= 3 ? `turret ${st.turretAimErrDeg.toFixed(0)} deg off`
       // No cell is a real answer, not a failure: there is no hood angle that scores from here
       // at this closing speed, and saying so beats holding with an unexplained low number.
       : usingHood && !cell ? 'no shot from here at this speed'
@@ -1018,7 +1038,7 @@ export class BuiltinTeleOp {
     // were the bare grip wheel's doing -- one ball took 210 rpm out of it -- and putting a
     // real flywheel behind the wheel cut that to 70 and took the wild shots with it. The two
     // that remain here are geometric, smooth over the pulse, and cannot be fixed by a part.
-    const stillGood = st.turretPastStopDeg < 0.5 && Math.abs(st.turretErrDeg) < 3;
+    const stillGood = st.turretPastStopDeg < 0.5 && Math.abs(st.turretAimErrDeg) < 3;
     const mayFire = st.pulsing && stillGood;
     motors.transfer = { mode: 'RUN_WITHOUT_ENCODER', power: wheelOn ? 1 : 0 };
 
@@ -1028,8 +1048,8 @@ export class BuiltinTeleOp {
         ? `spinning up ${rpm.toFixed(0)}/${st.targetRpm.toFixed(0)}`
         : s.game.hiveTipping
           ? 'hive is tipping - hold'
-          : Math.abs(st.turretErrDeg) >= 3
-            ? `turret slewing ${st.turretErrDeg.toFixed(0)} deg`
+          : Math.abs(st.turretAimErrDeg) >= 3
+            ? `turret slewing ${st.turretAimErrDeg.toFixed(0)} deg`
             : s.game.hopper === 0
               ? 'hopper empty'
               : st.firing
@@ -1055,6 +1075,7 @@ export class BuiltinTeleOp {
         ['margin', `${(row.margin * 100).toFixed(1)}%`],
         ['lead deg', st.leadDeg.toFixed(1)],
         ['turret err', st.turretErrDeg.toFixed(1)],
+        ['aim err', st.turretAimErrDeg.toFixed(1)],
         ['past stop', st.turretPastStopDeg.toFixed(1)],
         ['hood err', Number.isFinite(st.hoodErrDeg) ? st.hoodErrDeg.toFixed(1) : '-'],
       ],

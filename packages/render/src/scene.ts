@@ -403,7 +403,10 @@ export class Scene {
       g.fillStyle = p > 0
         ? `hsla(${(8 + 124 * t).toFixed(0)}, 72%, 46%, ${(0.20 + 0.42 * t).toFixed(3)})`
         : c.why === 'noRoom'
-          ? 'rgba(20, 22, 26, 0.55)'              // the chassis does not fit this close to a wall
+          // A PALE WASH, not near-black. This was rgb(20,22,26), which is within a few counts
+          // of the tile colour underneath it -- so the band was painted, measurably, and
+          // still read as "the map stops here". A dead square has to look MARKED, not dark.
+          ? 'rgba(168, 176, 190, 0.30)'           // the chassis does not fit this close to a wall
           : c.why === 'behind'
             ? 'rgba(70, 78, 90, 0.26)'            // the CELL does not open this way
             : c.why === 'tooNear'

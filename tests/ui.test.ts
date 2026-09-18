@@ -96,15 +96,15 @@ describe('the pad-to-brain remap', () => {
     expect(remap(pad({ left_stick_y: -1, right_trigger: 1 }), none).left_stick_y).toBeCloseTo(-1, 6);
   });
 
-  it('R1 is the trigger the brain reads, and never the auto-fire latch', () => {
+  it('R1 is the auto-fire latch, and never the hold-to-fire input as well', () => {
     const g = remap(pad({ right_bumper: true }), none);
-    expect(g.b, 'R1 must arrive as the hold-to-fire input').toBe(true);
-    expect(g.right_bumper, 'R1 must not toggle the latch as well').toBe(false);
+    expect(g.right_bumper, 'R1 must arrive as the latch').toBe(true);
+    expect(g.b, 'R1 must not fire by hand as well').toBe(false);
   });
 
-  it('L1 toggles auto-aim and L3 the auto-fire latch', () => {
+  it('L1 toggles auto-aim and L3 fires by hand', () => {
     expect(remap(pad({ left_bumper: true }), none).x, 'L1 is auto-aim').toBe(true);
-    expect(remap(pad({ left_stick_button: true }), none).right_bumper, 'L3 is the auto-fire latch').toBe(true);
+    expect(remap(pad({ left_stick_button: true }), none).b, 'L3 is hold-to-fire').toBe(true);
     // And pressing the face buttons must not reach either of them.
     const plain = remap(pad({ x: true, b: true }), none);
     expect(plain.x).toBe(false);

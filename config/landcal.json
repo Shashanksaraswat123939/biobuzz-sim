@@ -1,59 +1,69 @@
 {
  "_about": "MEASURED by tools/landcal.ts: the mapping from the model's raw P(land) score to the frequency with which shots at that score ACTUALLY land. BuiltinTeleOp applies it so that flywheel.minLandProb is a real probability instead of a score.",
- "_method": "839 settled shots over 6 seeds, 3 ranges and 4 driving states (still, strafing, shuttling, fast wobble) with the gate open. Bins forced monotone. The app shoots on the move, so the curve has to have been fitted on the move.",
- "generated": "2026-09-18T12:24:24.409Z",
- "samples": 839,
- "ceiling": 0.8433734939759037,
+ "_method": "956 settled shots over 4 seeds, 6 ranges and 4 driving states (still, strafing, shuttling, fast wobble) with the gate open. Bins forced monotone. The app shoots on the move, so the curve has to have been fitted on the move.",
+ "generated": "2026-09-18T16:07:52.294Z",
+ "samples": 956,
+ "ceiling": 0.8875,
  "points": [
   {
-   "score": 0.20888649474206994,
-   "observed": 0.8333333333333334,
-   "n": 84
+   "score": 0.08149713963450968,
+   "observed": 0.775,
+   "n": 80
   },
   {
-   "score": 0.5049639107723349,
-   "observed": 0.8333333333333334,
-   "n": 84
+   "score": 0.3213547653292179,
+   "observed": 0.8625,
+   "n": 80
   },
   {
-   "score": 0.6230765378892189,
-   "observed": 0.8333333333333334,
-   "n": 84
+   "score": 0.4929897792719644,
+   "observed": 0.8625,
+   "n": 80
   },
   {
-   "score": 0.70705523327891,
-   "observed": 0.8333333333333334,
-   "n": 84
+   "score": 0.572008789810383,
+   "observed": 0.8625,
+   "n": 80
   },
   {
-   "score": 0.7229034926281285,
-   "observed": 0.8333333333333334,
-   "n": 84
+   "score": 0.6284212907764398,
+   "observed": 0.8625,
+   "n": 80
   },
   {
-   "score": 0.7725399342460242,
-   "observed": 0.8333333333333334,
-   "n": 84
+   "score": 0.6826737241834706,
+   "observed": 0.8625,
+   "n": 80
   },
   {
-   "score": 0.7762576445423923,
-   "observed": 0.8333333333333334,
-   "n": 84
+   "score": 0.7118627662416258,
+   "observed": 0.8625,
+   "n": 80
   },
   {
-   "score": 0.7777433234642951,
-   "observed": 0.8333333333333334,
-   "n": 84
+   "score": 0.7187808066858917,
+   "observed": 0.8625,
+   "n": 80
   },
   {
-   "score": 0.7906086814680803,
-   "observed": 0.8333333333333334,
-   "n": 84
+   "score": 0.7245180455323305,
+   "observed": 0.8625,
+   "n": 80
   },
   {
-   "score": 0.9183598395805475,
-   "observed": 0.8433734939759037,
-   "n": 83
+   "score": 0.7520801997094128,
+   "observed": 0.8875,
+   "n": 80
+  },
+  {
+   "score": 0.7938627392027493,
+   "observed": 0.8875,
+   "n": 80
+  },
+  {
+   "score": 0.8988012785848617,
+   "observed": 0.8875,
+   "n": 76
   }
  ]
 }

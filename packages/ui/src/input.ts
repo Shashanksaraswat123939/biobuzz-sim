@@ -73,11 +73,13 @@ export function readKeyboard(keys: Keys): GamepadState & { paddles: Paddles } {
   g.b = on('e');
   g.y = keys.pressed.has('r');
   g.a = keys.pressed.has('f');
-  g.right_bumper = on(' ');    // R1: fire
+  g.right_bumper = on(' ');    // R1: auto-fire latch
   g.left_bumper = keys.pressed.has('t');   // L1: auto-aim toggle
   g.dpad_up = keys.pressed.has('v');       // pre-spin the flywheel
   g.dpad_down = on('z');                   // reverse the intake
-  g.left_stick_button = keys.pressed.has('g');  // auto-fire latch
+  // L3 is a HOLD now that it fires by hand: `pressed` is a one-frame pulse, which would
+  // give a single ball per press however long the key is down.
+  g.left_stick_button = on('g');                // L3: fire while held
   // Field-centric is a HOLD, and it used to be on Ctrl. A modifier is the one key whose
   // keyup you reliably miss -- Ctrl+R, Ctrl+Shift+I, alt-tab -- and a missed keyup leaves
   // the drive frame silently stuck in the mode you are not in.
@@ -96,8 +98,8 @@ export function readKeyboard(keys: Keys): GamepadState & { paddles: Paddles } {
  *
  *   left stick   translate              right stick  the VIEW (never the robot)
  *   R2 / L2      forward / back         X / B        turn left / right
- *   Y / A        speed gear up / down   R1           fire
- *   L1           auto-aim toggle        L3           auto-fire latch
+ *   Y / A        speed gear up / down   R1           auto-fire latch
+ *   L1           auto-aim toggle        L3           fire while held
  *   M1 / M2      turret anti/clockwise  R3           hold for field-centric
  *   D-pad up     pre-spin the flywheel  D-pad down   reverse the intake
  *   D-pad left/right are M1 and M2's fallback on a pad without paddles.
@@ -117,8 +119,12 @@ export function remap(phys: GamepadState, pad: Paddles): GamepadState {
     left_stick_y: throttle,
     right_stick_x: (phys.b ? 1 : 0) - (phys.x ? 1 : 0),  // B right, X left
     x: phys.left_bumper,             // L1: auto-aim toggle
-    right_bumper: phys.left_stick_button,   // L3: auto-fire latch
-    b: phys.right_bumper,            // R1: fire while held
+    // R1 IS THE LATCH. It is the button a thumb rests on, and the shooter's honest rate is
+    // set by the transfer cycle, not by how fast you can tap -- so the trigger that felt
+    // like the main one was the one that could not keep up with the hardware. Holding it
+    // by hand is still there, moved to L3.
+    right_bumper: phys.right_bumper,        // R1: auto-fire latch
+    b: phys.left_stick_button,              // L3: fire while held
     left_bumper: false,              // the crawl button is gone; the speed gear replaced it
     left_trigger: phys.dpad_down ? 1 : 0,   // D-pad down: reverse the intake
     left_stick_button: pad.rezero,          // keyboard only: re-zero the field frame

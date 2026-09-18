@@ -39,9 +39,9 @@ export const CONTROLS: ControlGroup[] = [
     title: 'Shooting',
     blurb: 'The intake always runs, like a real one, and it rejects the opponent’s NECTAR by reversing — G408 is enforced by the roller, not by a penalty. The gate opens itself when a shot is cleared, so there is nothing to arm by hand.',
     items: [
-      { key: 'Space', pad: 'R1', what: 'Fire, while held', why: 'Your own trigger. Balls go as fast as the shooter can honestly cycle them: the wheel inside its tolerance band, the turret on target, and the CELL mouth open towards you. Let go and it stops.' },
+      { key: 'Space', pad: 'R1', what: 'Auto-fire on/off', why: 'A latch, not a trigger: leave it on and a ball goes every time the shot clears the gate — the wheel inside its tolerance band, the turret on target, and the CELL mouth open towards you — paced by the transfer cycle rather than your thumb. Also a button on the action bar.' },
       { key: 'T', pad: 'L1', what: 'Auto-aim on/off', why: 'On: the turret and hood solve for your up CELL every loop, including a lead for the robot’s own velocity, so you can shoot while driving across the shot. Off: the turret holds where you last put it.' },
-      { key: 'G', pad: 'L3', what: 'Auto-fire on/off', why: 'A latch, not a trigger: leave it on and a ball goes every time the shot clears the gate, paced by the transfer cycle time rather than your thumb. Also a button on the action bar.' },
+      { key: 'G', pad: 'L3', what: 'Fire, while held', why: 'By hand, for when you want exactly one. Same gate as the latch; let go and it stops.' },
       { key: ', .', pad: 'M1 / M2', what: 'Nudge the turret anticlockwise and clockwise', why: 'By hand, when auto-aim is off. Slews at 100 °/s; the axis has its own acceleration limit, so it does not snap. On a pad without paddles these fall back to D-pad left and right.' },
       { key: 'V', pad: 'D-pad ↑', what: 'Pre-spin the flywheel', why: 'Optional. Brings the wheel up before you commit, so the first shot does not wait about three seconds for spin-up. Firing does this anyway.' },
       { key: 'Z', pad: 'D-pad ↓', what: 'Reverse the intake', why: 'Spits out whatever is at the mouth. The same traction model that pulls a ball in pushes it back out; there is no separate eject.' },

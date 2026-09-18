@@ -192,6 +192,8 @@ export class Scene {
    */
   private opponentGroup: THREE.Group | null = null;
   private opponentTurret: THREE.Group | null = null;
+  private opponentHood: THREE.Mesh | null = null;
+  private opponentFlywheel: THREE.Mesh | null = null;
   private turretGroup = new THREE.Group();
   private hoodMesh!: THREE.Mesh;
   private wheelMeshes: THREE.Object3D[] = [];
@@ -983,41 +985,45 @@ export class Scene {
    * still one box plus the tyre model, which is what `robot.json` describes.
    */
   /** Chassis, a nose showing which way the intake faces, and a turret stick. */
+  /**
+   * THE OPPONENT IS THE SAME ROBOT, in the other alliance's colour.
+   *
+   * It used to be a box with a nose and a stick, on the reasoning that you only need to
+   * see where it is. That is wrong for practice: most of reading an opponent is seeing
+   * which way its INTAKE points (where it is about to go) and which way its TURRET points
+   * (whether it is about to shoot), and a stick shows neither convincingly.
+   */
   private buildOpponent(): void {
-    const c = this.robotSpec.chassis;
-    // The opponent is whichever alliance you are not.
-    const colour = this.alliance === 'red' ? COL.blue : COL.red;
-    const g = new THREE.Group();
-    const body = new THREE.MeshStandardMaterial({ color: colour, roughness: 0.55, metalness: 0.15 });
-    const box = new THREE.Mesh(new THREE.BoxGeometry(c.width_m, c.height_m, c.length_m), body);
-    box.position.y = c.height_m / 2;
-    g.add(box);
-    // The nose is the INTAKE end: a wedge across the front, at mouth height.
-    const nose = new THREE.Mesh(
-      new THREE.BoxGeometry(c.width_m * 0.8, 0.05, 0.05),
-      new THREE.MeshStandardMaterial({ color: 0xf2f5f8, roughness: 0.4 }),
-    );
-    nose.position.set(0, 0.07, c.length_m / 2 + 0.02);
-    g.add(nose);
-    const t = new THREE.Group();
-    t.position.y = c.height_m + 0.02;
-    const barrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.02, 0.02, 0.22, 10),
-      new THREE.MeshStandardMaterial({ color: 0xd8dde3, roughness: 0.4, metalness: 0.5 }),
-    );
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.z = 0.11;
-    t.add(barrel);
-    g.add(t);
-    this.opponentTurret = t;
-    this.opponentGroup = g;
-    this.scene.add(g);
+    const b = this.buildChassis(this.alliance === 'red' ? COL.blue : COL.red);
+    this.opponentGroup = b.group;
+    this.opponentTurret = b.turret;
+    this.opponentHood = b.hood;
+    this.opponentFlywheel = b.flywheel;
+    this.scene.add(b.group);
   }
 
-  private buildRobot(): void {
+  /**
+   * ONE ROBOT BUILDER, USED TWICE. The player had rails, panels, a real intake, a hood whose
+   * angle IS the launch elevation and a flywheel you can watch turn; the opponent was a
+   * coloured box with a nose and a stick. You cannot practise against a box -- half of
+   * reading an opponent is seeing which way its intake and its turret point.
+   *
+   * So the model is built once and coloured twice. Everything the player has, the opponent
+   * has, because it is the same geometry driven by the same snapshot fields.
+   */
+  private buildChassis(bodyColour: number): {
+    group: THREE.Group; turret: THREE.Group; hood: THREE.Mesh;
+    flywheel: THREE.Mesh; roller: THREE.Group; wheels: THREE.Object3D[];
+  } {
+    const _group = new THREE.Group();
+    const _turret = new THREE.Group();
+    let _hood!: THREE.Mesh;
+    let _flywheel!: THREE.Mesh;
+    let _roller!: THREE.Group;
+    let _wheels: THREE.Object3D[] = [];
     const c = { L: 0.43, W: 0.43, H: 0.30 };
     const frame = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.5, roughness: 0.45 });
-    const panel = new THREE.MeshStandardMaterial({ color: COL.robot, metalness: 0.2, roughness: 0.4, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+    const panel = new THREE.MeshStandardMaterial({ color: bodyColour, metalness: 0.2, roughness: 0.4, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
     const rubber = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 });
     const roller = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.7 });
     const steel = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.7, roughness: 0.3 });
@@ -1027,7 +1033,7 @@ export class Scene {
       for (const [w, d, ox, oz] of [[c.W, 0.03, 0, c.L / 2], [c.W, 0.03, 0, -c.L / 2], [0.03, c.L, c.W / 2, 0], [0.03, c.L, -c.W / 2, 0]] as const) {
         const rail = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, d), frame);
         rail.position.set(ox, (sy * c.H) / 2 - sy * 0.025, oz);
-        this.robotGroup.add(rail);
+        _group.add(rail);
       }
     }
     // side panels so it reads as a body, not a cage
@@ -1035,11 +1041,11 @@ export class Scene {
       const side = new THREE.Mesh(new THREE.PlaneGeometry(c.L, c.H * 0.8), panel);
       side.position.set((sx * c.W) / 2, 0, 0);
       side.rotation.y = Math.PI / 2;
-      this.robotGroup.add(side);
+      _group.add(side);
     }
 
     // four mecanum wheels, with rollers at 45 deg so the direction reads
-    this.wheelMeshes = [];
+    _wheels = [];
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
         const hub = new THREE.Group();
@@ -1057,8 +1063,8 @@ export class Scene {
           hub.add(r);
         }
         hub.position.set((sx * (c.W + 0.03)) / 2, -c.H / 2 + 0.028, (sz * 0.33) / 2);
-        this.robotGroup.add(hub);
-        this.wheelMeshes.push(hub);
+        _group.add(hub);
+        _wheels.push(hub);
       }
     }
 
@@ -1085,19 +1091,19 @@ export class Scene {
     const mouthW = ip.mouth.width_m;
     const binFloorY = -c.H / 2 + 0.012;                  // robot.ts: -hh + t * 1.5
     const intake = new THREE.Group();
-    this.intakeRoller = new THREE.Group();
+    _roller = new THREE.Group();
     // Laid over ONCE, here, where nothing animates it. update() turns the group about its
     // own X, which after this is the axle.
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, mouthW + 0.04, 6), steel);
     shaft.rotation.z = Math.PI / 2;
-    this.intakeRoller.add(shaft);
+    _roller.add(shaft);
     const wheels = 5;
     for (let i = 0; i < wheels; i++) {
       const x = ((i - (wheels - 1) / 2) / Math.max(1, wheels - 1)) * (mouthW - 0.05);
       const w = new THREE.Mesh(new THREE.CylinderGeometry(rollerR, rollerR, 0.030, 16), roller);
       w.rotation.z = Math.PI / 2;
       w.position.x = x;
-      this.intakeRoller.add(w);
+      _roller.add(w);
       // TREADS, proud of the rim. A coaxial flange was the first attempt and it is invisible
       // for the same reason the bare cylinder was: anything with the axle for an axis of
       // symmetry looks identical at every angle, so the part reads as dead however fast it is
@@ -1111,10 +1117,10 @@ export class Scene {
         // Z to the tangent, which is a tread lying ON the rim; Rx(-a) leaves the long axis
         // pointing neither way, and three of those read as an auger rather than a wheel.
         tread.rotation.x = a;
-        this.intakeRoller.add(tread);
+        _roller.add(tread);
       }
     }
-    intake.add(this.intakeRoller);
+    intake.add(_roller);
 
     // The mouth: two side cheeks, and nothing under the roller. NO RAMP -- there was a tilted
     // plate here reaching down and forward, and `robot.ts` deletes the physical one
@@ -1129,17 +1135,17 @@ export class Scene {
     // Sit the roller so it just clears the bin floor: that is the squeeze `squeeze_N` stands
     // for, and it is why the lift term in stepIntake can carry a ball over the floor's edge.
     intake.position.set(0, binFloorY + rollerR, c.L / 2 + ip.mouth.depth_m / 2);
-    this.robotGroup.add(intake);
+    _group.add(intake);
 
     // a nose stripe, so facing is unmistakable from the top camera
     const nose = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.012, 0.04), new THREE.MeshBasicMaterial({ color: 0xffffff }));
     nose.position.set(0, c.H / 2 + 0.008, c.L / 2 - 0.04);
-    this.robotGroup.add(nose);
+    _group.add(nose);
 
     // hopper: an open bin you can see the stack of balls sitting in
     const bin = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.20, 0.24), new THREE.MeshStandardMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.22, side: THREE.DoubleSide }));
     bin.position.set(0, -c.H / 2 + 0.12, -0.02);
-    this.robotGroup.add(bin);
+    _group.add(bin);
 
     // TURRET, shaped like a real FTC shooter rather than a cannon.
     //
@@ -1154,13 +1160,13 @@ export class Scene {
 
     // lazy-susan: a bearing race with visible teeth, then the deck it turns
     const race = new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.115, 0.012, 32), dark);
-    this.turretGroup.add(race);
+    _turret.add(race);
     const teeth = new THREE.Mesh(new THREE.CylinderGeometry(0.108, 0.108, 0.016, 48), alum);
     teeth.position.y = 0.012;
-    this.turretGroup.add(teeth);
+    _turret.add(teeth);
     const deck = new THREE.Mesh(new THREE.CylinderGeometry(0.100, 0.100, 0.008, 24), alum);
     deck.position.y = 0.024;
-    this.turretGroup.add(deck);
+    _turret.add(deck);
 
     // side plates: the load-bearing part of every shooter ever built
     const FLY_Y = 0.085;       // flywheel axle height above the turret origin
@@ -1179,37 +1185,37 @@ export class Scene {
       const plate = new THREE.Mesh(new THREE.ExtrudeGeometry(plateShape, { depth: 0.004, bevelEnabled: false }), alum);
       plate.rotation.y = Math.PI / 2;
       plate.position.set(side * 0.048, 0.028, 0);
-      this.turretGroup.add(plate);
+      _turret.add(plate);
     }
 
     // the flywheel: a grippy wheel on a visible axle, between the plates
-    this.flywheelMesh = new THREE.Mesh(new THREE.CylinderGeometry(FLY_R, FLY_R, 0.055, 24), grip);
-    this.flywheelMesh.rotation.z = Math.PI / 2;
-    this.flywheelMesh.position.set(0, FLY_Y, 0);
+    _flywheel = new THREE.Mesh(new THREE.CylinderGeometry(FLY_R, FLY_R, 0.055, 24), grip);
+    _flywheel.rotation.z = Math.PI / 2;
+    _flywheel.position.set(0, FLY_Y, 0);
     // four rim markers: a plain black wheel spinning at 4000 rpm reads as stationary
     // without something on it to watch.
     for (let k = 0; k < 4; k++) {
       const a = (k / 4) * Math.PI * 2;
       const mark = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.058, 0.009), alum);
       mark.position.set(Math.cos(a) * FLY_R * 0.82, 0, Math.sin(a) * FLY_R * 0.82);
-      this.flywheelMesh.add(mark);
+      _flywheel.add(mark);
     }
-    this.turretGroup.add(this.flywheelMesh);
+    _turret.add(_flywheel);
     const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.115, 8), steel);
     axle.rotation.z = Math.PI / 2;
     axle.position.set(0, FLY_Y, 0);
-    this.turretGroup.add(axle);
+    _turret.add(axle);
 
     // feed ramp up from the hopper, so you can see where the ball comes from
     const ramp = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.003, 0.13), alum);
     ramp.position.set(0, 0.048, -0.055);
     ramp.rotation.x = 0.45;
-    this.turretGroup.add(ramp);
+    _turret.add(ramp);
 
     // HOOD: a curved wrap concentric with the flywheel, held one ball-radius off it. It
     // pivots about the flywheel axis, and the ball leaves tangentially at its lip -- so the
     // hood angle you see IS the launch elevation.
-    this.hoodMesh = new THREE.Group() as unknown as THREE.Mesh;
+    _hood = new THREE.Group() as unknown as THREE.Mesh;
     // The wrap spans local angle a in [0, WRAP], measured from +Z (straight ahead) up and
     // over the wheel, so a = 0 IS the exit lip. Rotating the group by -elevation about X
     // then puts the lip at exactly the elevation the shot leaves at -- the hood you see is
@@ -1221,28 +1227,39 @@ export class Scene {
       new THREE.MeshStandardMaterial({ color: 0xd7dde4, metalness: 0.45, roughness: 0.35, side: THREE.DoubleSide }),
     );
     wrap.rotation.z = Math.PI / 2;                 // cylinder axis Y -> X, cross-section into YZ
-    this.hoodMesh.add(wrap);
+    _hood.add(wrap);
     // edge ribs: what stops a real sheet hood flexing, and they make the curve read
     for (const sx of [-1, 1]) {
       const rib = new THREE.Mesh(new THREE.TorusGeometry(gap, 0.004, 6, 26, WRAP), alum);
       rib.rotation.y = -Math.PI / 2;               // torus XY plane -> YZ, angle from +Z
       rib.position.x = sx * 0.031;
-      this.hoodMesh.add(rib);
+      _hood.add(rib);
     }
     // the lip the ball leaves over, tangent to the wrap at a = 0
     const exit = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.026, 0.004), new THREE.MeshStandardMaterial({ color: COL.pollen, roughness: 0.5 }));
     exit.position.set(0, -0.010, gap);
-    this.hoodMesh.add(exit);
+    _hood.add(exit);
     // the link that sets the angle, from the deck up to the back of the wrap
     const link = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.08, 6), steel);
     link.position.set(0.042, Math.sin(WRAP) * gap * 0.5 - 0.03, Math.cos(WRAP) * gap * 0.5);
     link.rotation.x = 0.7;
-    this.hoodMesh.add(link);
-    this.hoodMesh.position.set(0, FLY_Y, 0);
-    this.turretGroup.add(this.hoodMesh);
+    _hood.add(link);
+    _hood.position.set(0, FLY_Y, 0);
+    _turret.add(_hood);
 
-    this.turretGroup.position.set(0, c.H / 2 - 0.02, 0);
-    this.robotGroup.add(this.turretGroup);
+    _turret.position.set(0, c.H / 2 - 0.02, 0);
+    _group.add(_turret);
+    return { group: _group, turret: _turret, hood: _hood, flywheel: _flywheel, roller: _roller, wheels: _wheels };
+  }
+
+  private buildRobot(): void {
+    const b = this.buildChassis(COL.robot);
+    this.robotGroup = b.group;
+    this.turretGroup = b.turret;
+    this.hoodMesh = b.hood;
+    this.flywheelMesh = b.flywheel;
+    this.intakeRoller = b.roller;
+    this.wheelMeshes = b.wheels;
     this.scene.add(this.robotGroup);
   }
 
@@ -1300,6 +1317,10 @@ export class Scene {
       this.opponentGroup!.position.set(o.p[0], o.p[1], o.p[2]);
       this.opponentGroup!.rotation.y = o.yawDeg * DEG;
       this.opponentTurret!.rotation.y = o.turret.angleDeg * DEG;
+      // The hood and the wheel are the other half of reading it: a raised hood and a
+      // spinning wheel say it is about to shoot, which a turret stick never could.
+      if (this.opponentHood) this.opponentHood.rotation.x = -o.hood.angleDeg * DEG;
+      if (this.opponentFlywheel) this.opponentFlywheel.rotation.x -= o.flywheel.rpm * 0.0008;
     } else if (this.opponentGroup) {
       this.opponentGroup.visible = false;
     }

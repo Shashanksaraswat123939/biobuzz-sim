@@ -32,6 +32,10 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
   if (leadCap !== undefined) spec.turret.fireLeadCap_deg = leadCap;
+  // --cycle: the transfer's pace. 1.0 s came from a harness whose pocket never tipped, and
+  // the pile is exactly what makes a fast cycle look bad, so it has to be re-asked here.
+  const cyc = process.argv.indexOf('--cycle');
+  if (cyc >= 0) spec.transfer.cycleTime_s = Number(process.argv[cyc + 1]);
   // What the remaining misses at speed are made of: the physics ceiling with the launch
   // scatter off, a stricter gate, and an aim point deeper in the pocket.
   const arg = (k: string) => { const i = process.argv.indexOf(`--${k}`); return i >= 0 ? Number(process.argv[i + 1]) : undefined; };
@@ -46,15 +50,20 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   // one STRATEGY.md section 3 gives -- exists only inside about 45 in. 42 in, then patrol
   // ACROSS the mouth between +-30 deg of its axis.
   const nrm: Vec3 = [0, 0, 1];
-  const R = inches(38);
+  // An arc needs room inside the table's 32 in floor for the radial correction to swing in.
+  const R = inches(process.argv.includes('--arc') ? 42 : 38);
   // A pass starts at the sector's far edge so the whole crossing is at speed.
   // -75 deg: outside the opening, so the first 0.5 s is a run-up and the robot enters the
   // sector at its full 1.56 m/s instead of accelerating through it.
   // A pass is a straight line 38 in in front of the mouth, x from -80 in to +80 in: the
   // first 15 in are outside the opening (a run-up to full speed), the middle is the sector.
   const isPass = process.argv.includes('--pass');
-  const x0 = isPass ? mouth[0] - inches(80) : mouth[0];
-  const z0 = mouth[2] + R;
+  // An arc starts off to one side: straight out from the mouth at 42 in is 58 in down the
+  // field and the glass is at 70, so a robot that starts there is parked against it.
+  const arcStart = -40 * Math.PI / 180;
+  const isArc = process.argv.includes('--arc');
+  const x0 = isPass ? mouth[0] - inches(80) : isArc ? mouth[0] + R * Math.sin(arcStart) : mouth[0];
+  const z0 = isArc ? mouth[2] + R * Math.cos(arcStart) : mouth[2] + R;
   w.robot.place([x0, spec.chassis.height_m / 2 + spec.chassis.clearance_m, z0], process.argv.includes('--pass') ? 180 : Math.atan2(mouth[0] - x0, mouth[2] - z0) * RAD);
   // --hood: the FIXED-SPEED shooter. The wheel holds one speed all match and the hood
   // aims, so the robot's own velocity is an axis of the table instead of something the
@@ -99,7 +108,13 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
     // other, which is the 0.7 s a driver actually gets at 1.2 m/s. A patrol cannot reach
     // that speed -- a mecanum takes half a second to reverse, so it oscillates at the edge.
     if (isPass && r[0] > mouth[0] + inches(80)) break;
-    const edge = process.argv.includes('--nohold') ? 45 : 30;
+    // --arc: the thing a driver actually does at speed. Hold the heading (the TURRET aims,
+    // not the chassis), strafe flat out around the hive, and correct the range only. A
+    // straight pass leaves the 60 deg sector in under a second and reads zero shots; an arc
+    // stays in it, which is the difference between "cannot shoot at 1.55 m/s" and "cannot
+    // shoot while driving out of the sector at 1.55 m/s".
+    const arc = process.argv.includes('--arc');
+    const edge = arc ? 55 : process.argv.includes('--nohold') ? 45 : 30;
     if (bearingOff < -edge) dir = -1;
     else if (bearingOff > edge) dir = 1;
     const g: GamepadState = emptyGamepad();
@@ -115,7 +130,8 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
     g.left_stick_x = isPass ? (i < 90 ? 0 : stick) : -dir * stick;   // strafe across (a pass: one way, +x)
     // --nohold: no range correction, so a full stick is a full stick (about 1.2 m/s), the
     // sector is +-45 deg, and each pass across it is the 0.7 s a driver actually gets.
-    g.left_stick_y = process.argv.includes('--nohold') ? 0 : -Math.max(-0.3, Math.min(0.3, (range - R) / 0.5));
+    g.left_stick_y = arc ? -Math.max(-0.35, Math.min(0.35, (range - R) / 0.4))
+      : process.argv.includes('--nohold') ? 0 : -Math.max(-0.3, Math.min(0.3, (range - R) / 0.5));
     w.setGamepads(g, emptyGamepad());
     w.step(brain.update(w.sensors(), g, w.seq, dt));
     const h = brain.state.hold;

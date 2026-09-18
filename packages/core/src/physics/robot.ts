@@ -876,6 +876,25 @@ export class Robot {
   private stepNip(balls: BallSet, t: number): void {
     if (this.flywheelOmega < 20) return;
     if (this.sinceFeed < this.spec.transfer.cycleTime_s) return;
+    // THE GATE HAS TO MEAN SOMETHING. This fired whatever was sitting at the nip as soon as
+    // the cycle timer came round, and never looked at the gate -- so the gate only decided
+    // whether the NEXT ball climbed, and the one already in the chamber went whatever the
+    // readiness check said. Every gate in the brain (the opening cap, P(land), the release
+    // re-check) was therefore advisory for the very next shot.
+    //
+    // Measured: crossing the front of the hive at 1.55 m/s, three shots left at 81-83 in and
+    // 62-63 deg off the opening with P(land) 0.12-0.38 -- past the cap and far under the
+    // threshold at the moment they went -- while the hold string said "DRIVE ROUND" for 47%
+    // of the run. None of them landed. The gate was closed; the ball went anyway.
+    //
+    // The servo is the release, as `Transfer` on the hub has it: a ball at the nip goes when
+    // the gate is open and waits when it is not.
+    const gate = this.servos.get('gate');
+    if (gate && this.spec.transfer.gate?.enabled !== false) {
+      const open = this.spec.transfer.gate.open ?? 1;
+      const closed = this.spec.transfer.gate.closed ?? 0;
+      if (Math.abs(gate.pos - open) > Math.abs(gate.pos - closed)) return;
+    }
     const p = this.pos;
     for (const b of this.inShaft) {
       const bp = balls.pos(b);

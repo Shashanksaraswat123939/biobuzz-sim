@@ -290,6 +290,8 @@ export interface TeleOpState {
    * This one is the raw solution minus the axis, so the lag is inside it.
    */
   turretAimErrDeg: number;
+  /** The mouth's half-width as seen along this shot, m. Shrinks with the cosine off-axis. */
+  halfLatNow: number;
   /** Hood angle minus the angle this shot needs, degrees. The lead moves it every loop. */
   hoodErrDeg: number;
   /**
@@ -338,7 +340,7 @@ export interface TeleOpState {
 export const newTeleOpState = (): TeleOpState => ({
   autoAim: true, firing: false,
   turretManualDeg: 0, flywheelOn: false, speedScale: 1,
-  ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, turretAimErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
+  ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, turretAimErrDeg: 0, halfLatNow: -1, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
   lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, pSpeed: -1, pStayNow: -1, pAim: -1, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0, rowHoodDeg: 0, rowRpm: 0,
 });
@@ -857,9 +859,26 @@ export class BuiltinTeleOp {
     const rangeM = inches(s.game.upCellRangeIn);
     const sigmaLat = rangeM * Math.tan(f.scatter.yaw_deg * DEG);
     const meanLat = rangeM * Math.tan(st.turretAimErrDeg * DEG);
-    const pAim = row.halfLat_m === undefined
+    // THE MOUTH IS NARROWER FROM THE SIDE. `halfLat_m` is the CELL's half-width measured
+    // square on; the opening a ball has to fit through is that width SEEN ALONG THE SHOT,
+    // which is halfLat*cos(off-axis) -- half of it at 60 deg. The brain was using the
+    // square-on figure at every bearing, so a shot from the edge of the sector scored the
+    // same pAim as one from straight in front, and the gate passed it.
+    //
+    // Measured: 37 shots at 1.55 m/s across the front of the hive, every one cleared by the
+    // gate, NONE credited, and 36 of them never reached the mouth's height at all. The shots
+    // were being taken from the sector's edges -- which is where a robot crossing at speed
+    // spends most of its time -- and the model could not see that the hole had shrunk.
+    //
+    // tools/shotzone.ts has always rebuilt the whole aperture per square, which is why the
+    // map and the robot disagreed about the same spot. This is the brain's cheap version of
+    // the same geometry: one cosine, no solver call per loop.
+    const openCos = Math.max(0.05, Math.cos(s.game.upCellOpenDeg * DEG));
+    const halfLatNow = row.halfLat_m === undefined ? undefined : row.halfLat_m * openCos;
+    st.halfLatNow = halfLatNow ?? -1;
+    const pAim = halfLatNow === undefined
       ? 1
-      : pThread(-row.halfLat_m, row.halfLat_m, meanLat, sigmaLat);
+      : pThread(-halfLatNow, halfLatNow, meanLat, sigmaLat);
     // FIXED-SPEED MODEL. The uncertainty has moved from the wheel to the hood, so the first
     // factor is a normal integral over HOOD ANGLE instead of exit speed: the band the table
     // measured, against the sigma it measured, centred on where the hood actually IS rather
@@ -1097,7 +1116,20 @@ export class BuiltinTeleOp {
     // were the bare grip wheel's doing -- one ball took 210 rpm out of it -- and putting a
     // real flywheel behind the wheel cut that to 70 and took the wild shots with it. The two
     // that remain here are geometric, smooth over the pulse, and cannot be fixed by a part.
-    const stillGood = st.turretPastStopDeg < 0.5 && Math.abs(st.turretAimErrDeg) < 3;
+    // RE-CHECK THE PERMISSION, NOT JUST THE AIM. The feed commits about 0.4 s before the
+    // ball clears the nip, and the aim keeps tracking for all of it -- so what goes stale is
+    // whether the shot was ever allowed, which is PHYSICS_AND_SIMULATION.md section 3.4's
+    // point exactly. At 1.55 m/s the robot covers 62 cm in that window: the range grows by
+    // about 20 in and the bearing swings 18 deg off the opening.
+    //
+    // Measured, crossing the front of the hive at full stick: 37 shots, every one cleared at
+    // commit, NONE credited, 36 never reaching the mouth's height. Their release state was
+    // 81-83 in at 62-63 deg off the opening with P(land) 0.12-0.38 -- all three past their
+    // gates by the time the ball actually went. The wheel floor deliberately stays out of
+    // this (the doc's other half): the range is growing, so the rpm target moves under the
+    // shot and a floor there refuses everything while changing nothing.
+    const stillGood = st.turretPastStopDeg < 0.5 && Math.abs(st.turretAimErrDeg) < 3
+      && mouthOpen && probOk && haveShot;
     const mayFire = st.pulsing && stillGood;
     motors.transfer = { mode: 'RUN_WITHOUT_ENCODER', power: wheelOn ? 1 : 0 };
 

@@ -230,6 +230,8 @@ export async function main(argv: string[] = []): Promise<void> {
     ['50 in receding 0.18', 50, [0, -0.18], false],
     ['50 in strafing 0.3', 50, [0.3, 0], false],
     ['50 in turning 0.5', 50, [0, 0], false],
+    ['44 in strafing 0.5 FAST', 44, [0.5, 0], false],
+    ['44 in strafing 0.8 FAST', 44, [0.8, 0], false],
   ];
   const only = argv.indexOf('--case') >= 0 ? argv[argv.indexOf('--case') + 1] : '';
   for (const [name, range, drive, headOn] of cases.filter((c) => c[0].includes(only))) {

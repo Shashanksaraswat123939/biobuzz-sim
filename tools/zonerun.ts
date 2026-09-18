@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs';
 import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/world.js';
 import { BuiltinTeleOp, ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { loadLandCal } from '../packages/core/src/robot/loadCal.js';
+import { HoodTable } from '../packages/core/src/robot/hoodTable.js';
 import { RAD, inches, wrapPi } from '../packages/core/src/units.js';
 import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
@@ -55,7 +56,14 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   const x0 = isPass ? mouth[0] - inches(80) : mouth[0];
   const z0 = mouth[2] + R;
   w.robot.place([x0, spec.chassis.height_m / 2 + spec.chassis.clearance_m, z0], process.argv.includes('--pass') ? 180 : Math.atan2(mouth[0] - x0, mouth[2] - z0) * RAD);
-  const brain = new BuiltinTeleOp(spec, table, loadLandCal());
+  // --hood: the FIXED-SPEED shooter. The wheel holds one speed all match and the hood
+  // aims, so the robot's own velocity is an axis of the table instead of something the
+  // flywheel has to chase -- which is the whole question at 1.57 m/s, where the wheel
+  // needs +300 rpm while receding and slews at 1100 rpm/s.
+  const hood = process.argv.includes('--hood')
+    ? HoodTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/hoodtable.csv', import.meta.url), 'utf8'))
+    : null;
+  const brain = new BuiltinTeleOp(spec, table, loadLandCal(), hood);
   brain.state.firing = true;
   let loaded = 0;
   let dir = 1;
@@ -65,12 +73,15 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   const dt = 1 / 60;
   let ran = 0;
   let inSector = 0;
+  let shotsSeen = 0;
   for (let i = 0; i < secs * 60; i++) {
     // A TIP swaps which CELL is up and the new mouth faces the other way; the driver's next
     // job is to drive round, which is navigation, not aim. The pass ends there and the
     // rates are per second actually spent in front of an open mouth.
     if (w.hives.red.tips > 0) break;
     ran = i + 1;
+    // Top up every loop from the under-floor pool: a 6 s pass cannot also be a test of
+    // how fast four balls run out, and 'HOPPER EMPTY' was 28% of the full-stick loops.
     while (w.robot.heldBalls().length < spec.hopper.capacity && loaded < pool.length) {
       if (!w.robot.preload(w.balls, w.balls.balls[loaded])) break;
       loaded++;
@@ -110,6 +121,12 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
     const h = brain.state.hold;
     const k = h ? h.replace(/-?[\d.]+/g, 'N') : (w.sensors().game.hopper === 0 ? 'HOPPER EMPTY' : 'clear to fire');
     why[k] = (why[k] ?? 0) + 1;
+    if (process.argv.includes('--shotlog') && w.robot.shots > shotsSeen) {
+      shotsSeen = w.robot.shots;
+      const st = brain.state;
+      const ls = w.robot.lastShot!;
+      console.log(`    shot ${shotsSeen}  rng ${w.sensors().game.upCellRangeIn.toFixed(0).padStart(3)}  open ${w.sensors().game.upCellOpenDeg.toFixed(0).padStart(3)}  v ${Math.hypot(w.robot.body.linvel().x, w.robot.body.linvel().z).toFixed(2)}  exit ${ls.v_exit.toFixed(2)} want ${st.leadSpeed.toFixed(2)}  hood ${w.robot.hoodAngle.toFixed(1)} want ${st.leadElevDeg.toFixed(1)}  rpm ${w.robot.lastShotRpm.toFixed(0)}/${st.targetRpm.toFixed(0)}  lead ${st.leadDeg.toFixed(0)}  pLand ${st.pLand.toFixed(2)} pSpeed ${st.pSpeed.toFixed(2)} pAim ${st.pAim.toFixed(2)}`);
+    }
     const q = w.robot.pos;
     if (!process.argv.includes('--pass') || Math.abs(bearingOff) <= 60) { dist += Math.hypot(q[0] - prev[0], q[2] - prev[2]); inSector++; }
     if (process.argv.includes('--aimtrace') && i % 6 === 0 && i < 60 * 8) {

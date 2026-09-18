@@ -100,8 +100,13 @@ export function buildZone(
   const f = spec.flywheel;
   const halfLat0 = g.cells[0].halfInterior[0] - ballR;
   const mouthZ = (lips.near.z + lips.far.z) / 2;
-  const minR = table.rows[0].range_in;
-  const maxR = table.rows[table.rows.length - 1].range_in;
+  // THE TRIM THE BRAIN APPLIES, so the map's edges are the brain's edges. BuiltinTeleOp
+  // looks the table up at (range - rangeTrim_in) and refuses outside the table, so with a
+  // +2 in trim the true minimum is 32 in, not 30 -- and the map painted 30-32 in green.
+  // Measured by tools/zoneaudit.ts: 2 of 24 sampled green squares held "outside the table".
+  const trim = (robotJson as unknown as RobotSpec).calibration?.rangeTrim_in ?? 0;
+  const minR = table.rows[0].range_in + trim;
+  const maxR = table.rows[table.rows.length - 1].range_in + trim;
 
   // THE MAP COVERS THE WHOLE FIELD. It used to stop at halfWidth - 0.35 m, a 13.8 in inset
   // copied from another tool, so the outer fourteen inches on every side were not painted at

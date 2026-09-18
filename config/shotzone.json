@@ -1,6 +1,6 @@
 {
  "_about": "MODEL map from tools/shotzone.ts: the chance a perfectly aimed shot lands, per field position, using the hood and rpm the shipped table commands at that range and the CELL mouth as seen from that spot. Not a measurement -- it says where the physics is forgiving, and the spots it likes still have to be shot from.",
- "generated": "2026-09-18T19:45:43.950Z",
+ "generated": "2026-09-18T19:46:41.241Z",
  "step_in": 6,
  "threshold": 0.7,
  "maxSpeed": 13.571680263507908,
@@ -1492,7 +1492,7 @@
    "x_in": -28.7,
    "z_in": -10.7,
    "p": 0,
-   "why": "behind"
+   "why": "tooNear"
   },
   {
    "x_in": -22.7,
@@ -1768,7 +1768,7 @@
    "x_in": -40.7,
    "z_in": 1.3,
    "p": 0,
-   "why": "behind"
+   "why": "tooNear"
   },
   {
    "x_in": -34.7,
@@ -2541,19 +2541,8 @@
   {
    "x_in": 13.3,
    "z_in": 31.3,
-   "p": 0.789,
-   "k": {
-    "lo": 4.75,
-    "hi": 5.325,
-    "sigma": 0.07659,
-    "pStay": 0.5261,
-    "halfLat": 0.1092,
-    "ux": -0.8574,
-    "uz": -0.5147,
-    "dist": 0.772,
-    "commanded": 4.9792,
-    "cosEl": 0.2891
-   }
+   "p": 0,
+   "why": "tooNear"
   },
   {
    "x_in": 19.3,
@@ -2670,19 +2659,8 @@
   {
    "x_in": -34.7,
    "z_in": 37.3,
-   "p": 0.8321,
-   "k": {
-    "lo": 4.7,
-    "hi": 5.3,
-    "sigma": 0.075,
-    "pStay": 0.5542,
-    "halfLat": 0.149,
-    "ux": 0.7118,
-    "uz": -0.7024,
-    "dist": 0.783,
-    "commanded": 4.9847,
-    "cosEl": 0.2914
-   }
+   "p": 0,
+   "why": "tooNear"
   },
   {
    "x_in": -28.7,
@@ -2908,19 +2886,8 @@
   {
    "x_in": -28.7,
    "z_in": 43.3,
-   "p": 0.8515,
-   "k": {
-    "lo": 4.7,
-    "hi": 5.3,
-    "sigma": 0.07603,
-    "pStay": 0.5671,
-    "halfLat": 0.1838,
-    "ux": 0.4994,
-    "uz": -0.8664,
-    "dist": 0.811,
-    "commanded": 4.9989,
-    "cosEl": 0.2975
-   }
+   "p": 0,
+   "why": "tooNear"
   },
   {
    "x_in": -22.7,
@@ -2949,19 +2916,8 @@
   {
    "x_in": 1.3,
    "z_in": 43.3,
-   "p": 0.8701,
-   "k": {
-    "lo": 4.7,
-    "hi": 5.3,
-    "sigma": 0.07603,
-    "pStay": 0.5795,
-    "halfLat": 0.189,
-    "ux": -0.4534,
-    "uz": -0.8913,
-    "dist": 0.788,
-    "commanded": 4.9873,
-    "cosEl": 0.2925
-   }
+   "p": 0,
+   "why": "tooNear"
   },
   {
    "x_in": 7.3,
@@ -5219,36 +5175,14 @@
   {
    "x_in": -16.7,
    "z_in": -46.7,
-   "p": 0.8783,
-   "k": {
-    "lo": 4.7,
-    "hi": 5.3,
-    "sigma": 0.07603,
-    "pStay": 0.5849,
-    "halfLat": 0.2104,
-    "ux": 0.1259,
-    "uz": 0.992,
-    "dist": 0.794,
-    "commanded": 4.9902,
-    "cosEl": 0.2938
-   }
+   "p": 0,
+   "why": "tooNear"
   },
   {
    "x_in": -10.7,
    "z_in": -46.7,
-   "p": 0.8755,
-   "k": {
-    "lo": 4.7,
-    "hi": 5.275,
-    "sigma": 0.07481,
-    "pStay": 0.5831,
-    "halfLat": 0.2116,
-    "ux": -0.0665,
-    "uz": 0.9978,
-    "dist": 0.789,
-    "commanded": 4.9879,
-    "cosEl": 0.2928
-   }
+   "p": 0,
+   "why": "tooNear"
   },
   {
    "x_in": -4.7,
@@ -5859,7 +5793,7 @@
    "x_in": -40.7,
    "z_in": -28.7,
    "p": 0,
-   "why": "behind"
+   "why": "tooNear"
   },
   {
    "x_in": -34.7,
@@ -6435,7 +6369,7 @@
    "x_in": -40.7,
    "z_in": -4.7,
    "p": 0,
-   "why": "behind"
+   "why": "tooNear"
   },
   {
    "x_in": -34.7,
@@ -6633,7 +6567,7 @@
    "x_in": 13.3,
    "z_in": 1.3,
    "p": 0,
-   "why": "behind"
+   "why": "tooNear"
   },
   {
    "x_in": 19.3,
@@ -6729,7 +6663,7 @@
    "x_in": -34.7,
    "z_in": 7.3,
    "p": 0,
-   "why": "behind"
+   "why": "tooNear"
   },
   {
    "x_in": -28.7,
@@ -6771,7 +6705,7 @@
    "x_in": 7.3,
    "z_in": 7.3,
    "p": 0,
-   "why": "behind"
+   "why": "tooNear"
   },
   {
    "x_in": 13.3,
@@ -6885,7 +6819,7 @@
    "x_in": -22.7,
    "z_in": 13.3,
    "p": 0,
-   "why": "behind"
+   "why": "tooNear"
   },
   {
    "x_in": -16.7,
@@ -6903,7 +6837,7 @@
    "x_in": -4.7,
    "z_in": 13.3,
    "p": 0,
-   "why": "behind"
+   "why": "tooNear"
   },
   {
    "x_in": 1.3,

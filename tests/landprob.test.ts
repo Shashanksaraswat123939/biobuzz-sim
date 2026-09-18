@@ -183,10 +183,30 @@ describe('LandCalibration', () => {
     { score: 0.9, observed: 0.86, n: 14 },
   ]);
 
-  it('interpolates between measured points and clamps outside them', () => {
+  it('interpolates between measured points, and degrades to zero below them', () => {
     expect(cal.apply(0.65)).toBeCloseTo(0.25, 6);
-    expect(cal.apply(0.2)).toBeCloseTo(0.1, 6);   // below the lowest bin measured
     expect(cal.apply(1)).toBeCloseTo(0.86, 6);    // a perfect score still only lands 86%
+
+    // BELOW THE LOWEST BIN THERE IS NO DATA, and this used to clamp to that bin's observed
+    // rate. That is not a conservative assumption, it is a floor: with the real fit, whose
+    // lowest bin is score 0.49 -> 0.839, a shot the model rated at 5% was reported as landing
+    // 84% of the time. It made the shot-zone map a uniform green blob -- every solvable
+    // square between 0.839 and 0.869 -- and it silently disabled `flywheel.minLandProb`,
+    // because no shot could score below the floor and gates of 0.70, 0.80 and 0.85 measured
+    // byte-identical. A straight line down to the origin is the monotone reading of "we did
+    // not measure here".
+    expect(cal.apply(0.2)).toBeCloseTo(0.04, 6);  // 0.2/0.5 of the first bin's 0.1
+    expect(cal.apply(0)).toBe(0);
+    expect(cal.apply(-1)).toBe(0);
+  });
+
+  it('is monotone all the way down, so a worse shot never scores higher', () => {
+    let prev = -1;
+    for (let s = 0; s <= 1.0001; s += 0.01) {
+      const v = cal.apply(s);
+      expect(v).toBeGreaterThanOrEqual(prev - 1e-9);
+      prev = v;
+    }
   });
 
   it('never returns more than the best frequency any bin actually achieved', () => {

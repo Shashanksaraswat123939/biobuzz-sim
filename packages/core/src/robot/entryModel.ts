@@ -93,10 +93,31 @@ export class LandCalibration {
     this.ceiling = Math.max(...points.map((p) => p.observed));
   }
 
-  /** Raw model score -> calibrated probability. Piecewise linear, clamped at both ends. */
+  /**
+   * Raw model score -> calibrated probability. Piecewise linear, and ANCHORED AT THE ORIGIN
+   * below the lowest bin that was actually measured.
+   *
+   * It used to clamp: anything at or under the lowest fitted score returned that bin's
+   * observed rate. The fit's lowest bin is score 0.49 -> 0.839, because the gate was open but
+   * the SHOOTER still only produced shots it thought were decent, so nothing below 0.49 was
+   * ever sampled. Clamping therefore asserted that a shot the model rates at 5% lands 84% of
+   * the time -- an 84% floor under every number in the system.
+   *
+   * Two things fell out of that floor, and they looked unrelated until this was found. The
+   * shot-zone map came out a uniform green blob: every solvable square on the field scored
+   * between 0.839 and 0.869, a three point spread, because almost all of them were below the
+   * fit and all got the same answer. And `flywheel.minLandProb` stopped being a gate at all
+   * -- no shot could ever score under 0.839, so 0.70, 0.80 and 0.85 were measured to give
+   * byte-identical results.
+   *
+   * Below the measured range there is no data, so the honest curve is the conservative one
+   * that is still monotone: a straight line from (0, 0) up to the first bin. It says "we did
+   * not measure here, and we assume it gets worse", which is what not measuring means.
+   */
   apply(score: number): number {
     const p = this.points;
-    if (score <= p[0].score) return p[0].observed;
+    if (score <= 0) return 0;
+    if (score <= p[0].score) return (score / p[0].score) * p[0].observed;
     if (score >= p[p.length - 1].score) return p[p.length - 1].observed;
     for (let i = 1; i < p.length; i++) {
       if (score <= p[i].score) {

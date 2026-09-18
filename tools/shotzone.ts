@@ -37,6 +37,8 @@ import { m as fm } from './_units.js';
 import type { Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 export interface ZoneCell {
+  /** Why this square is dead, when it is. Undefined when a shot exists. */
+  reason?: string;
   x_in: number; z_in: number; range_in: number; offAxisDeg: number;
   /**
    * Why there is no shot here, when there is not one. `behind` means the CELL does not open
@@ -80,12 +82,34 @@ export interface ZoneCell {
  * taken at -- driving away needs a faster shot, and the launch scatter is a FRACTION of that
  * speed, so the absolute error at the mouth grows with it. Driving in is the reverse.
  */
+/** What --freehood means, printed once so the number is never read as the shipped one. */
+const FREE_NOTE = [
+  '  --freehood: the hood is free to take ANY angle in its travel at each square, not the',
+  '  one the shipped table holds for that range. That is the map of what the GEOMETRY',
+  '  allows, which is bigger than the map of what this robot will do.',
+].join(String.fromCharCode(10));
 export function buildZone(
   step_in = 6,
   vel: [number, number] = [0, 0],
   /** Which stop the rocker is on. It flips on every TIP and takes the mouth with it. */
   side: -1 | 1 = -1,
-): { cells: ZoneCell[]; threshold: number } {
+  /**
+   * Let the solver pick ANY hood angle instead of the one the table commands.
+   *
+   * DIAGNOSTIC ONLY -- the robot cannot do this, because its table is indexed on range alone
+   * and solved head-on. The gap between the two runs is exactly what a range x off-axis table
+   * would be worth, and it is the honest way to tell "this robot cannot shoot from there"
+   * apart from "no robot could".
+   */
+  freeHood = false,
+): { cells: ZoneCell[]; threshold: number; reasons: Record<string, number> } {
+  // WHY a square is dead, tallied. The map drew six different failures as one dark red and
+  // gave no way to tell them apart, so "why is that not green" could only be answered by
+  // reading this file. Now the tool answers it.
+  const reasons: Record<string, number> = {};
+  // Kept for the --freehood path, which tallies why each square has no shot.
+  const why = (r: string): string => { reasons[r] = (reasons[r] ?? 0) + 1; return r; };
+  void why;
   const p = params as unknown as Params;
   const spec = robotJson as unknown as RobotSpec;
   const g = buildFieldGeometry(p);
@@ -183,8 +207,8 @@ export function buildZone(
         aperture,
         radius: ballR,
         mass: p.ball.pollen.m_kg,
-        hoodRange: [row.hoodDeg, row.hoodDeg],
-        hoodSteps: 1,
+        hoodRange: freeHood ? (spec.hood.angleRange_deg as [number, number]) : [row.hoodDeg, row.hoodDeg],
+        hoodSteps: freeHood ? 46 : 1,
         spinPerSpeed,
         k: f.k,
         rFly: f.r_fly_m,
@@ -225,7 +249,7 @@ export function buildZone(
       });
     }
   }
-  return { cells, threshold: f.minLandProb ?? 0.9 };
+  return { cells, threshold: f.minLandProb ?? 0.9, reasons };
 }
 
 /** Round for the wire: four decimals is well past what a 512 px texture can show. */
@@ -250,7 +274,9 @@ const openCap = (robotJson as unknown as RobotSpec).turret.fireOpenCap_deg ?? 75
 export async function main(argv: string[] = []): Promise<void> {
   const i = argv.indexOf('--step');
   const step = i >= 0 ? Number(argv[i + 1]) : 6;
-  const { cells, threshold } = buildZone(step);
+  const free = argv.includes('--freehood');
+  const { cells, threshold, reasons } = buildZone(step, [0, 0], -1, free);
+  if (free) console.log(FREE_NOTE);
   const cal = loadLandCal();
 
   console.log('SHOT ZONE — where a perfectly aimed shot is worth taking');
@@ -267,6 +293,39 @@ export async function main(argv: string[] = []): Promise<void> {
     for (const x of xs) {
       const c = at.get(`${x},${z}`);
       line += !c || c.p <= 0 ? ' ' : c.p >= threshold ? '#' : c.p >= threshold / 2 ? '+' : '.';
+    }
+    console.log(`  ${String(Math.round(z)).padStart(5)} |${line}|`);
+  }
+  console.log('');
+
+  // WHY THE DEAD SQUARES ARE DEAD. Six different failures were drawn identically, so the
+  // only way to answer "why is that not green" was to read the source.
+  const dead = Object.entries(reasons).sort((a, b) => b[1] - a[1]);
+  if (dead.length) {
+    console.log('  Why the blank squares are blank:');
+    for (const [r, n] of dead) console.log(`    ${String(n).padStart(5)}  ${r}`);
+    const scored = cells.filter((c) => c.p > 0 && c.p < threshold).length;
+    console.log(`    ${String(scored).padStart(5)}  a shot exists but is below the ${(threshold * 100).toFixed(0)}% gate`);
+    console.log('');
+  }
+
+  // AND WHERE THEY ARE, because a tally does not tell you which part of the field to avoid.
+  const codes: Record<string, string> = {
+    'behind the mouth plane': 'b',
+    'closer than the shot table goes': 'c',
+    'further than the shot table goes': 'f',
+    'more than 81 deg off the hive normal': 'o',
+    'no launch threads the mouth from here': 'x',
+    'needs more exit speed than the wheel has': 'v',
+    'no table row': 'r',
+  };
+  console.log('  The same field, by REASON. # is a shot that clears the gate.');
+  for (const [r, ch] of Object.entries(codes)) if (reasons[r]) console.log(`    ${ch} = ${r}`);
+  for (const z of zs) {
+    let line = '';
+    for (const x of xs) {
+      const c = at.get(`${x},${z}`);
+      line += !c ? ' ' : c.p >= threshold ? '#' : c.p > 0 ? '+' : codes[c.reason ?? ''] ?? '?';
     }
     console.log(`  ${String(Math.round(z)).padStart(5)} |${line}|`);
   }

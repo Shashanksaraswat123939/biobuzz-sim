@@ -86,8 +86,8 @@ export async function main(): Promise<void> {
     const r = world.snapshot().robot;
     console.log(
       `${label.padEnd(22)} pos ${s.localizer.x.toFixed(0).padStart(4)},${s.localizer.y.toFixed(0).padStart(4)} in ` +
-        `@${s.imu.yaw.toFixed(0).padStart(4)}deg | range ${s.game.upCellRangeIn.toFixed(0).padStart(3)} in  ` +
-        `bearing ${s.game.upCellAzimuthDeg.toFixed(0).padStart(4)}  turret ${r.turret.angleDeg.toFixed(0).padStart(4)}  ` +
+        `@${s.imu.yaw.toFixed(0).padStart(4)}deg | range ${s.game.truth.upCellRangeIn.toFixed(0).padStart(3)} in  ` +
+        `bearing ${s.game.truth.upCellAzimuthDeg.toFixed(0).padStart(4)}  turret ${r.turret.angleDeg.toFixed(0).padStart(4)}  ` +
         `hood ${r.hood.angleDeg.toFixed(0).padStart(2)}  rpm ${r.flywheel.rpm.toFixed(0).padStart(4)}/${brain.state.targetRpm.toFixed(0).padStart(4)} ` +
         `| ${brain.state.note}`,
     );

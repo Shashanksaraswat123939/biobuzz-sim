@@ -81,7 +81,7 @@ function run(travelDeg: number, seed: number, secs = 60, turretDps?: number, yaw
     const g = driverInput(i * dt, inZone);
     if (yawCap) g.right_stick_x *= yawCap;
     const s = w.sensors();
-    if (s.game.tag) tagSeen++;
+    if (s.tag) tagSeen++;
     w.step(brain.update(s, g, i, dt));
     const pos = w.robot.pos;
     const muzzle = w.robot.yaw * RAD + w.robot.turretAngle;

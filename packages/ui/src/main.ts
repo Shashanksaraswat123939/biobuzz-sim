@@ -19,6 +19,9 @@ import robotJson from '../../../config/robot.json';
 import stagingJson from '../../../assets/staging.json';
 import shotCsv from '../../../java/teamcode/assets/shottable.csv?raw';
 import shotZoneJson from '../../../config/shotzone.json';
+import tagMapJson from '../../../config/tagmap.json';
+import { ftcToWorld } from '@core/field/ftcFrame.js';
+import tagOffsets from '../../../config/tagoffsets.json';
 
 import { World, initPhysics, emptyGamepad } from '@core/physics/world.js';
 import { BuiltinTeleOp, ShotTable } from '@core/robot/builtinTeleOp.js';
@@ -114,6 +117,9 @@ function build(): void {
   bot = world.opponent ? new OpponentBot() : null;
   // ZERO THE FIELD FRAME ON THE DRIVER, not on the world's axes.
   //
+  // Only field-centric mode (hold Y) uses this; the default is robot-centric, where W is the
+  // intake and nothing rotates. It still has to be right for anyone who holds Y.
+  //
   // Field-centric rotates the stick by (yaw - headingZero). With headingZero at 0 that makes
   // "up" mean world +Z -- an axis with no relationship to where anyone is standing. The
   // alliance stations are on the +-X walls, so for a red driver "away from me" is +X, and
@@ -139,7 +145,16 @@ function build(): void {
   scene.showTrajectory = traj;
   // Off until asked for: it is a model map, and a coloured floor that is always on reads
   // like a measurement of where the robot scores, which it is not.
-  scene.setShotZone(shotZoneJson as unknown as ZonePayload);
+  // The two maps travel together: where a shot is worth taking, and where the goal can be
+  // seen at all. Painting the first without the second shows a field the robot cannot use.
+  scene.setShotZone({
+    ...(shotZoneJson as unknown as ZonePayload),
+    tagVisible: new Set(
+      (tagMapJson.cells as { x_in: number; z_in: number; visible: boolean }[])
+        .filter((c) => c.visible)
+        .map((c) => `${c.x_in},${c.z_in}`),
+    ),
+  });
   scene.showShotZone = zone0;
   scene.resize();
   prediction = null;
@@ -330,7 +345,7 @@ function loop(now: number): void {
       const g = auto && auto.phase !== 'done'
         ? auto.update(sensors, frame, world.robot.shots)
         : routine && routine.phase !== 'done'
-          ? routine.update(sensors, frame, world.robot.shots, world.clock.remaining)
+          ? routine.update(sensors, frame, world.robot.shots, world.clock.remaining, brain.target())
           : first ? human : neutralEdges(human);
       world.setGamepads(g, emptyGamepad());
       if (bot && oppBrain && world.opponent) {
@@ -354,7 +369,41 @@ function loop(now: number): void {
   if (!paused) trace.sample(snap, alliance);
   drawTick++;
   if (turbo === 1 || drawTick % 4 === 0) {
+    // WHERE THE ROBOT THINKS THE MOUTH IS, drawn beside where it actually is.
+    //
+    // Built from the robot's own estimate and nothing else: the fused pose (odometry with tag
+    // corrections) plus the target estimate's range and bearing, which is the tag when it can
+    // see one and the surveyed geometry carried on odometry when it cannot. The HEIGHT is the
+    // one baked number in it, because the robot never estimates height -- the shot table
+    // encodes it in every hood angle it was solved with.
+    //
+    // Deliberately NOT world.aimPoint(): that is the physics telling you the answer, which is
+    // the thing this marker exists to be compared against.
+    {
+      const t = brain.target();
+      const p = brain.pose_();
+      if (t.valid) {
+        const b = (p.heading + t.azimuthDeg) * Math.PI / 180;
+        scene.setBelief(ftcToWorld([
+          p.x + t.rangeIn * Math.cos(b),
+          p.y + t.rangeIn * Math.sin(b),
+          tagOffsets.states.A.mouthHeight_in,
+        ] as Vec3));
+      } else {
+        scene.setBelief(null);
+      }
+    }
     scene.update(snap, world.aimPoint(), predictShot(snap));
+    // THE LINE OF SIGHT the tag pipeline is working along. Green when the camera decoded this
+    // frame, red when the geometry refuses -- which is the only on-screen answer to "why is it
+    // not shooting". Drawn from where the MODEL puts the camera: the robot's tracked point at
+    // muzzle height, because tagCamera.ts has no mount offset.
+    {
+      const hive = world.hives[alliance];
+      const rp = world.robot.pos;
+      const eye: Vec3 = [rp[0], robotSpec.turret.muzzleHeight_m, rp[2]];
+      scene.setSightLine(hive.upCellTagWorld(), eye, world.tagCam.isSeeing(world.t));
+    }
     scene.render();
     paint(snap);
   }
@@ -381,6 +430,13 @@ let trajAge = 0;
 function predictShot(s: Snapshot): Vec3[] | null {
   if (!scene.showTrajectory) return null;
   if (s.robot.flywheel.rpm < 200 && brain.state.targetRpm <= 0) return null;
+  // NO FIX, NO PREDICTION. While the camera is searching there is no shot being lined up:
+  // the turret is sweeping to find the tag, and the table is being asked for a range of 0,
+  // which it clamps to its nearest row. Drawing that produced a confident yellow arc swinging
+  // out across the field at whatever the sweep happened to be pointing at -- the UI asserting
+  // an intention the robot does not have, and the first thing anyone asks about. The blue
+  // trail beside it is a record of a ball that really flew, so it stays either way.
+  if (brain.target().scanning) return null;
   // EVERY OTHER FRAME, not every fourth. The aim moves while you drive, and a curve four
   // frames stale lags the turret visibly -- it was still pointing where the robot used to be
   // aiming. The integrator is the expensive part, so this is as cheap as it can be made
@@ -453,6 +509,21 @@ function paint(s: Snapshot): void {
     : routine && routine.phase !== 'done' ? `${routine.phase.toUpperCase()}: ${routine.note}`
     : null;
   set('#st-note', autoNote ?? brain.state.note, brain.state.ready ? 'on' : 'off');
+  // The camera's lock, in three words. `SEARCHING` means the turret is sweeping and nothing
+  // else on this list is a measurement of anything yet.
+  const tg = brain.target();
+  set(
+    '#st-tag',
+    tg.scanning ? 'SEARCHING'
+      // ODOMETRY IS NOT A STALE TAG, it is a different source, and an age is meaningless for
+      // it -- printing one gave "CELL A - Infinity ms", which is the UI describing a number
+      // it does not have. Say where the aim came from instead.
+      : tg.fromOdometry ? `CELL ${tg.id === 2 ? 'B' : 'A'} · odometry`
+      : `CELL ${tg.id === 2 ? 'B' : 'A'} · ${(tg.ageS * 1000).toFixed(0)} ms`,
+    tg.fresh ? 'on' : 'off',
+  );
+  // TRUE range, and the HUD says so: the robot is working off `tg.rangeIn`, which is what
+  // the camera told it, and the difference between the two is the error to watch.
   set('#st-range', m(rangeIn));
   set('#st-turret', `${r.turret.angleDeg.toFixed(0)}°`, r.turret.atLimit ? 'off' : '');
   set('#st-rpm', `${r.flywheel.rpm.toFixed(0)}`, brain.state.ready ? 'on' : '');
@@ -510,8 +581,41 @@ function paintRobot(s: Snapshot, rangeIn: number): void {
     row('field x, y', `${(r.ftc.x * 0.0254).toFixed(2)}, ${(r.ftc.y * 0.0254).toFixed(2)} m`),
     row('heading', `${r.ftc.heading.toFixed(1)}°`),
     row('speed', mps(r.speed)),
-    row('range to CELL', m(rangeIn)),
-    row('bearing to CELL', `${world.sensors().game.upCellAzimuthDeg.toFixed(1)}°`),
+    // TRUTH, and labelled as such. These two say where the CELL really is; the tag rows
+    // below say what the robot believes, and the gap between them is the thing to watch.
+    row('range to CELL (true)', m(rangeIn)),
+    row('bearing to CELL (true)', `${world.sensors().game.truth.upCellAzimuthDeg.toFixed(1)}°`),
+  ].join('');
+
+  // WHAT THE ROBOT CAN SEE. Without this the panel shows a robot that always knows where the
+  // goal is, which is exactly the impression the old oracle gave.
+  const tag = brain.target();
+  $('#r-pose').innerHTML += [
+    // SEARCHING is a state the robot is MEANT to be in, not a fault, so it is amber and it
+    // matches the HUD. Red is for "this cannot work": turret past its stop, flat battery.
+    row('tag', tag.scanning ? 'SEARCHING' : `CELL ${tag.id === 2 ? 'B' : 'A'}`, tag.fresh ? 'good' : 'bad'),
+    // WHERE THE AIM CAME FROM, which is the thing to read before trusting any row below it.
+    // On odometry the bearing is as good as the pose and the ROCKER STATE is a guess until a
+    // tag has been seen, so it says which of those two it is.
+    row(
+      'source',
+      tag.scanning ? 'searching' : tag.fromOdometry ? (tag.stateFromTag ? 'odometry' : 'odometry, state assumed') : 'tag',
+      tag.fromOdometry ? (tag.stateFromTag ? 'bad' : 'err') : tag.fresh ? 'good' : 'bad',
+    ),
+    // A dash is not a reading, so it does not get a status colour. Colouring the placeholder
+    // put a red "no value" next to an amber "no value" and made a searching robot look broken.
+    row('fix age', tag.scanning || tag.fromOdometry ? '—' : `${(tag.ageS * 1000).toFixed(0)} ms`, tag.scanning || tag.fromOdometry ? '' : tag.fresh ? 'good' : 'bad'),
+    // WHERE IT THINKS THE HIVE IS, and whether that is its own measurement or the surveyed
+    // prior it started from. This is the landmark the whole aim hangs off once the tag is out
+    // of view, so "measured" vs "assumed" is the thing to know about it.
+    row(
+      'hive pivot',
+      `${(tag.anchor.x * 0.0254).toFixed(2)}, ${(tag.anchor.y * 0.0254).toFixed(2)} m`,
+      tag.anchorFromTag ? 'good' : 'bad',
+    ),
+    row('pivot from', tag.anchorFromTag ? 'measured' : 'surveyed prior', tag.anchorFromTag ? 'good' : 'bad'),
+    row('range it believes', tag.scanning ? '—' : m(tag.rangeIn)),
+    row('mouth angle', tag.scanning ? '—' : `${tag.openDeg.toFixed(0)}°`, tag.scanning || tag.openDeg <= 75 ? '' : 'err'),
   ].join('');
 
   $('#r-shoot').innerHTML = [
@@ -827,6 +931,8 @@ const DECK: Record<Mode, Action[]> = {
     { label: 'Auto-fill hopper', title: 'Practice aid, not a game rule: quietly picks up the nearest POLLEN off the floor whenever the hopper has room, so you can work on aiming without driving a collection lap.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
     { label: 'Joystick', title: 'On-screen sticks: left translates, right looks around. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
     { label: 'Shot zone', title: 'Green where a perfectly aimed shot clears the land-probability gate, red where it does not, using the hood and rpm the table commands at that range and the CELL mouth as seen from that spot. A MODEL map (tools/shotzone.ts), not a record of what this robot has hit.', run: () => (scene.showShotZone = !scene.showShotZone), on: () => scene.showShotZone },
+    { label: 'Belief', title: 'A VIOLET ring where the robot THINKS the up CELL mouth is, beside the orange one at where it actually is. Built from the robot’s own estimate only: the fused pose — odometry with tag corrections — plus the target range and bearing it is aiming with. The distance between the two rings is the localisation error, to scale, instead of two numbers in a panel to subtract.', run: () => (scene.showBelief = !scene.showBelief), on: () => scene.showBelief },
+    { label: 'Sight line', title: 'The ray the tag pipeline is trying to decode along, from the AprilTag panel on the up CELL to the camera. GREEN while it is decoding, RED while the geometry refuses -- out of range, too far round the side, or the rocker mid-swing. It is drawn from the robot’s tracked point at muzzle height because that is where the model puts the camera: there is no mount offset yet.', run: () => (scene.showSightLine = !scene.showSightLine), on: () => scene.showSightLine },
     { label: 'Pause', title: 'Freeze the physics. The view still moves.', run: () => togglePause(), on: () => paused },
     { label: 'Reset', title: 'Rebuild the match: robot back on its start tile, balls re-staged, score and shot log cleared.', run: () => build() },
   ],
@@ -849,7 +955,9 @@ const DECK: Record<Mode, Action[]> = {
     { label: 'Auto-fire (R1)', title: 'Latch. Spins up and feeds at the cycle time until pressed again. L3 fires by hand.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
     { label: 'Auto-fill hopper', title: 'Keeps the hopper topped up from the floor so a test run does not stop for ammunition.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
     { label: 'Drop a POLLEN in the CELL', title: 'Places one POLLEN into your up CELL by hand. The quickest way to watch the HIVE tip: it takes 12.', run: () => dropBall() },
-    { label: 'Shot arc', title: 'Two curves. YELLOW is the prediction: what the solver says the shot the aim is lining up will do, drawn with the same integrator the shot table is built from. BLUE is the trail the last ball actually flew. When they lie on top of each other the model is right; where they part company is the thing worth chasing.', run: () => (scene.showTrajectory = !scene.showTrajectory), on: () => scene.showTrajectory },
+    { label: 'Shot arc', title: 'Two curves. YELLOW is the prediction: what the solver says the shot the aim is lining up will do, drawn with the same integrator the shot table is built from. It is hidden while the camera is searching, because then there is no shot being lined up. BLUE is the trail the last ball actually flew. When they lie on top of each other the model is right; where they part company is the thing worth chasing.', run: () => (scene.showTrajectory = !scene.showTrajectory), on: () => scene.showTrajectory },
+    { label: 'Belief', title: 'A VIOLET ring where the robot THINKS the up CELL mouth is, beside the orange one at where it actually is. Built from the robot’s own estimate only: the fused pose — odometry with tag corrections — plus the target range and bearing it is aiming with. The distance between the two rings is the localisation error, to scale, instead of two numbers in a panel to subtract.', run: () => (scene.showBelief = !scene.showBelief), on: () => scene.showBelief },
+    { label: 'Sight line', title: 'The ray the tag pipeline is trying to decode along, from the AprilTag panel on the up CELL to the camera. GREEN while it is decoding, RED while the geometry refuses -- out of range, too far round the side, or the rocker mid-swing. It is drawn from the robot’s tracked point at muzzle height because that is where the model puts the camera: there is no mount offset yet.', run: () => (scene.showSightLine = !scene.showSightLine), on: () => scene.showSightLine },
     { label: 'Colliders', title: 'Show the convex shapes the solver actually collides with, instead of the CAD skin drawn over them.', run: () => (scene.showColliders = !scene.showColliders), on: () => scene.showColliders },
     { label: 'Joystick', title: 'On-screen sticks: left translates, right looks around. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
     { label: 'Shot zone', title: 'Green where a perfectly aimed shot clears the land-probability gate, red where it does not, using the hood and rpm the table commands at that range and the CELL mouth as seen from that spot. A MODEL map (tools/shotzone.ts), not a record of what this robot has hit.', run: () => (scene.showShotZone = !scene.showShotZone), on: () => scene.showShotZone },

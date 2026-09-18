@@ -302,11 +302,52 @@ fine.
    CG, so there is no roll moment to resolve, and leaving the axes free let solver noise tip
    the box over.
 5. **Aero on balls inside the robot** is computed and negligible rather than special-cased.
-6. **The target's bearing and range are exact.** `sensors.localizer` now carries real odometry
-   error — 0.5 in, 0.5°, and 0.04 m/s on the reported velocity, which is what the motion lead
-   is built on — but `game.upCellAzimuthDeg` and `upCellRangeIn` still come straight off the
-   truth. On a robot they come from an AprilTag pipeline with its own noise and 50–100 ms of
-   latency, and that latency would matter to a moving shot the way the feed delay does.
+6. **The target comes off a camera now, and the camera is usually blind.** This used to read
+   "the target's bearing and range are exact", and it was the largest remaining lie in the
+   project: `game.upCellAzimuthDeg`, `upCellRangeIn`, `upCellOpenDeg` and `hiveTipping` came
+   straight off the world with no noise, no latency, no field of view and no way to be
+   invalid, and **both brains aimed on them**. Every aiming result here was measured on top
+   of a robot that always knew where the goal was and knew the instant the HIVE went over.
+
+   **The tag is where the CAD puts it, and it is not the mouth.** `cad/parts.json` has four
+   am-5888 panels, two per hive, one per CELL, **all four bolted to a rocker — there is not a
+   single static fiducial on this field**. The panel sits 14.10 in from the pivot at 6.1° off
+   the rocker's long axis; the mouth of the same CELL is 22.07 in out at 14.7°, about 10 in
+   away. The camera is aimed at the *panel* and swings with the rocker exactly as the pocket
+   does, and `tools/tagoffsets.ts` bakes the rigid panel → mouth correction the robot has to
+   add: **±2.78 in along FTC +X, sign set by the tag ID**. That makes the ID load-bearing in
+   the way LOCALIZATION argues it should be — the ID is the rocker state sensor, and getting
+   it wrong is worth 5.6 in of aim plus a mouth facing the other way.
+
+   `packages/core/src/physics/tagCamera.ts` is what replaced it. It emits an
+   `AprilTagProcessor`-shaped detection — id, bearing, range, tag yaw — at 30 fps with 75 ms
+   of latency, and emits *nothing* outside a 60° lens, past 120 in, past 65° of incidence, or
+   while the rocker is swinging. The lens rides the **turret**, per LOCALIZATION phase 4.
+   Noise is shaped like a real tag pose rather than flat: 0.5° on bearing, 4% of range on
+   range (it is an apparent-size estimate), and 6° on tag yaw, which is the worst-conditioned
+   axis and unfortunately the one the "is the mouth still open towards me" gate reads.
+
+   `control/TagTargetProvider.java` — **in TeamCode, so it ships** — turns that into an aim.
+   A detection becomes a field-frame point once; the bearing and range are re-derived from
+   the localizer's pose every loop after that. Fresh fix: shoot. Stale fix: aim, hold fire.
+   No fix: sweep the turret and go and find the tag. No field geometry is baked into the
+   robot at all, so it re-acquires from wherever it actually is.
+
+   **`hiveTipping` is gone and nothing replaced it, which is the point.** A rocker going over
+   blinds the camera; the fix ages past `maxFireAgeS` and the shot is refused for staleness.
+   A TIP, an occlusion and simply looking the wrong way are the same fact to a camera, and
+   holding fire is the right answer to all three. What is still not modelled: the fix is built
+   against the pose *now* rather than the pose when the photons left, which is worth v·latency
+   (4.4 in at 1.5 m/s) — see the `ponytail:` note in `robot/tagTarget.ts`.
+
+   What it cost, measured (`tools/movingfire.ts --gate`, landed/s, oracle → camera): stopped
+   0.85 → 0.95, closing 0.95 → 0.95, strafing 0.80 → 0.80, shuttling 0.85 → 0.85, wobbling
+   0.75 → 0.65. The pooled rates barely move; **the lateral spread is where it shows**, going
+   from ±2–3 cm to ±4–7 cm, which is the bearing sigma arriving exactly where it should. The
+   gate is open less often too: "clear to fire" falls from 95–100% to 81–97%. AUTO is
+   unchanged at 8 points and 3.2 landed of 4 fired, because AUTO stands still and square onto
+   the goal at 45 in — which is the easy case for vision, and worth saying rather than
+   claiming the change was free.
 7. **The muzzle's POSITION is still the robot's tracked point; its VELOCITY no longer is.**
    While the lead holds the aim off the bearing, a muzzle 0.12 m out on the turret sits a
    centimetre or two off the shot line, and that offset is still ignored when the range and

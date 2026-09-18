@@ -20,6 +20,7 @@
  * auto that stands still and fires scores nothing, however well it aims.
  */
 import { emptyGamepad } from '../physics/world.js';
+import type { TagTargetState } from './tagTarget.js';
 import { worldToFtc } from '../field/ftcFrame.js';
 import { clamp, DEG, RAD, M_TO_IN, wrapPi } from '../units.js';
 import type { GamepadState, SensorFrame, Vec3 } from '../types.js';
@@ -133,7 +134,19 @@ export class AutoRoutine {
    * left rather than assuming the command worked; `remaining` is the seconds left in AUTO,
    * which is what decides when to stop shooting and go and park.
    */
-  update(s: SensorFrame, dt: number, shotsTaken: number, remaining: number): GamepadState {
+  update(
+    s: SensorFrame,
+    dt: number,
+    shotsTaken: number,
+    remaining: number,
+    /**
+     * Where the shooter currently thinks the goal is -- `BuiltinTeleOp.target()`. The routine
+     * used to read `s.game` for the range and the mouth's facing, which was the world's truth;
+     * it now steers by the same camera fix the shot is aimed with, so "line up" and "aim" can
+     * no longer disagree, and a routine that cannot see the tag lines up on nothing and says so.
+     */
+    tgt: TagTargetState,
+  ): GamepadState {
     const g = emptyGamepad();
     this.since += dt;
     this.fired = shotsTaken - this.startedShots;
@@ -169,11 +182,11 @@ export class AutoRoutine {
 
       case 'position': {
         const d = driveTo(g, s, this.shootAt[0], this.shootAt[1], this.faceAt[0], this.faceAt[1]);
-        const facing = s.game.upCellOpenDeg;
+        const facing = tgt.openDeg;
         this.note = `lining up: ${d.toFixed(0)} in out, ${facing.toFixed(0)} deg off the opening`;
         // BOTH conditions, because either alone is a shot that cannot score: close enough
         // for the table to have an answer, and on the side the mouth actually opens.
-        const inBand = s.game.upCellRangeIn > this.f.band_in[0] && s.game.upCellRangeIn < this.f.band_in[1];
+        const inBand = tgt.rangeIn > this.f.band_in[0] && tgt.rangeIn < this.f.band_in[1];
         if ((d < 6 && inBand && facing < 60) || this.since > 10) {
           this.phase = 'shoot';
           this.since = 0;
@@ -192,7 +205,7 @@ export class AutoRoutine {
           : `hopper empty after ${this.fired}`;
         // Out of balls, or the hive went over and the mouth is now facing away: either way
         // there is nothing more to shoot at, so go and bank the PARK.
-        if (s.game.hopper === 0 || s.game.upCellOpenDeg > 75) {
+        if (s.game.hopper === 0 || tgt.openDeg > 75) {
           g.right_bumper = true;      // edge again: latch back off
           this.phase = 'park';
           this.since = 0;

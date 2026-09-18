@@ -5,8 +5,12 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.teamcode.config.RobotConfig;
+import org.firstinspires.ftc.teamcode.config.RobotConstants;
 import org.firstinspires.ftc.teamcode.control.Localizer;
 import org.firstinspires.ftc.teamcode.control.ShotTable;
+import org.firstinspires.ftc.teamcode.control.FusedLocalizer;
+import org.firstinspires.ftc.teamcode.control.TagCamera;
+import org.firstinspires.ftc.teamcode.control.TagTargetProvider;
 import org.firstinspires.ftc.teamcode.control.TargetProvider;
 
 import java.util.List;
@@ -27,6 +31,10 @@ public class Robot {
     public final ShotTable shots = cfg.shotTable();
 
     private TargetProvider target;
+    /** Non-null when the target is coming off a camera, which is the only real case. */
+    private TagTargetProvider tagTarget;
+    /** Odometry with tag corrections folded in. Null with no camera or no raw localizer. */
+    private FusedLocalizer fused;
     private final ElapsedTime loop = new ElapsedTime();
     private double dt = 0.02;
 
@@ -46,19 +54,59 @@ public class Robot {
         flywheel.init(hw, cfg);
         hopper.init(hw, cfg);
 
-        // Sim registers these; on the hub tryGet returns null and the caller falls back.
-        target = hw.tryGet(TargetProvider.class, "target");
+        // WHERE THE GOAL IS, from a camera. On the hub `tagcam` is an AprilTagProcessor
+        // wrapper; here it is the world's pipeline, with its lens, its frame rate and its
+        // latency. The provider is TeamCode's own, so the fusion that turns late detections
+        // into an aim ships to the robot rather than living in the simulator.
+        //
+        // There is NO FALLBACK any more, and that is deliberate. The oracle that used to sit
+        // behind `target` -- SimTargetProvider, reading the world's exact bearing and range --
+        // is deleted, not disabled, so it cannot quietly come back and flatter a measurement.
+        // No camera means no target, and AimController holds fire, which is what a robot with
+        // no vision actually does.
+        TagCamera cam = hw.tryGet(TagCamera.class, cfg.TAGCAM);
+        // TAG FIXES CORRECT THE POSE. Odometry drifts -- heading error rotates every inch
+        // driven after it, so position error grows with DISTANCE and never comes back. The
+        // fuser wraps the raw localizer and IS one, so everything downstream gets the
+        // corrected pose without knowing it exists.
+        if (cam != null && drive.getLocalizer() != null) {
+            fused = new FusedLocalizer(drive.getLocalizer(), cam,
+                    RobotConstants.FUSE_GAIN, RobotConstants.FUSE_HEADING_GAIN,
+                    RobotConstants.FUSE_REJECT_OVER_IN);
+        }
+        if (cam != null) {
+            tagTarget = new TagTargetProvider(cam, localizer(), cfg.tagHoldS, cfg.tagMaxFireAgeS,
+                    cfg.tagScanRateDps, cfg.turretMinDeg, cfg.turretMaxDeg,
+                    cfg.tagMouthDxA, cfg.tagMouthDxB, cfg.mouthFacingXA, cfg.mouthFacingXB,
+                    cfg.anchorPriorX, cfg.anchorPriorY,
+                    cfg.mouthFromAnchorA, cfg.mouthFromAnchorB, cfg.anchorAlpha,
+                    cfg.fireOnOdometry, cfg.startCellId);
+            target = tagTarget;
+        } else {
+            target = hw.tryGet(TargetProvider.class, "target");
+        }
         loop.reset();
     }
 
     public TargetProvider target() { return target; }
-    public Localizer localizer() { return drive.getLocalizer(); }
+    /** The camera-backed provider, or null on a world with no `tag` block. Telemetry only. */
+    public TagTargetProvider tagTarget() { return tagTarget; }
+    /** The best pose available: corrected by tag fixes when there is a camera to do it. */
+    public Localizer localizer() { return fused != null ? fused : drive.getLocalizer(); }
+
+    /** The fuser itself, for telemetry. Null when there is nothing to fuse. */
+    public FusedLocalizer fused() { return fused; }
     public double dt() { return dt; }
 
     public void update() {
         dt = Math.max(1e-3, Math.min(0.2, loop.seconds()));
         loop.reset();
         drive.update();
+        // THE POSE, for OpModes that never call AimController -- the tuning ones. When the aim
+        // did run this loop it stepped the same estimator already, and update() is idempotent
+        // on an unchanged raw reading, so calling it twice is free rather than wrong.
+        if (fused != null) fused.update();
+        else if (drive.getLocalizer() != null) drive.getLocalizer().update();
         intake.update();
         transfer.update();
         turret.update();

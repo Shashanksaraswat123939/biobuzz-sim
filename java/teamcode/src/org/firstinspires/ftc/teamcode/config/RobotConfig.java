@@ -25,6 +25,7 @@ public class RobotConfig {
     public final String HOOD = RobotConstants.HW_HOOD;
     public final String GATE = RobotConstants.HW_GATE;
     public final String IMU = RobotConstants.HW_IMU;
+    public final String TAGCAM = RobotConstants.HW_TAGCAM;
 
     // drivetrain
     public final double wheelRadiusIn = RobotConstants.WHEEL_RADIUS_M * 39.3700787;
@@ -52,6 +53,26 @@ public class RobotConfig {
     public final double hoodMaxDeg = RobotConstants.HOOD_MAX_DEG;
     public final double hoodTolDeg = RobotConstants.HOOD_TOL_DEG;
     public final double velFilterAlpha = RobotConstants.VEL_FILTER_ALPHA;
+
+    // the tag pipeline, as the robot experiences it: an age, and what to do about it
+    public final double tagHoldS = RobotConstants.TAG_HOLD_S;
+    public final double tagMaxFireAgeS = RobotConstants.TAG_MAX_FIRE_AGE_S;
+    public final double tagScanRateDps = RobotConstants.TAG_SCAN_RATE_DPS;
+    // tag -> CELL mouth, per rocker state. The panel is not the goal (tools/tagoffsets.ts).
+    public final double tagMouthDxA = RobotConstants.TAG_MOUTH_DX_A_IN;
+    public final double tagMouthDxB = RobotConstants.TAG_MOUTH_DX_B_IN;
+    public final double mouthFacingXA = RobotConstants.MOUTH_FACING_X_A;
+    public final double mouthFacingXB = RobotConstants.MOUTH_FACING_X_B;
+    // where the HIVE is, for when the camera cannot see it
+    public final double anchorPriorX = RobotConstants.HIVE_ANCHOR_X_IN;
+    public final double anchorPriorY = RobotConstants.HIVE_ANCHOR_Y_IN;
+    public final double mouthFromAnchorA = RobotConstants.MOUTH_FROM_ANCHOR_X_A_IN;
+    public final double mouthFromAnchorB = RobotConstants.MOUTH_FROM_ANCHOR_X_B_IN;
+    public final double anchorAlpha = RobotConstants.HIVE_ANCHOR_ALPHA;
+    public final boolean fireOnOdometry = RobotConstants.FIRE_ON_ODOMETRY;
+    /** Which CELL is up at the buzzer: A for red, B for blue (Hive starts on opposite stops). */
+    public final int startCellId =
+            RobotConstants.ALLIANCE_IS_RED ? RobotConstants.TAG_ID_CELL_A : RobotConstants.TAG_ID_CELL_B;
 
     public final double flywheelTicksPerRev = RobotConstants.FLYWHEEL_TICKS_PER_REV;
     public final double flywheelTolRpm = RobotConstants.FLYWHEEL_TOL_RPM;

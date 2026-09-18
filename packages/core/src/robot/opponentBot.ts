@@ -37,6 +37,13 @@ export interface OpponentSight {
   shotsTaken: number;
 }
 
+/**
+ * NOTE ON `game.truth`. Everything below reads the oracle -- exact bearing, exact range --
+ * and that is deliberate. This is a scripted practice opponent, not the deliverable: its job
+ * is to be a consistent thing to play against, and giving it a camera of its own would make
+ * the player's practice depend on the opponent's luck with a tag. `BuiltinTeleOp`, which IS
+ * the deliverable, reads the tag pipeline and never touches this block.
+ */
 export class OpponentBot {
   phase: OpponentPhase = 'idle';
   note = 'waiting for the match';
@@ -172,12 +179,12 @@ export class OpponentBot {
       case 'position': {
         this.target = shootAt;
         const d = this.go(g, s, shootAt[0], shootAt[1], face[0], face[1], dt);
-        const facing = s.game.upCellOpenDeg;
+        const facing = s.game.truth.upCellOpenDeg;
         this.note = `lining up (${d.toFixed(0)} in out, ${facing.toFixed(0)} deg off the opening)`;
         if (s.game.hopper === 0) { this.retarget('collect'); break; }
         // BOTH, because either alone is a shot that cannot score: inside the table's band,
         // and on the side the mouth actually opens.
-        const inBand = s.game.upCellRangeIn > f.band_in[0] && s.game.upCellRangeIn < f.band_in[1];
+        const inBand = s.game.truth.upCellRangeIn > f.band_in[0] && s.game.truth.upCellRangeIn < f.band_in[1];
         if ((d < 8 && inBand && facing < 60) || this.since > 12) {
           this.retarget('shoot');
           this.startedShots = see.shotsTaken;
@@ -192,7 +199,7 @@ export class OpponentBot {
         this.note = `firing (${this.fired} away, ${s.game.hopper} left)`;
         // Empty, its own hive went over and turned the opening away, or the gate is simply
         // refusing from here: all three mean stop and go round again.
-        if (s.game.hopper === 0 || s.game.upCellOpenDeg > 75 || this.since > 15) {
+        if (s.game.hopper === 0 || s.game.truth.upCellOpenDeg > 75 || this.since > 15) {
           g.right_bumper = true;      // edge again: latch back off
           this.retarget('collect');
         }

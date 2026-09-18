@@ -21,7 +21,7 @@ npm run dev
 Without that second step the app still runs — it falls back to procedural stand-in geometry
 and says so in the console.
 
-Open http://localhost:5173. Drive with **WASD**, turn with **Q/E**, `F` spins the flywheel,
+Open http://localhost:5180 (`PORT=... npm run dev` to move it). Drive with **WASD** — robot-centric, so W is whichever way the INTAKE points — turn with **Q/E**, `F` spins the flywheel,
 `Space` fires, `H` hand-drops a POLLEN into your up CELL, `L` auto-loads the hopper, `R`
 resets. Cameras on `1`–`5` (orbit / follow / top / first-person / muzzle). Full key list is in
 the app's **Keys** tab. A gamepad works too.
@@ -91,6 +91,8 @@ npm run tool -- tools/movingfire.ts        # shooting while moving, and while ac
 npm run tool -- tools/shoterror.ts         # where a moving shot's error actually comes from
 npm run tool -- tools/spincheck.ts --full  # single-wheel backspin vs a dual-wheel shooter
 npm run tool -- tools/shottable.ts         # regenerate the shot table
+npm run tool -- tools/tagoffsets.ts        # regenerate the tag -> CELL mouth correction
+npm run tool -- tools/tagmap.ts            # where on the floor the tag can be READ at all
 npm run tool -- tools/hoodsweep.ts         # which hood range this robot needs
 npm run tool -- tools/shootercheck.ts      # turret coverage, flywheel MOI, exit speed
 npm run tool -- tools/flywheeltune.ts      # hub velocity-loop settling and ripple
@@ -99,7 +101,7 @@ node tools/cad2staging.mjs                 # regenerate ball staging from the CA
 node tools/genconstants.mjs                # robot.json + shot table -> Java constants
 npm run tool -- tools/drivedemo.ts         # drive around and shoot from each stop
 node tools/vars.mjs                        # regenerate docs/VARIABLES.md
-npm test                                   # 84 tests
+npm test                                   # 125 tests
 ```
 
 ## What it currently says
@@ -147,6 +149,32 @@ npm test                                   # 84 tests
 - **The localizer is no longer an oracle.** It reports position, heading and velocity with real
   odometry error, and the brain filters the velocity before aiming on it — which is what a team
   does, and what the perfect estimate had been hiding.
+- **Neither is the target.** This was the big one. `game.upCellAzimuthDeg`, `upCellRangeIn`,
+  `upCellOpenDeg` and `hiveTipping` used to come straight off the world — exact bearing, exact
+  range, and the precise instant the HIVE went over — and **both brains aimed on them**. They
+  are gone. In their place is a camera on the turret: 30 fps, 75 ms of latency, a 60° lens,
+  120 in of range, 65° of incidence, and **nothing at all while the rocker is swinging**. The
+  robot sweeps the turret to find the tag, carries the fix on odometry between detections, and
+  refuses any shot on a fix older than 0.25 s. **The tag is modelled where the CAD puts it** —
+  on the rocker, swinging with it, 14.10 in from the pivot and about 10 in from the mouth it
+  belongs to — and the robot adds the rigid panel → mouth correction, ±2.78 in with the sign
+  chosen by the tag ID. There is no static fiducial anywhere on this field. `hiveTipping` has no replacement on purpose: a
+  tip blinds the camera, the fix goes stale, the shot is held. The four truth fields still
+  exist behind `game.truth` so tools can measure the error — and a test greps the brains to
+  make sure neither reads them again.
+
+  What it cost (`tools/movingfire.ts --gate`, landed per second, oracle → camera):
+
+  | | stopped | closing | strafing | shuttling | wobbling |
+  |---|---|---|---|---|---|
+  | oracle | 0.85 | 0.95 | 0.80 | 0.85 | 0.75 |
+  | camera | 0.95 | 0.95 | 0.80 | 0.85 | 0.65 |
+
+  The rates barely move. **The lateral spread is where it shows**: ±2–3 cm becomes ±4–7 cm,
+  which is the bearing sigma arriving exactly where it should, and "clear to fire" falls from
+  95–100% of loops to 81–97%. AUTO is unchanged at 8 points, 3.2 landed of 4 fired — because
+  AUTO stands still and square onto the goal at 45 in, which is the easy case for vision.
+  Worth saying plainly rather than claiming the change was free.
 - **Top speed matches the motor curve**: 62.8 in/s measured against 62 in/s hand-computed.
 
 ## Layout
@@ -163,7 +191,7 @@ java/simsdk/     fake DcMotorEx, Servo, IMU... backed by the bridge
 java/bridge/     JSON + WebSocket, JDK-only
 java/runner/     OpMode registry and the hub's lifecycle
 tools/           experiments and generators
-tests/           84 tests: geometry, hive, drivetrain, turret, shooting, lead, determinism
+tests/           125 tests: geometry, hive, drivetrain, turret, shooting, lead, tag, determinism
 ```
 
 ## Porting to the hub
@@ -171,7 +199,10 @@ tests/           84 tests: geometry, hive, drivetrain, turret, shooting, lead, d
 1. Copy `java/teamcode/org/firstinspires/ftc/teamcode/**` into `TeamCode/src/main/java/...`.
 2. Name the devices in the Robot Controller config as `config/robot.json → hardware`.
 3. `RobotConstants.java` and `ShotTableData.java` are generated — no file parsing on the hub.
-4. `Localizer`, `TargetProvider` and `BallCounter` all come from `hardwareMap.tryGet(...)`,
-   which returns `null` on the hub. Each has a documented fallback; swapping in a Pinpoint or
-   a Limelight is a one-line change.
+4. `Localizer`, `TagCamera` and `BallCounter` all come from `hardwareMap.tryGet(...)`, which
+   returns `null` on the hub until you supply one. `TagCamera` is the one that matters: wrap
+   `AprilTagProcessor.getDetections()` — id, `ftcPose.bearing`, `ftcPose.range`, `ftcPose.yaw`
+   and `frameAcquisitionNanoTime` — and `TagTargetProvider` does the rest, because the fusion
+   ships in TeamCode rather than living in the simulator. **There is no oracle fallback:** no
+   camera means no target and the robot holds fire, which is what a robot with no vision does.
 5. `./gradlew :TeamCode:assembleDebug`.

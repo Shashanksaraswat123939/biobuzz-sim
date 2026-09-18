@@ -141,7 +141,40 @@ export interface RobotSpec {
     omegaDps?: number;
   };
     /** One-pole alpha the brain filters the reported velocity with before aiming on it. */
-    velFilterAlpha?: number } };
+    velFilterAlpha?: number;
+    /**
+     * Integrated dead-reckoning error. Absent or disabled falls back to truth + white noise,
+     * which is a GPS rather than odometry and makes the tag look optional.
+     */
+    drift?: {
+      enabled?: boolean;
+      /** One sigma on the distance scale, drawn once per run. */
+      scaleErr: number;
+      /** One sigma on the constant gyro bias, deg/s, drawn once per run. */
+      gyroBias_dps: number;
+      /** Random walk on that bias, deg/s per root second. */
+      gyroWalk_dps: number;
+      /** White noise on the yaw rate, deg/s. */
+      gyroNoise_dps: number;
+      /** Slip as a fraction of each step, both axes. */
+      slipFrac: number;
+    };
+    /** Tag fixes correcting the dead-reckoned pose. See packages/core/src/robot/poseFuser.ts. */
+    fuse?: { gain: number; headingGain: number; rejectOver_in: number } };
+    /** The tag pipeline. Absent means the old oracle, which is not a thing a robot has. */
+    tag: TagCameraSpec & {
+      target: {
+        holdS: number;
+        maxFireAgeS: number;
+        scanRateDps: number;
+        /** May a shot be taken on odometry alone, with no tag in view? */
+        fireOnOdometry?: boolean;
+        /** One-pole on the HIVE pivot the robot tracks for itself. */
+        anchorAlpha?: number;
+        /** How much of each new detection to take into the target estimate. */
+        measAlpha?: number;
+      };
+    } };
   hardware: Record<string, string>;
   hub: { loopPeriodMs: number; bulkCacheMode: string; imuLatencyMs: number; encoderVelocityWindowMs: number; commandLatencyMs: number; velocityPid: { p: number; i: number; d: number; f: number; settleMs: number }; voltageNoise_V: number };
   limits: { startingCube_in: number; expansion_in: [number, number, number]; maxMotors: number; maxServos: number };
@@ -185,6 +218,37 @@ export interface GamepadState {
   left_stick_button: boolean; right_stick_button: boolean;
 }
 
+/** What the tag pipeline hands over: the shape of one `AprilTagDetection`, nothing more. */
+export interface TagSighting {
+  /** 1 = CELL A, 2 = CELL B. A TIP swaps which is up, so the tag in view changes with it. */
+  id: number;
+  /** Bearing to the tag relative to the ROBOT's heading, degrees CCW. */
+  bearingDeg: number;
+  rangeIn: number;
+  /** How far off square the tag's face is, degrees. 0 is dead on, 90 is edge-on. */
+  openDeg: number;
+  /** World time the photons left -- NOT the time this was read. The consumer ages it. */
+  sampleT: number;
+}
+
+/** A tag camera, as the pipeline behaves rather than as the geometry would like. */
+export interface TagCameraSpec {
+  enabled: boolean;
+  /** Horizontal field of view, degrees. The gate is against the TURRET: the lens rides it. */
+  fov_deg: number;
+  maxRange_in: number;
+  /** Past this incidence the tag face has too little projected area to decode. */
+  maxIncidence_deg: number;
+  frameRateHz: number;
+  latencyMs: number;
+  noise: {
+    bearing_deg: number;
+    /** One sigma on range as a FRACTION of range: tag ranging is an apparent-size estimate. */
+    rangeFrac: number;
+    open_deg: number;
+  };
+}
+
 export interface SensorFrame {
   type: 'sensor';
   seq: number;
@@ -198,14 +262,27 @@ export interface SensorFrame {
   localizer: { x: number; y: number; heading: number; vx: number; vy: number; omega: number };
   gamepad1: GamepadState;
   gamepad2: GamepadState;
-  game: { upCellAzimuthDeg: number; upCellRangeIn: number; hiveTipping: boolean; upCellOpenDeg: number; hopper: number; flywheelRpm: number;
+  /**
+   * The tag pipeline's output: the most recent DETECTION, or null when the camera has never
+   * seen the tag. Stale by construction -- `sampleT` is when the photons left, not now.
+   */
+  tag: TagSighting | null;
+  game: {
+    /** Balls the robot is holding, from its own break beam. A robot-side signal, not truth. */
+    hopper: number;
+    /** The tachometer. Also robot-side. */
+    flywheelRpm: number;
     /**
-     * The AprilTag on our own up CELL, as the camera actually sees it, or null when it does
-     * not. `azimuthDeg` is robot-relative like `upCellAzimuthDeg` and is the one number worth
-     * having: it is measured to the tag, so unlike a bearing derived from the localizer it
-     * carries no accumulated heading error at all.
+     * GROUND TRUTH. MEASUREMENT ONLY -- a brain that reads this is cheating.
+     *
+     * These four were `game.upCellAzimuthDeg` and friends, read straight off the world by
+     * both brains: perfect bearing, perfect range, and the exact instant the HIVE went over.
+     * No robot has any of that. They live behind `truth` now so that every consumer has to
+     * say so, and the robot aims off `tag` above like a robot does. Tools and the HUD use
+     * these to MEASURE the error the robot is making, which is the only honest use for them.
      */
-    tag: { azimuthDeg: number; rangeIn: number; px: number; obliquityDeg: number } | null };
+    truth: { upCellAzimuthDeg: number; upCellRangeIn: number; hiveTipping: boolean; upCellOpenDeg: number };
+  };
 }
 
 // ---------------------------------------------------------------- snapshot

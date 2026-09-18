@@ -102,7 +102,7 @@ export async function main(): Promise<void> {
     press.dpad_up = true;
     step(press);
     for (let i = 0; i < 300; i++) step();
-    const want = w.sensors().game.upCellAzimuthDeg;
+    const want = w.sensors().game.truth.upCellAzimuthDeg;
     const fire = emptyGamepad();
     fire.right_bumper = true;
     for (let i = 0; i < 60 * 25 && w.robot.shots < 6; i++) step(fire);
@@ -142,8 +142,8 @@ export async function main(): Promise<void> {
     const sf = w.sensors();
     console.log(
       `  strafe ${strafe.toFixed(1)} m/s -> ${w.hives.red.ballsInUpCell} of ${w.robot.shots} landed, ` +
-        `lead ${brain.state.leadDeg.toFixed(1)} deg, range ${sf.game.upCellRangeIn.toFixed(0)} in, ` +
-        `az ${sf.game.upCellAzimuthDeg.toFixed(0)}, vx ${sf.localizer.vx.toFixed(1)} vy ${sf.localizer.vy.toFixed(1)} in/s, ` +
+        `lead ${brain.state.leadDeg.toFixed(1)} deg, range ${sf.game.truth.upCellRangeIn.toFixed(0)} in, ` +
+        `az ${sf.game.truth.upCellAzimuthDeg.toFixed(0)}, vx ${sf.localizer.vx.toFixed(1)} vy ${sf.localizer.vy.toFixed(1)} in/s, ` +
         `hopper ${w.robot.hopper.length}, note "${brain.state.note}"`,
     );
   }

@@ -239,7 +239,7 @@
    }
   ],
   "localizer": {
-   "source": "groundTruth",
+   "source": "deadReckoning",
    "velFilterAlpha": 0.25,
    "velFilterAlpha_source": "MEASURED as the smallest filter that keeps the robot shooting once the odometry noise is modelled at all. The lead is built entirely on the reported velocity, so with vel_mps at 0.04 the raw reading jitters the lead azimuth, the turret chases the jitter, its tracking error never settles under the gate's 3 deg and three of the shoot tests fired nothing. One pole at alpha 0.25 on a 60 Hz loop is about 50 ms of lag for roughly a third of the noise. The thing being estimated moves on the timescale of the robot's own acceleration, which is tenths of a second, so 50 ms is cheap - RETUNE against a real puck, whose noise will not be Gaussian.",
    "noise": {
@@ -248,6 +248,65 @@
     "vel_mps": 0.04,
     "omegaDps": 1.0,
     "_source": "guess, sized on a two-pod odometry puck (goBILDA Pinpoint class) rather than measured. WAS ALL ZEROS AND READ BY NOTHING: the brain was handed ground-truth position, heading AND velocity, so the motion lead -- which is built entirely on the reported velocity -- had never been tested against an estimate that could be wrong. vel_mps is the one that matters: a puck differentiates a quantised encoder, and differentiating is the noisiest thing on the robot. 0.04 m/s against a ball horizontal of about 2.3 m/s is about one degree of bearing, the same order as the launch yaw scatter already modelled. xy_in and heading_deg are a standing error rather than a drift, which flatters a real puck over a long match and is fair over the few seconds a shot takes - CALIBRATE by driving a known square and reading the closing error. The TARGET bearing and range are still exact, which is the bigger remaining lie: on a real robot they come from an AprilTag pipeline with its own noise and 50-100 ms of latency."
+   },
+   "drift": {
+    "_about": "INTEGRATED error, which is what odometry actually has. Before this the localizer was ground truth plus white noise -- half an inch of error forever, however far the robot drove -- and that made the AprilTag look optional, because there was no drift for it to correct.",
+    "enabled": true,
+    "scaleErr": 0.005,
+    "scaleErr_source": "One sigma, drawn ONCE per run: a wheel diameter or pod spacing that is not quite the number typed in. 0.5% is 0.6 in over a 10 ft drive, one sign, and it never averages out - MEASURE by driving a surveyed 10 ft and comparing what the pods report.",
+    "gyroBias_dps": 0.1,
+    "gyroBias_dps_source": "One sigma, drawn ONCE per run. THE EXPENSIVE ONE: 0.1 deg/s is 3 deg after a 30 s AUTO, and heading error rotates every inch driven after it, so position error grows with DISTANCE and never comes back. A BHI260AP-class fused IMU (what a goBILDA Pinpoint carries) is around here - MEASURE by sitting still for 60 s and reading the heading off.",
+    "gyroWalk_dps": 0.02,
+    "gyroWalk_dps_source": "Random walk on that bias, per root second. Keeps the bias from being a single constant a smart filter could learn and cancel outright - guess, CALIBRATE from a long stationary log.",
+    "gyroNoise_dps": 0.3,
+    "gyroNoise_dps_source": "White noise on the rate. Averages out over a match and is the least important of the three - guess.",
+    "slipFrac": 0.004,
+    "slipFrac_source": "Per-step position error as a fraction of the step, both axes: the wheel that breaks traction while the encoder counts through it. This is the term that does NOT average out and the one a dead-wheel pod exists to avoid, so it should fall a lot if the pods are unsprung and true - MEASURE by driving into the wall and reading the jump."
+   },
+   "fuse": {
+    "_about": "Tag fixes correcting the dead-reckoned pose. A fiducial at a SURVEYED position is a measurement of the OBSERVER before it is anything else, and this is what stops odometry drift growing without bound.",
+    "gain": 0.15,
+    "gain_source": "Fraction of each fix's disagreement absorbed. A tag fix carries 4% of range -- 2 in at 50 -- so snapping onto every detection at 30 Hz injects that straight into the aim; a one-pole averages the noise down while still removing drift, which is one-signed. 0.15 is about a 7-fix time constant, a quarter second. RAISE it if drift is winning, LOWER it if the aim jitters - SWEEP against odometryErrorIn().",
+    "rejectOver_in": 36.0,
+    "rejectOver_in_source": "Refuse a fix that disagrees with the estimate by more than this. Three feet of disagreement between two frames is a misread, the wrong tag, or a pose that has already failed -- not drift, which arrives an inch at a time. A gate here is what stops one bad decode throwing the match away - guess, TIGHTEN once the real drift rate is measured.",
+    "headingGain": 0.05,
+    "headingGain_source": "The same, off the tag's YAW, and much smaller because yaw carries an order more noise than bearing -- 6 deg of sigma against 0.5. At 0.05 the steady-state heading error is sigma*sqrt(g/(2-g)) = about 1 deg, which beats a gyro bias left to run for 30 s. THIS IS NOT OPTIONAL: a bearing-and-range fix is measured along a line drawn at the heading the robot believes, so correcting position under a heading that is 4 deg out drives the pose to a place consistent with the 4 deg. Measured with headingGain at 0 the correction made things WORSE -- 0.8 in of error became 7.2 - SWEEP with tools/driftcheck.ts."
+   }
+  },
+  "tag": {
+   "_about": "The tag pipeline. THIS BLOCK REPLACES AN ORACLE: `game.upCellAzimuthDeg` and friends used to come straight off the world with no noise, no latency, no field of view and no way to be invalid, and both brains aimed on them. docs/LOCALIZATION.md is the design; packages/core/src/physics/tagCamera.ts is the model.",
+   "enabled": true,
+   "mount": "turret",
+   "mount_source": "docs/LOCALIZATION.md phase 4, and it is a hardware decision as much as a software one. A chassis camera with this lens covers 17% of headings, so 'a tag is in view' is luck; the turret already tracks the CELL, so a camera bolted to it is pointing at the tag whenever the shooter is aimed. Cost: the camera's wiring has to survive 370 deg of turret travel, same as the feed tube.",
+   "fov_deg": 60.0,
+   "fov_deg_source": "cited, rounded down: a Limelight 3A is 63.3 deg horizontal and a C920 at 4:3 is 70.4. 60 is the conservative one - CALIBRATE against the lens actually fitted, and note the gate is against the TURRET angle, not the chassis.",
+   "maxRange_in": 120.0,
+   "maxRange_in_source": "guess, sized on a 4 in tag at 640x480 needing roughly 20 px across to decode reliably - MEASURE by walking the robot back until the detection rate falls off, because this number sets where the shot zone stops.",
+   "maxIncidence_deg": 65.0,
+   "maxIncidence_deg_source": "guess. Past about 65 deg the tag's face has too little projected area to decode, and the pose it does return is the worst-conditioned one. docs/LOCALIZATION.md calls a tighter limit here the thing that would most change the answer - MEASURE it on the real tag before trusting any shot taken from the side.",
+   "frameRateHz": 30.0,
+   "frameRateHz_source": "cited: an FTC webcam through AprilTagProcessor at 640x480 runs 20-30 fps. Deliberately SLOWER than the 60 Hz control loop, because that gap is why a fix goes stale between shots and it is the gap the readiness gate now has to respect.",
+   "latencyMs": 75.0,
+   "latencyMs_source": "docs/PHYSICS.md 6 named 50-100 ms as the real figure and the simulator had none of it. This is the slowest thing in the aim chain and the only one the robot cannot make faster by trying harder - MEASURE with the Limelight's own pipeline latency field, or by waving a tag past a known encoder angle.",
+   "noise": {
+    "bearing_deg": 0.5,
+    "rangeFrac": 0.04,
+    "open_deg": 6.0,
+    "_source": "guesses, but their RATIO is the point and it is the well-documented shape of an AprilTag pose: bearing is the strong axis (the tag's centre is a sub-pixel centroid), range is an apparent-SIZE estimate so its error is a fraction of the range rather than a fixed distance, and tag YAW is the worst-conditioned axis by an order - which is unfortunate, because the 'is the mouth still open towards me' gate is built on yaw. CALIBRATE all three by parking the robot at a surveyed spot and logging detections."
+   },
+   "target": {
+    "holdS": 0.75,
+    "holdS_source": "guess. How long a fix may be carried forward on odometry before the target counts as lost and the turret starts sweeping. Long enough to ride out the blind window of a TIP and a couple of dropped frames; short enough that the carried fix has not drifted past the mouth - SWEEP it against landed-per-second once the odometry error is calibrated.",
+    "maxFireAgeS": 0.25,
+    "maxFireAgeS_source": "MEASURED against the pipeline, not chosen: at 30 fps and 75 ms of latency a fix is 75-108 ms old the moment it arrives, so anything under about 0.12 s refuses every shot the camera can supply. 0.25 s leaves room for one dropped frame and no more. THIS IS THE GATE THAT REPLACES THE ORACLE'S `hiveTipping`: a rocker going over blinds the camera, the fix ages past this, and the robot holds fire without ever being told the hive moved.",
+    "scanRateDps": 120.0,
+    "scanRateDps_source": "guess, well under the turret's 261 deg/s so the lens is not smearing while it sweeps. This is what the robot does with no fix at all, and it is why no field geometry is baked into the deliverable: it re-acquires from wherever it is rather than from where it was told it was - CALIBRATE against the frame rate, since a sweep faster than fov_deg*frameRateHz steps past tags without ever seeing one.",
+    "fireOnOdometry": true,
+    "fireOnOdometry_source": "Policy, not physics. With no tag in view the robot still knows where the HIVE is -- it does not move -- so odometry plus the baked mouth position gives a bearing and a range, and this says whether a shot may be taken on that alone. TRUE keeps the robot shooting when vision drops out, which is what a real team wants and what makes the camera an improvement rather than a single point of failure. THE RISK IS NOT THE POSITION, IT IS THE ROCKER STATE: odometry cannot see which CELL is up, so after a TIP nobody saw, the robot aims confidently at a mouth that is now facing the other way. The tag is the only thing that corrects that, which is why `stateFromTag` below refuses the shot until a tag has been seen at least once - SWEEP this against landed per second with the camera disabled before trusting it in a match.",
+    "anchorAlpha": 0.0,
+    "anchorAlpha_source": "OFF, and deliberately. A single sighting is one relative measurement between two unknowns -- where the robot is and where the HIVE is -- and it cannot pin both. `sensors.localizer.fuse` chooses to believe the SURVEY and estimate the ROBOT, which is the right way round because the field is built to a drawing and cad/parts.json has its geometry. Estimating the pivot from a pose that is itself corrected by the pivot is circular: the pair drifts off together, consistent with each other and wrong about the field, and no measurement ever notices. Set it non-zero ONLY with fuse.gain at 0, i.e. if you distrust the survey more than the odometry - it is a choice between the two, not a way to have both.",
+    "measAlpha": 0.35,
+    "measAlpha_source": "How much of each new detection to take into the target estimate. 1 replaces it outright, which is what this did first -- and it means the aim point jumps by that detection's own error, about 2 in at 50, thirty times a second. At 0.35 roughly five sightings are averaged and the noise comes down as their root, for about 90 ms of lag against a target that is not moving. A change of TAG ID bypasses this entirely and replaces the estimate: the two CELLs are 14 in apart across the pivot and an average of them aims at the rocker in between - SWEEP it against landed per second; it trades aim noise for staleness and the balance is not obvious."
    }
   }
  },

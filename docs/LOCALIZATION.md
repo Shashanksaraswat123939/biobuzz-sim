@@ -107,7 +107,15 @@ Two conclusions that do not depend on the exact rates:
 
 ## The plan
 
-### Phase 0 — confirm the three things this rests on
+> **Status, as of the tag-camera change.** Phases 1–5 are BUILT, in the reduced form each
+> entry below now records. Phase 0 is still open and is the only thing here that needs a
+> person rather than a commit: nobody has looked up the tag IDs, the printed tag size or the
+> panel's normal, so `maxRange_in` and `maxIncidence_deg` in `config/robot.json` are guesses
+> standing in for three facts. Phase 6 is open: the calibration loop has not been re-run
+> against the camera, so every table in this repo was still solved for a robot with perfect
+> knowledge of where the goal is.
+
+### Phase 0 — confirm the three things this rests on — **STILL OPEN**
 None is a physics guess; they are facts someone must look up. **Do this before building.**
 1. **The tag IDs.** The whole scheme turns on each CELL carrying a *distinct* ID. Not
    recorded anywhere in this repository.
@@ -116,7 +124,7 @@ None is a physics guess; they are facts someone must look up. **Do this before b
    past ~60–70° off its normal stops decoding, and the panel is on the pocket *underside* —
    so the far-range figures above are optimistic until this is measured off the STEP.
 
-### Phase 1 — stop cheating in the sim
+### Phase 1 — stop cheating in the sim — **DONE**
 `robot.json` has `localizer: { source: "groundTruth", noise: { xy_in: 0, heading_deg: 0 } }`,
 and PLAN.md line 30 admits it: *"the robot's pose is ground truth from the physics."* Every
 autonomous result so far assumes perfect knowledge of position.
@@ -125,7 +133,14 @@ Add `source: "odometry"` — integrate the drivetrain's own motion with a slip t
 with drift and latency. **Expect AUTO scores to fall.** That drop is information, not a
 regression: it is the size of the problem being measured for the first time.
 
-### Phase 2 — a simulated tag camera
+**Built, in the cheaper form:** `sensors.localizer.noise` carries 0.5 in, 0.5°, 0.04 m/s and
+1 °/s, drawn from the world's seeded RNG. That is standing error, not integrated drift — it
+flatters a real puck over a long match and is fair over the few seconds a shot takes. The
+full dead-reckoning model is still worth building; this was enough to stop the motion lead
+being tested against an estimate that could never be wrong. AUTO did not fall, because AUTO
+is 30 s and the error does not accumulate.
+
+### Phase 2 — a simulated tag camera — **DONE**
 A `TagCamera` sensor producing detections, not poses: ID, relative bearing, relative range,
 each with the noise model in `tagstudy.ts`. Gate on FOV, on the pixel floor, and on incidence
 once Phase 0 gives the normal. Emit nothing while `hiveTipping`.
@@ -134,7 +149,14 @@ This is the piece PLAN.md §16 lists as future work ("AprilTag detection with a 
 camera"). It stays a *sensor*, so the Java sees exactly what the SDK's
 `AprilTagProcessor` would hand it.
 
-### Phase 3 — aim off the tag, not off the pose
+**Built:** `packages/core/src/physics/tagCamera.ts`, configured by `sensors.tag`. Detections
+at 30 fps with 75 ms of latency; gated on a 60° lens against the **turret** angle, 120 in of
+range, 65° of incidence, and silence while `tipping`. Noise is 0.5° on bearing, 4% on range,
+6° on tag yaw. It reaches the Java as `sensors.tag` on the wire and
+`control/TagCamera.java` on the robot. The incidence gate is still keyed off the world's
+mouth normal rather than the panel's, which is Phase 0's second half.
+
+### Phase 3 — aim off the tag, not off the pose — **DONE**
 Change `BuiltinTeleOp` and `TurretTracker` so that when a tag of the up CELL is in view, the
 turret uses the **measured relative bearing** directly and the shot table is indexed on the
 **measured range**. Fall back to the global pose only when no tag is visible.
@@ -142,23 +164,49 @@ turret uses the **measured relative bearing** directly and the shot table is ind
 This is the highest-value change in the document and it is mostly deletion: the whole
 pose → bearing → turret chain is bypassed when the measurement is available.
 
-### Phase 4 — put the camera on the turret
+**Built, and it was mostly deletion as predicted.** `game.upCellAzimuthDeg` /
+`upCellRangeIn` / `upCellOpenDeg` / `hiveTipping` no longer exist as things a brain can read;
+the four moved behind `game.truth` for measurement only, and `tests/tag.test.ts` greps the
+brains to keep them there. Both brains index the table on the **measured** range and point
+the turret at the **measured** bearing.
+
+### Phase 4 — put the camera on the turret — **DONE**
 The single best hardware decision available. A chassis-mounted camera with a 60° FOV covers
 17% of headings, so "a tag is in view" is mostly luck. **The turret already tracks the CELL**,
 so a camera bolted to it is pointing at the tag whenever the shooter is aimed — by
 construction, not by chance. It also gives the turret a closed loop on its own encoder zero,
 which is otherwise a calibration constant that drifts with every collision.
 
-### Phase 5 — fuse, and only then
+### Phase 5 — fuse, and only then — **DONE**
 A small filter: odometry propagates, tag fixes correct. Weight bearing heavily and range
 lightly, matching the error model above. Reset rather than blend on an ID change. Keep it a
 complementary filter unless a measured need for more shows up — a full EKF here would be
 complexity nobody asked for.
 
-### Phase 6 — re-run the whole calibration loop
+**Built, and smaller than a complementary filter.** `control/TagTargetProvider.java` turns a
+detection into a field-frame point once and re-derives bearing and range from the localizer's
+current pose every loop after that. No weights, because there is nothing to weigh: the newest
+detection replaces the fix outright, which is the "reset rather than blend on an ID change"
+rule with the ID check deleted as redundant. A fix may be carried `holdS` = 0.75 s and fired
+on for `maxFireAgeS` = 0.25 s. With no localizer fitted the carry is disabled rather than
+faked. Add weights when a measurement asks for them.
+
+The piece this deliberately does NOT have: acquisition from a known field position. With no
+fix the turret **sweeps** at 120 °/s until a tag lands in the lens, so no field geometry is
+baked into the deliverable and the robot re-acquires from wherever it actually is.
+
+### Phase 6 — re-run the whole calibration loop — **STILL OPEN, AND NOW THE BIG ONE**
 `shottable.ts` → `landrate.ts` → `autoplan.ts`, with honest localization in place. The current
 AUTO conclusion ("28 points, stand at 54 in") was computed with a robot that knows its
 position perfectly. **It is optimistic and should be expected to move.**
+
+**Still true, and now it is the largest open item in the project.** Every generated artefact
+— the shot table, the hood table, `entry.json`, `landcal.json`, `shotzone.json` — was solved
+against the oracle. First measurement through the camera (`tools/movingfire.ts --gate`,
+landed/s, oracle → camera): stopped 0.85 → 0.95, closing 0.95 → 0.95, strafing 0.80 → 0.80,
+shuttling 0.85 → 0.85, wobbling 0.75 → 0.65; lateral spread ±2–3 cm → ±4–7 cm; "clear to
+fire" 95–100% → 81–97%. The rates hold up; the spread is the bearing sigma arriving. None of
+that is a re-calibration, it is the old tables surviving a harder world.
 
 ---
 

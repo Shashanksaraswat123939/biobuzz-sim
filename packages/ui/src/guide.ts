@@ -48,6 +48,59 @@ export const CONTROLS: ControlGroup[] = [
     ],
   },
   {
+    title: 'Finding the goal',
+    blurb:
+      'The robot is not told where the HIVE is. It reads an AprilTag on the up CELL through a '
+      + 'camera bolted to the turret — 60° of lens, 30 frames a second, 75 ms behind, and blind '
+      + 'past 120 in or 65° round the side. Everything the shooter does hangs off that one '
+      + 'measurement, so this is the first thing to check when it will not shoot.',
+    items: [
+      {
+        key: 'SEARCHING',
+        what: 'It cannot see the tag',
+        why: 'The turret is sweeping to find one. This is normal, not a fault — and note that from the '
+          + 'start tile it is also CORRECT: the mouth faces about 109° away from there, so no shot could '
+          + 'enter even if it could see. Drive round into the shooting sector and it locks on within a sweep.',
+      },
+      {
+        key: 'CELL A/B',
+        what: 'Locked on, and which CELL',
+        why: 'The two CELLs carry different tags, so the ID is how the robot knows which one is up — it is '
+          + 'the only way it ever learns the HIVE tipped. Green means the fix is fresh enough to shoot on.',
+      },
+      {
+        key: 'fix age',
+        what: 'How old the last detection is',
+        why: 'Never zero: the pipeline is 75 ms behind and runs slower than the control loop. Under 250 ms it '
+          + 'may fire. Over that it keeps aiming — carrying the fix forward on odometry — but holds fire, '
+          + 'because a shot solved off a stale fix is solved off where the goal WAS.',
+      },
+      {
+        key: 'mouth angle',
+        what: 'How square you are onto the opening',
+        why: 'Past 75° the opening has too little area to enter and the gate refuses the shot. A TIP swaps '
+          + 'which CELL is up and the new one opens the other way, so this can jump from fine to hopeless '
+          + 'without you moving — drive round.',
+      },
+      {
+        key: 'Sight line',
+        what: 'The ray it is trying to decode along',
+        why: 'Turn it on in the deck. It draws the line from the AprilTag panel on the up CELL to the '
+          + 'camera: GREEN while it is decoding, RED while the geometry refuses. It is the difference '
+          + 'between "the robot is broken" and "you are stood round the side of the mouth". Note it '
+          + 'starts at the robot’s centre at muzzle height, because that is where the model puts the '
+          + 'camera — there is no mount offset yet.',
+      },
+      {
+        key: 'range',
+        what: 'Two of them, on purpose',
+        why: 'The Robot panel shows “range to CELL (true)” and “range it believes” side by side. The first is '
+          + 'the world’s; the second is what the camera told the robot. The gap between them is the error the '
+          + 'shooter is actually working against.',
+      },
+    ],
+  },
+  {
     title: 'View',
     blurb: 'The right stick is the VIEW, in every camera mode — including the ones that ride the robot, which could not look around at all before.',
     items: [
@@ -91,7 +144,7 @@ export const MODES: { name: string; what: string }[] = [
 ];
 
 export const PANELS: { name: string; what: string }[] = [
-  { name: 'Robot', what: 'Live state: pose, shooter, the HIVE tip meter with the torque balance behind it, per-wheel slip, and whatever the brain is putting on telemetry.' },
+  { name: 'Robot', what: 'Live state: pose, what the camera can see of the goal and how stale it is, shooter, the HIVE tip meter with the torque balance behind it, per-wheel slip, and whatever the brain is putting on telemetry.' },
   { name: 'Predictor', what: 'The error budget for the current shot. Each row is (inches the ball moves per unit of that variable) × (that variable’s own 1 σ uncertainty). The bar is its share of the total variance. Hover a row name for where its uncertainty comes from.' },
   { name: 'Analysis', what: 'Starts with the SCOREBOARD: where both alliances’ points come from, itemised. Everything positional is credited at the buzzer, so until the clock stops those are projections — what you would score if it went now, from the same arithmetic as the final. A dimmed row is an avenue you are not using. Then the shot log and what it means: bias is a table error that one offset fixes; spread is a repeatability error that no offset fixes. Export CSV to take the raw log elsewhere.' },
   { name: 'Variables', what: 'Every constant the simulator runs on, read from config/*.json. Rows marked * are baked into rigid bodies and need Apply & restart; everything else is live.' },

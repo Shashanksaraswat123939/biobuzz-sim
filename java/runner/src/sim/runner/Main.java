@@ -12,7 +12,7 @@ import sim.sdk.SimHardwareMap;
 import sim.sdk.SimHub;
 import sim.sdk.SimLocalizer;
 import sim.sdk.SimBallCounter;
-import sim.sdk.SimTargetProvider;
+import sim.sdk.SimTagCamera;
 import sim.sdk.SimTelemetry;
 
 import java.io.File;
@@ -99,7 +99,16 @@ public class Main {
         }
         hw.registerMotor("intake", ticks(variants, Json.obj(Json.obj(robot, "intake"), "motor")));
         hw.registerMotor("transfer", ticks(variants, Json.obj(Json.obj(robot, "transfer"), "motor")));
+        // ONE WHEEL, ONE ROLE ON THE WIRE, BUT A PORT PER MOTOR. The world models a single
+        // flywheel shaft; the hub sees `motorCount` separate motors and TeamCode opens each by
+        // name, so every hardware entry starting `flywheel` has to resolve -- otherwise
+        // Flywheel.init()'s hw.get("motor7") throws and the OpMode dies before it runs a loop.
+        // Aliasing them onto the same device is exactly right: two motors ganged on one shaft
+        // measure and drive the same thing.
         hw.registerMotor("flywheel", ticks(variants, Json.obj(Json.obj(robot, "flywheel"), "motor")));
+        for (String role : hardware.keySet()) {
+            if (role.startsWith("flywheel") && !hw.has(role)) hw.alias("flywheel", role);
+        }
         if (Json.bool(Json.obj(robot, "turret"), "enabled", false)) {
             hw.registerMotor("turret", ticks(variants, Json.obj(Json.obj(robot, "turret"), "motor")));
         }
@@ -110,7 +119,10 @@ public class Main {
 
         // The sim-only providers, looked up by name. On the hub these simply are not there.
         hw.register("localizer", new SimLocalizer(hub));
-        hw.register("target", new SimTargetProvider(hub));
+        // The tag pipeline. TeamCode builds its own TagTargetProvider around this, so the
+        // fusion that turns late detections into an aim is part of the DELIVERABLE rather than
+        // something the simulator does on the robot's behalf.
+        hw.register("tagcam", new SimTagCamera(hub));
             hw.register("hopper", new SimBallCounter(hub));
 
         // TeamCode addresses devices by the names in robot.json -> hardware, so alias them.

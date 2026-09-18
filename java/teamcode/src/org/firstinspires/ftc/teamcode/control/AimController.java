@@ -16,6 +16,8 @@ public class AimController {
     private double lastLeadDeg = 0;
     private double lastHoodErrDeg = 0;
     private double lastPLand = -1;
+    /** The other HIVE's structure is across the shot line. Telemetry, and a reason to move. */
+    private boolean lastBlocked = false;
     /** One-pole filtered localizer velocity, m/s. The lead is only as good as this. */
     private double velX = 0;
     private double velY = 0;
@@ -33,9 +35,33 @@ public class AimController {
 
     /** Call once per loop while aiming. Returns true when a shot is allowed. */
     public boolean update(boolean wantShot) {
+        // AGE THE FIX HERE, not in Robot.update(). Every OpMode calls this BEFORE
+        // robot.update(), because robot.update() is where the actuator writes go -- so a fix
+        // refreshed there would be one loop (16 ms) older than the shot solved off it, on top
+        // of the pipeline's own 75-108 ms. Reading a sensor belongs with the code that reads
+        // it, and this is the only reader.
+        // THE POSE FIRST, then the target that is derived from it, then the aim. Every OpMode
+        // calls this BEFORE robot.update() -- that is where the actuator writes go -- so both
+        // estimators have to be stepped here or the shot is solved off last loop's numbers.
+        FusedLocalizer fz = robot.fused();
+        if (fz != null) fz.update();
+        TagTargetProvider tag = robot.tagTarget();
+        if (tag != null) tag.update();
         TargetProvider tp = robot.target();
-        if (tp == null || !tp.isValid()) {
+        if (tp == null) {
             aimed = false;
+            robot.flywheel.stop();
+            return false;
+        }
+        if (!tp.isValid()) {
+            // NO FIX. Not "do nothing" -- the camera rides the turret, so standing still with
+            // the head where it was is how a robot never finds the tag again. The provider is
+            // already sweeping and getAzimuthDeg() is that sweep; all this has to do is follow
+            // it. The wheel comes down because there is nothing to spin up FOR, and it is the
+            // one part of the shooter that can afford to wait.
+            aimed = false;
+            lastPLand = -1;
+            robot.turret.aimAt(tp.getAzimuthDeg(), robot.dt());
             robot.flywheel.stop();
             return false;
         }
@@ -122,7 +148,8 @@ public class AimController {
         double exitRel = robot.cfg.exitSpeedFor(robot.flywheel.getRpm()) - (lead.speed - tableSpeed);
         lastPLand = LandProbability.pLand(
                 robot.shots, range, exitRel, range * 0.0254,
-                robot.turret.errorDeg(), robot.cfg.flywheelYawScatterDeg);
+                robot.turret.errorDeg(), robot.cfg.flywheelYawScatterDeg,
+                tp.getOpenAngleDeg());
         // -1 means the table predates the columns the model needs; fall through to the window
         // rather than refusing every shot forever.
         boolean likely = lastPLand < 0 || lastPLand >= robot.cfg.flywheelMinLandProb;
@@ -133,10 +160,23 @@ public class AimController {
         // edge-on and has no area at all. The mirror gates on the same number.
         boolean mouthOpen = tp.getOpenAngleDeg() <= 75.0;
 
+        // IS THE OTHER HIVE IN THE WAY? Two rockers 25.5 in apart, each CELL 20 in wide, so a
+        // shot from the far side of theirs crosses their structure -- and the shot table never
+        // knew, because it checks only the target's own lips. No hood angle fixes it; the only
+        // answer is to drive round. Their rocker state is irrelevant: their CELLs sweep a disc.
+        Localizer lz = robot.localizer();
+        boolean blocked = false;
+        if (lz != null) {
+            double b = Math.toRadians(lz.getHeadingDeg() + bearing);
+            blocked = ClearShot.blocked(lz.getX(), lz.getY(),
+                    lz.getX() + range * Math.cos(b), lz.getY() + range * Math.sin(b));
+        }
+        lastBlocked = blocked;
+
         // G417: only a shot into the up CELL may move the HIVE, and a hive already
         // tipping is not a target. Hold fire.
         aimed = pointing && inRange && hoodThere && likely && robot.flywheel.isReady()
-                && !tp.isTipping() && mouthOpen;
+                && !tp.isTipping() && mouthOpen && !blocked;
 
         // AND KEEP CHECKING AFTER THE DECISION. A feed already in flight is cancelled if the
         // things that can go bad inside those four tenths do: the turret running out of travel,
@@ -168,8 +208,19 @@ public class AimController {
 
     public String status() {
         TargetProvider tp = robot.target();
-        if (tp == null || !tp.isValid()) return "no target";
-        if (tp.isTipping()) return "hive tipping - hold";
+        if (tp == null) return "no target";
+        TagTargetProvider tag = robot.tagTarget();
+        if (!tp.isValid()) {
+            return tag == null ? "no target"
+                    : tag.getId() == 0 ? "searching for the tag" : "lost the tag - searching";
+        }
+        // A stale fix, which is what a TIP, an occlusion and looking away all look like from
+        // a camera. Printing the age rather than a cause is the honest version: the robot
+        // does not know which of the three it is, and holds fire for all of them.
+        if (tp.isTipping()) {
+            return tag == null ? "target moving - hold"
+                    : String.format("tag fix %.0f ms old - hold", tag.getAgeS() * 1000);
+        }
         if (!robot.shots.usable(tp.getRangeIn())) return "out of range";
         if (!robot.turret.tracker().canReach(tp.getAzimuthDeg() + lead.correctionDeg)) return "turret cannot reach";
         if (!robot.turret.onTarget(3.0)) return "turret slewing";
@@ -181,6 +232,7 @@ public class AimController {
             return String.format("P(land) %.0f%% < %.0f%%",
                     lastPLand * 100, robot.cfg.flywheelMinLandProb * 100);
         }
+        if (lastBlocked) return "the other HIVE is in the way";
         if (robot.hopper.isEmpty()) return "hopper empty";
         return "READY";
     }

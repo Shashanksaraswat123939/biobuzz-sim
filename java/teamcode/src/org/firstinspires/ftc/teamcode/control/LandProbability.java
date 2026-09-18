@@ -61,15 +61,33 @@ public final class LandProbability {
      * @param rangeM       muzzle to mouth, metres
      * @param turretErrDeg how far off the commanded bearing the turret currently is
      * @param yawScatterDeg one sigma of launch bearing scatter
+     * @param openAngleDeg how far off the mouth's opening the shot comes in: 0 is square on,
+     *                     and the mouth's usable width falls away as its cosine
      * @return calibrated probability in [0, 1], or -1 when the table row carries no model
      */
     public static double pLand(ShotTable table, double rangeIn, double exitSpeed,
-                               double rangeM, double turretErrDeg, double yawScatterDeg) {
+                               double rangeM, double turretErrDeg, double yawScatterDeg,
+                               double openAngleDeg) {
         double lo = table.lerpAt(ShotTableData.SPEED_LO, rangeIn);
         double hi = table.lerpAt(ShotTableData.SPEED_HI, rangeIn);
         double sigma = table.lerpAt(ShotTableData.SIGMA_SPEED, rangeIn);
         double pStay = table.lerpAt(ShotTableData.P_STAY, rangeIn);
-        double halfLat = table.lerpAt(ShotTableData.HALF_LAT_M, rangeIn);
+        // THE MOUTH IS A SLOT, AND OFF TO ONE SIDE IT IS A NARROWER ONE.
+        //
+        // halfLat is solved head-on, because the shot table is. What matters to a shot is the
+        // mouth's extent PERPENDICULAR TO THE SHOT LINE, and that shrinks by cos(off-axis) --
+        // at 60 deg round the side the target is half as wide as the table thinks, and the
+        // robot was scoring its chances against the full width from everywhere on the field.
+        // tools/shotzone.ts has always modelled this; the robot never did, which is why the
+        // painted zone and the robot's own gate could disagree about the same spot.
+        //
+        // ponytail: the same geometry makes the slot DEEPER along the shot by 1/cos, which
+        // widens the speed band and is the forgiving half of the trade. Left out because it
+        // flatters the shot and this factor is the one that refuses bad ones; add it by
+        // scaling speedLo/speedHi about their centre if the zone map and the gate ever need
+        // to agree to better than a few percent.
+        double halfLat = table.lerpAt(ShotTableData.HALF_LAT_M, rangeIn)
+                * Math.max(0, Math.cos(Math.toRadians(openAngleDeg)));
         if (!(hi > lo) || !(sigma > 0)) return -1;
 
         double speed = pThread(lo, hi, exitSpeed, sigma);

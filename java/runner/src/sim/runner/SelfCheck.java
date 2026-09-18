@@ -149,12 +149,21 @@ public class SelfCheck {
         that("calibration is monotone",
                 LandProbability.calibrate(0.5) <= LandProbability.calibrate(0.9));
 
+        // Square onto the mouth: openAngleDeg 0, so the mouth is its full measured width.
         double pOn = LandProbability.pLand(table, mid, cfg.exitSpeedFor(table.rpmFor(mid)),
-                mid * 0.0254, 0, cfg.flywheelYawScatterDeg);
+                mid * 0.0254, 0, cfg.flywheelYawScatterDeg, 0);
         double pOff = LandProbability.pLand(table, mid, cfg.exitSpeedFor(table.rpmFor(mid)),
-                mid * 0.0254, 12, cfg.flywheelYawScatterDeg);
+                mid * 0.0254, 12, cfg.flywheelYawScatterDeg, 0);
         that("P(land) is a probability", pOn >= 0 && pOn <= 1);
         that("pointing 12 degrees off is worse than pointing at it", pOff < pOn);
+
+        // AND THE MOUTH NARROWS OFF-AXIS. The slot's usable width falls as cos(off-axis), so
+        // the same shot taken from 60 deg round the side has half the target to fit through.
+        // tools/shotzone.ts has always modelled this and the robot did not, which is how the
+        // painted zone and the robot's own gate could disagree about one square.
+        double pSide = LandProbability.pLand(table, mid, cfg.exitSpeedFor(table.rpmFor(mid)),
+                mid * 0.0254, 0, cfg.flywheelYawScatterDeg, 60);
+        that("a mouth seen from the side is a narrower mouth", pSide < pOn);
 
         System.out.println("teamcode self-check: " + checks + " assertions passed");
     }

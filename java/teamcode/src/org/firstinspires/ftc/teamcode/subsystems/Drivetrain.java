@@ -100,7 +100,9 @@ public class Drivetrain {
     }
 
     public void update() {
-        if (localizer != null) localizer.update();
+        // NOT the localizer: FusedLocalizer owns stepping it now, and calls raw.update()
+        // itself. Updating it here as well double-integrates a pod that reports deltas.
+        // TuningDrive and anything with no camera still get it from Robot.update() below.
     }
 
     public void telemetry(Telemetry t) {

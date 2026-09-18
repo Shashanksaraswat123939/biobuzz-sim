@@ -305,6 +305,14 @@ export interface TeleOpState {
   pulsing: boolean;
   /** Closing speed on the mouth, m/s. The fixed-speed table's second axis. */
   vRadial: number;
+  /**
+   * The three factors `pLandRaw` is the product of, kept apart so the dead one can be found:
+   * the chance the launch threads the mouth, the measured chance a ball arriving like that
+   * stays in, and the chance the aim is inside the mouth laterally. -1 when not computed.
+   */
+  pSpeed: number;
+  pStayNow: number;
+  pAim: number;
   /** True when the aim is coming off the AprilTag rather than off the localizer. */
   tagLocked: boolean;
   /** How many pixels across the tag is right now. Below the decode floor it is 0. */
@@ -316,7 +324,7 @@ export const newTeleOpState = (): TeleOpState => ({
   turretManualDeg: 0, flywheelOn: false, speedScale: 1,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
-  lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0,
+  lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, pSpeed: -1, pStayNow: -1, pAim: -1, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0,
 });
 
 const edge = (now: boolean, was: boolean) => now && !was;
@@ -789,6 +797,14 @@ export class BuiltinTeleOp {
       : haveModel && wheelOn
         ? pThread(row.speedLo as number, row.speedHi as number, exitRel, row.sigmaSpeed as number) * (row.pStay as number) * pAim
         : -1;
+    // THE THREE FACTORS, KEPT SEPARATELY. The product was the only thing recorded, so when
+    // tools/landcal.ts found it had no predictive power there was no way to ask WHICH of the
+    // three is the dead one. They are cheap to carry and they are the whole diagnosis.
+    st.pSpeed = this.hoodTable && !this.hoodTable.isEmpty
+      ? (cell && wheelOn ? pThread(cell.lo, cell.hi, hoodNow, cell.sigmaHood) : -1)
+      : (haveModel && wheelOn ? pThread(row.speedLo as number, row.speedHi as number, exitRel, row.sigmaSpeed as number) : -1);
+    st.pStayNow = this.hoodTable && !this.hoodTable.isEmpty ? (cell?.pStay ?? -1) : ((row.pStay as number) ?? -1);
+    st.pAim = pAim;
     st.pLandRaw = rawP;
     // Calibrated if a measurement is available, raw otherwise -- and `calibrated` says which,
     // so a threshold is never quietly compared against the wrong kind of number.

@@ -35,7 +35,11 @@ const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/sh
 // out of firing window, so they cost a full run each and contributed almost nothing.
 const RANGES = [40, 55, 70];
 
-export interface Sample { predicted: number; landed: boolean; range_in: number; moving: boolean }
+export interface Sample {
+  predicted: number; landed: boolean; range_in: number; moving: boolean;
+  /** The three factors the prediction is the product of, at the frame the ball left. */
+  pSpeed: number; pStay: number; pAim: number;
+}
 
 /**
  * How the robot is driving while it samples. THE APP SHOOTS ON THE MOVE and the calibration
@@ -106,6 +110,7 @@ async function sampleAt(range_in: number, shots: number, seed: number, drive = D
   };
 
   const predicted: number[] = [];
+  const factors: { pSpeed: number; pStay: number; pAim: number }[] = [];
   let last = 0;
   let loaded = 0;
   for (let f = 0; f < 60 * (shots * 4 + 12) && world.robot.shots < shots; f++) {
@@ -116,9 +121,11 @@ async function sampleAt(range_in: number, shots: number, seed: number, drive = D
     // Capture the prediction on the frame the shot leaves, not after -- the wheel dips on
     // firing, so reading it a frame later records a number the shot was never taken at.
     const before = brain.state.pLand;
+    const parts = { pSpeed: brain.state.pSpeed, pStay: brain.state.pStayNow, pAim: brain.state.pAim };
     step({ ...held(), right_bumper: true });
     if (world.robot.shots > last) {
       predicted.push(before);
+      factors.push(parts);
       last = world.robot.shots;
     }
     // A pass that drives into a wall stops being a moving sample and silently becomes a
@@ -134,7 +141,7 @@ async function sampleAt(range_in: number, shots: number, seed: number, drive = D
   const out: Sample[] = [];
   for (let i = 0; i < predicted.length && i < log.length; i++) {
     if (log[i].result === 'flight') continue;      // never settled; no outcome to learn from
-    out.push({ predicted: predicted[i], landed: log[i].result === 'cell', range_in, moving: drive.wobble > 0 || drive.stick[0] !== 0 || drive.stick[1] !== 0 });
+    out.push({ predicted: predicted[i], landed: log[i].result === 'cell', range_in, moving: drive.wobble > 0 || drive.stick[0] !== 0 || drive.stick[1] !== 0, ...factors[i] });
   }
   return out;
 }
@@ -198,6 +205,48 @@ export async function main(argv: string[] = []): Promise<void> {
       `  ${inBin[0].predicted.toFixed(2)}-${inBin[inBin.length - 1].predicted.toFixed(2)}   ${String(inBin.length).padStart(7)}   ${String(landed).padStart(6)}   ` +
       `${(obs * 100).toFixed(0).padStart(7)}%   ${(se * 100).toFixed(0).padStart(5)}   ${((obs - mid) * 100).toFixed(0).padStart(7)} pts`,
     );
+  }
+  console.log('');
+
+  // WHICH FACTOR IS THE DEAD ONE? `predicted` is pSpeed x pStay x pAim, and the fit says the
+  // product carries no information. Split the samples at each factor's own median and compare
+  // the land rate either side: a factor that predicts shows a gap, one that does not shows
+  // none. This is the whole diagnosis and it costs nothing to print.
+  // PER RANGE, which is the confound behind the two inverted factors: pStay and pAim both
+  // rise as range falls, so if CLOSE shots land worse than far ones both will read backwards
+  // for one reason rather than two.
+  console.log('  land rate by range, and what the model thought:');
+  for (const r of RANGES) {
+    const a = all.filter((x) => x.range_in === r);
+    if (!a.length) continue;
+    const rate = (a.filter((x) => x.landed).length / a.length) * 100;
+    const mp = (f: (x: Sample) => number) => (a.reduce((t, x) => t + f(x), 0) / a.length) * 100;
+    console.log(`    ${String(r).padStart(3)} in   n=${String(a.length).padStart(3)}   landed ${rate.toFixed(0).padStart(3)}%`
+      + `   model: pSpeed ${mp((x) => x.pSpeed).toFixed(0).padStart(3)}%  pStay ${mp((x) => x.pStay).toFixed(0).padStart(3)}%`
+      + `  pAim ${mp((x) => x.pAim).toFixed(0).padStart(3)}%  product ${mp((x) => x.predicted).toFixed(0).padStart(3)}%`);
+  }
+  console.log('');
+  // Dump the raw samples so the next question does not cost another ten-minute run.
+  writeFileSync(new URL('../config/landcal-samples.json', import.meta.url), JSON.stringify(all));
+  console.log(`  wrote config/landcal-samples.json (${all.length} raw samples)`);
+  console.log('');
+
+  console.log('  is each FACTOR predictive? land rate below vs above its own median:');
+  for (const [name, get] of [
+    ['pSpeed (threads the mouth)', (x: Sample) => x.pSpeed],
+    ['pStay  (stays in once there)', (x: Sample) => x.pStay],
+    ['pAim   (lateral)', (x: Sample) => x.pAim],
+    ['pLand  (the product)', (x: Sample) => x.predicted],
+  ] as [string, (x: Sample) => number][]) {
+    const ok = all.filter((x) => Number.isFinite(get(x)) && get(x) >= 0);
+    if (ok.length < 20) { console.log(`    ${name.padEnd(30)} not recorded`); continue; }
+    const med = [...ok].sort((a, b) => get(a) - get(b))[Math.floor(ok.length / 2)];
+    const lo = ok.filter((x) => get(x) < get(med));
+    const hi = ok.filter((x) => get(x) >= get(med));
+    const r = (a: Sample[]) => (a.length ? (a.filter((x) => x.landed).length / a.length) * 100 : NaN);
+    const gap = r(hi) - r(lo);
+    console.log(`    ${name.padEnd(30)} ${r(lo).toFixed(0).padStart(3)}% low  ->  ${r(hi).toFixed(0).padStart(3)}% high`
+      + `   gap ${gap > 0 ? '+' : ''}${gap.toFixed(0)} pts${Math.abs(gap) < 5 ? '   <- carries no information' : ''}`);
   }
   console.log('');
 

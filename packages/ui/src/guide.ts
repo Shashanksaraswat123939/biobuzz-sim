@@ -93,9 +93,16 @@ export const MODES: { name: string; what: string }[] = [
 export const PANELS: { name: string; what: string }[] = [
   { name: 'Robot', what: 'Live state: pose, shooter, the HIVE tip meter with the torque balance behind it, per-wheel slip, and whatever the brain is putting on telemetry.' },
   { name: 'Predictor', what: 'The error budget for the current shot. Each row is (inches the ball moves per unit of that variable) × (that variable’s own 1 σ uncertainty). The bar is its share of the total variance. Hover a row name for where its uncertainty comes from.' },
-  { name: 'Analysis', what: 'The shot log and what it means. Bias is a table error that one offset fixes; spread is a repeatability error that no offset fixes. Export CSV to take the raw log elsewhere.' },
+  { name: 'Analysis', what: 'Starts with the SCOREBOARD: where both alliances’ points come from, itemised. Everything positional is credited at the buzzer, so until the clock stops those are projections — what you would score if it went now, from the same arithmetic as the final. A dimmed row is an avenue you are not using. Then the shot log and what it means: bias is a table error that one offset fixes; spread is a repeatability error that no offset fixes. Export CSV to take the raw log elsewhere.' },
   { name: 'Variables', what: 'Every constant the simulator runs on, read from config/*.json. Rows marked * are baked into rigid bodies and need Apply & restart; everything else is live.' },
   { name: 'Guide', what: 'This page.' },
+];
+
+/** Overlays that live on the field rather than in the panel. */
+export const OVERLAYS: { name: string; what: string }[] = [
+  { name: 'Shot zone', what: 'Where a shot is worth taking, with a legend bottom-left that counts the squares live. GREEN lands. BROWN is inside the shot table’s nearest row — drive back. RED is too far, or no launch fits. GREY is the one worth knowing: the CELL does not open that way and no launch can enter, which is over half the field and is why you cannot score from your own start tile. It is redrawn at the speed you are ACTUALLY doing, because the speed a shot has to leave at depends on what the chassis is doing — the green visibly shrinks as you drive at it. A TIP turns the mouth round and takes the whole map with it.' },
+  { name: 'Shot arc', what: 'YELLOW is where the solver says this shot will go, drawn with the integrator the shot table is built from. BLUE is where the last ball actually went. Where they part company is the thing worth chasing.' },
+  { name: 'AprilTag', what: 'The status strip says whether the turret camera can read the tag on your own up CELL. Locked means the aim is MEASURED and carries no heading error; no tag means it has fallen back to odometry and inherits the IMU’s drift.' },
 ];
 
 export function renderGuide(host: HTMLElement): void {
@@ -118,6 +125,10 @@ export function renderGuide(host: HTMLElement): void {
 
   parts.push('<div class="guide-group"><h5>Panels</h5>');
   for (const p of PANELS) parts.push(`<div class="guide-item"><kbd>${p.name}</kbd><p>${esc(p.what)}</p></div>`);
+  parts.push('</div>');
+
+  parts.push('<div class="guide-group"><h5>On the field</h5>');
+  for (const o of OVERLAYS) parts.push(`<div class="guide-item"><kbd>${o.name}</kbd><p>${esc(o.what)}</p></div>`);
   parts.push('</div>');
 
   host.innerHTML = parts.join('');

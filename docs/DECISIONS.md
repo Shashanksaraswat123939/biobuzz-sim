@@ -1714,3 +1714,65 @@ Did instead: Shipped the 839-shot fit, because it is the honest measurement and 
 Costs/risks: The gate is currently decoration. Do not raise `minLandProb` expecting it to do
              anything; it will either do nothing or stop the robot shooting entirely at 0.89.
 Who/where:   tools/landcal.ts (bin cap, FAST wobble case), config/landcal.json
+
+## 2026-09-18 — Why P(land) predicted nothing: the entry model had the range slope backwards
+
+Plan said:   the 839-shot calibration showed the model's P(land) carrying no information --
+             a 1-point gap between the bottom and top half of its own predictions. Find which
+             part is dead.
+
+Found:       `pLandRaw` is a product of three factors and only the product was ever recorded,
+             so there was no way to ask which. Recording them separately answered it in one
+             run. Land rate below vs above each factor's own median, 839 shots:
+
+               pSpeed (threads the mouth)    72% -> 79%    +6
+               pStay  (stays in once there)  84% -> 73%   -11   INVERTED
+               pAim   (lateral)              83% -> 73%   -10
+               pLand  (the product)          75% -> 76%    +1
+
+             And the cause, per range:
+
+               range   landed   model pSpeed  pStay  pAim  product
+                40 in     63%            87%    96%  100%      84%
+                55 in     81%            98%    87%  100%      85%
+                70 in     84%            66%    75%  100%      48%
+
+             CLOSE SHOTS LAND WORST AND THE MODEL RATED THEM BEST. pStay falls with range in
+             the model and rises with range in reality, so it was not merely miscalibrated,
+             it had the sign of the slope wrong -- and since pAim also rises as range falls,
+             both read as inverted for the same single reason.
+
+             That is the same failure as the shot-table rebuild rejected earlier today, and
+             for the same reason: `pStay` comes from `tools/entrycheck.ts`, which injects
+             balls AT the mouth on independent speed and descent axes. A real shot's arrival
+             angle, speed, lateral offset and spin are correlated through the trajectory that
+             produced them. The marginal distribution does not transfer.
+
+Did instead: Replaced the shot table's `pStay` column with retention MEASURED from the 839
+             real shots -- 0.725 at 40 in, 0.829 at 55, 1.0 at 70 -- rather than modelled from
+             injected balls. Same harness, same shots, only the prediction changed:
+
+               pStay   -11  ->  +17     (now the strongest single factor)
+               pLand    +1  ->  +13     (was carrying no information)
+
+             and the model now tracks reality per range: 63% actual against 64% predicted at
+             40 in, 81% against 78% at 55.
+
+Costs/risks: ONLY 40-70 in IS MEASURED. Below 40 the endpoint is held; above 70 it is held at
+             1.0, which is certainly optimistic -- a 150 in shot does not retain perfectly.
+             Extending `RANGES` in tools/landcal.ts past 70 in needs the harness fixed first
+             (the longer passes "failed to place on the field or ran out of firing window").
+             Until then the score is honest in the middle and optimistic at the long end.
+
+             END-TO-END HIT RATES DID NOT MOVE: 88/100/100/100/91/100/79/89 before and after.
+             That is consistent rather than disappointing -- movingtune fires from a FIXED
+             range, and almost all the recovered signal is BETWEEN ranges. Within one range
+             the only remaining predictor is pSpeed at +6. Where this pays is anything that
+             CHOOSES a range: the autonomous stand-off, the opponent's, and the shot map.
+
+             `pAim` is 100% at all three measured ranges and contributes nothing. Left in
+             because it is the term that would matter past 100 in, where nothing is measured.
+Who/where:   tools/landcal.ts (per-factor and per-range breakdown, raw sample dump),
+             java/teamcode/assets/shottable.csv (pStay column), config/landcal.json,
+             config/landcal-samples.json, config/shotzone.json,
+             packages/core/src/robot/builtinTeleOp.ts (the three factors on the state)

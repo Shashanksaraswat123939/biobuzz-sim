@@ -148,6 +148,14 @@ export function buildZone(
       const cosOff = Math.abs(uz);
       if (cosOff < 0.15) { tally.behind++; cells.push(blank(x * M_TO_IN, z * M_TO_IN, 'behind')); continue; }
       const offAxisDeg = Math.acos(Math.min(1, cosOff)) / DEG;
+      // PAINT THE GATE THE ROBOT ACTUALLY HAS. The map rejected only shots from behind the
+      // mouth plane (81 deg), while the fire gate refuses anything past turret.fireOpenCap_deg
+      // -- 60 deg, because the opening seen edge-on is 14*cos(off-axis) and at 62 deg that is
+      // 6.6 in for a 2.8 in ball. So the band between them was painted GREEN and the robot
+      // would not fire from it: measured by tools/zoneaudit.ts, 8 of 24 sampled green squares
+      // fired nothing, all of them holding "N deg off the opening". A map that promises a
+      // shot the gate refuses is worse than no map.
+      if (offAxisDeg > openCap) { tally.behind++; cells.push({ ...blank(x * M_TO_IN, z * M_TO_IN, 'behind'), offAxisDeg }); continue; }
 
       const muzzleZ = z + spec.turret.muzzleOffset_m * uz;
       // Ranges are measured along the shot, on the side the mouth actually opens toward.
@@ -231,6 +239,8 @@ const trim = (c: ZoneCell) => ({
 });
 
 const tally = { band: 0, norow: 0, behind: 0, aperture: 0, unsolved: 0, toofast: 0, noRoom: 0, ok: 0 };
+/** The fire gate's own limit on how far off the opening a shot may be taken. */
+const openCap = (robotJson as unknown as RobotSpec).turret.fireOpenCap_deg ?? 75;
 
 export async function main(argv: string[] = []): Promise<void> {
   const i = argv.indexOf('--step');

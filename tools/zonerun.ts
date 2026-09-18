@@ -31,6 +31,12 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
   if (leadCap !== undefined) spec.turret.fireLeadCap_deg = leadCap;
+  // What the remaining misses at speed are made of: the physics ceiling with the launch
+  // scatter off, a stricter gate, and an aim point deeper in the pocket.
+  const arg = (k: string) => { const i = process.argv.indexOf(`--${k}`); return i >= 0 ? Number(process.argv[i + 1]) : undefined; };
+  if (process.argv.includes('--scatter0')) spec.flywheel.scatter = { angle_deg: 0, yaw_deg: 0, speedFrac: 0 };
+  if (arg('minp') !== undefined) spec.flywheel.minLandProb = arg('minp')!;
+  if (arg('depth') !== undefined) p.hive.aimDepthFrac = arg('depth')!;
   const pool = Array.from({ length: 300 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
   const w = new World({ params: p, robot: spec, staging: pool, alliance: 'red', seed });
   for (const b of w.balls.balls) w.balls.park(b);
@@ -41,9 +47,14 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   const nrm: Vec3 = [0, 0, 1];
   const R = inches(38);
   // A pass starts at the sector's far edge so the whole crossing is at speed.
-  const b0 = process.argv.includes('--pass') ? -50 * Math.PI / 180 : 0;
-  const x0 = mouth[0] + R * Math.sin(b0), z0 = mouth[2] + R * Math.cos(b0);
-  w.robot.place([x0, spec.chassis.height_m / 2 + spec.chassis.clearance_m, z0], Math.atan2(mouth[0] - x0, mouth[2] - z0) * RAD);
+  // -75 deg: outside the opening, so the first 0.5 s is a run-up and the robot enters the
+  // sector at its full 1.56 m/s instead of accelerating through it.
+  // A pass is a straight line 38 in in front of the mouth, x from -80 in to +80 in: the
+  // first 15 in are outside the opening (a run-up to full speed), the middle is the sector.
+  const isPass = process.argv.includes('--pass');
+  const x0 = isPass ? mouth[0] - inches(80) : mouth[0];
+  const z0 = mouth[2] + R;
+  w.robot.place([x0, spec.chassis.height_m / 2 + spec.chassis.clearance_m, z0], process.argv.includes('--pass') ? 180 : Math.atan2(mouth[0] - x0, mouth[2] - z0) * RAD);
   const brain = new BuiltinTeleOp(spec, table, loadLandCal());
   brain.state.firing = true;
   let loaded = 0;
@@ -53,6 +64,7 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   let prev: Vec3 = w.robot.pos;
   const dt = 1 / 60;
   let ran = 0;
+  let inSector = 0;
   for (let i = 0; i < secs * 60; i++) {
     // A TIP swaps which CELL is up and the new mouth faces the other way; the driver's next
     // job is to drive round, which is navigation, not aim. The pass ends there and the
@@ -75,15 +87,21 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
     // --pass: ONE crossing at full stick, starting at the sector's edge and ending at the
     // other, which is the 0.7 s a driver actually gets at 1.2 m/s. A patrol cannot reach
     // that speed -- a mecanum takes half a second to reverse, so it oscillates at the edge.
-    if (process.argv.includes('--pass') && i > 30 && bearingOff > 50) break;
+    if (isPass && r[0] > mouth[0] + inches(80)) break;
     const edge = process.argv.includes('--nohold') ? 45 : 30;
     if (bearingOff < -edge) dir = -1;
     else if (bearingOff > edge) dir = 1;
     const g: GamepadState = emptyGamepad();
     // Face the mouth: a yaw correction the fire gate can live with.
     const yawErr = wrapPi(Math.atan2(dx, dz) - w.robot.yaw) * RAD;
-    g.right_stick_x = -Math.max(-0.25, Math.min(0.25, yawErr / 40));
-    g.left_stick_x = -dir * stick;                         // strafe across
+    // In a pass the chassis does NOT turn: it faces the hive's side and strafes straight
+    // across, which is what the turret is for, and the only way a mecanum reaches its full
+    // 1.56 m/s -- any yaw share in the mixer scales the strafe down, and the arc-following
+    // correction held the crossings at 0.97 m/s.
+    g.right_stick_x = process.argv.includes('--pass') ? 0 : -Math.max(-0.25, Math.min(0.25, yawErr / 40));
+    // A pass waits 1.5 s with the wheel spinning up before it moves, as a driver arriving
+    // with the shooter already armed would; otherwise the first crossing is the spin-up.
+    g.left_stick_x = isPass ? (i < 90 ? 0 : stick) : -dir * stick;   // strafe across (a pass: one way, +x)
     // --nohold: no range correction, so a full stick is a full stick (about 1.2 m/s), the
     // sector is +-45 deg, and each pass across it is the 0.7 s a driver actually gets.
     g.left_stick_y = process.argv.includes('--nohold') ? 0 : -Math.max(-0.3, Math.min(0.3, (range - R) / 0.5));
@@ -93,7 +111,7 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
     const k = h ? h.replace(/-?[\d.]+/g, 'N') : (w.sensors().game.hopper === 0 ? 'HOPPER EMPTY' : 'clear to fire');
     why[k] = (why[k] ?? 0) + 1;
     const q = w.robot.pos;
-    dist += Math.hypot(q[0] - prev[0], q[2] - prev[2]);
+    if (!process.argv.includes('--pass') || Math.abs(bearingOff) <= 60) { dist += Math.hypot(q[0] - prev[0], q[2] - prev[2]); inSector++; }
     if (process.argv.includes('--aimtrace') && i % 6 === 0 && i < 60 * 8) {
       const st = brain.state;
       console.log(`    t=${(i / 60).toFixed(2)} v=${Math.hypot(w.robot.body.linvel().x, w.robot.body.linvel().z).toFixed(2)} yaw=${(w.robot.body.angvel().y * RAD).toFixed(0).padStart(4)}dps bOff=${bearingOff.toFixed(0).padStart(4)} aimErr=${st.turretAimErrDeg.toFixed(1).padStart(5)} servoErr=${st.turretErrDeg.toFixed(1).padStart(5)} lead=${st.leadDeg.toFixed(1).padStart(5)} vr=${st.vRadial.toFixed(2)} hold=${st.hold || '-'}`);
@@ -107,7 +125,7 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   for (let k = 0; k < 60 * 5; k++) { w.setGamepads(emptyGamepad(), emptyGamepad()); w.step(brain.update(w.sensors(), emptyGamepad(), w.seq, dt)); }
   const log = w.snapshot().shots;
   return {
-    speed: dist / Math.max(1, ran / 60), shots: w.robot.shots, credited: w.landedInUpCell('red'), secs: ran / 60, why,
+    speed: dist / Math.max(1e-6, (process.argv.includes('--pass') ? inSector : ran) / 60), shots: w.robot.shots, credited: w.landedInUpCell('red'), secs: ran / 60, why,
     long: log.map((s) => s.long_in * 2.54).filter(Number.isFinite),
     lat: log.map((s) => s.lat_in * 2.54).filter(Number.isFinite),
   };

@@ -31,9 +31,21 @@ import { inches } from '../packages/core/src/units.js';
 import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
-// Three ranges, not five. The two longest ones mostly failed to place on the field or ran
-// out of firing window, so they cost a full run each and contributed almost nothing.
-const RANGES = [40, 55, 70];
+/**
+ * THE WHOLE REACHABLE BAND, which turns out to be 30 to 80 in and nothing further.
+ *
+ * This was [40, 55, 70] with a note that the longer ranges "failed to place on the field or
+ * ran out of firing window". That is not a harness quirk, it is the field: the up CELL's
+ * mouth sits at about (-13, +16) in and the robot centre has to stay within +-57 in of the
+ * middle, so the furthest a robot can stand from the mouth AND still be on the tiles is about
+ * 80 in -- and by then it is 59 deg off the opening, right against the 60 deg fire cap.
+ * Past 90 in there is no spot at all, at any angle.
+ *
+ * Which means roughly half the shot table -- every row past about 85 in, and it runs to 150 --
+ * describes a shot that cannot be taken on this field. Sampling 30..80 therefore covers the
+ * ENTIRE usable range, so the measured retention needs no extrapolation anywhere it is used.
+ */
+const RANGES = [30, 40, 50, 60, 70, 80];
 
 export interface Sample {
   predicted: number; landed: boolean; range_in: number; moving: boolean;
@@ -78,7 +90,12 @@ async function sampleAt(range_in: number, shots: number, seed: number, drive = D
   const limit = world.geom.halfWidth_m - 0.35;
   const d = inches(range_in);
   let spot: Vec3 | null = null;
-  for (let deg = 0; deg <= 90 && !spot; deg += 2) {
+  // STOP AT THE FIRE CAP. The sweep used to run to 90 deg, and a spot 90 deg off the mouth's
+  // opening is one the gate will refuse from every time -- so the long ranges were sampled
+  // from places the robot could stand and not shoot, which is where "ran out of firing
+  // window" came from. Past the cap there is no sample to take.
+  const cap = spec.turret.fireOpenCap_deg ?? 90;
+  for (let deg = 0; deg <= cap && !spot; deg += 2) {
     for (const sign of [1, -1]) {
       const a = (deg * Math.PI) / 180;
       const c: Vec3 = [mouth[0] + sign * d * Math.sin(a), spec.chassis.height_m / 2 + spec.chassis.clearance_m, mouth[2] + d * Math.cos(a)];

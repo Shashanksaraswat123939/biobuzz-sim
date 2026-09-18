@@ -125,16 +125,24 @@ describe('shooting (PLAN.md phases 4-5)', () => {
   it('the flywheel dips when a ball is fired and recovers', () => {
     const { world, brain } = rig(75);
     spinUp(world, brain);
-    const before = world.robot.flywheelRpm;
-
     const fire = emptyGamepad();
     fire.right_bumper = true;
-    let dip = before;
     const shots0 = world.robot.shots;
+    // THE RPM ON THE FRAME BEFORE THE BALL WENT, not the one at the end of spin-up.
+    //
+    // The claim under test is "firing costs the wheel speed", and the only baseline that
+    // states it is the speed immediately before the shot. Sampling at spin-up instead made
+    // the test depend on WHEN the readiness gate happened to open: the wheel is still
+    // climbing, so a shot a second later starts from a higher rpm and the dip never goes
+    // below the old baseline. Adding odometry drift moved the gate and the test failed
+    // without the flywheel having changed at all.
+    let before = world.robot.flywheelRpm;
     for (let f = 0; f < 60 * 3 && world.robot.shots === shots0; f++) {
+      before = world.robot.flywheelRpm;
       world.setGamepads(fire, emptyGamepad());
       world.step(brain.update(world.sensors(), fire, world.seq));
     }
+    let dip = before;
     for (let f = 0; f < 20; f++) {
       world.setGamepads(fire, emptyGamepad());
       world.step(brain.update(world.sensors(), fire, world.seq));

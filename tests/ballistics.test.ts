@@ -150,16 +150,27 @@ describe('the brain and the table', () => {
     const w = new World({ params: P, robot: spec, staging: [], alliance: 'red', seed: 2 });
     const brain = new BuiltinTeleOp(spec, table);
     brain.state.firing = true;
-    const s = w.sensors();
-    // Lie about the range only: everything else about the frame is real.
-    s.game.upCellRangeIn = table.rows[0].range_in - 8;
-    s.game.upCellOpenDeg = 0;   // square on to the mouth, so the range is the only objection
-    for (let i = 0; i < 5; i++) brain.update(s, emptyGamepad(), i, 1 / 60);
+    const mouth = w.hives.red.upCellMouthWorld();
+    const y = spec.chassis.height_m / 2 + spec.chassis.clearance_m;
+    // DRIVEN, NOT HAND-BUILT. This used to poke a range into the sensor frame, which stopped
+    // meaning anything the moment the brain started reading a camera instead of an oracle:
+    // a frame with no tag in it holds for "no fix", not for the range. So stand the robot
+    // where the range is wrong and let its own camera tell it so.
+    const place = (rangeIn: number) => {
+      const z = mouth[2] + inches(rangeIn);
+      w.robot.place([mouth[0], y, z], Math.atan2(mouth[0] - mouth[0], mouth[2] - z) * RAD);
+    };
+    const settle = (n: number) => {
+      for (let i = 0; i < n; i++) w.step(brain.update(w.sensors(), emptyGamepad(), w.seq, 1 / 60));
+    };
+    // Inside the table's nearest row, square on to the mouth: the range is the only objection.
+    place(table.rows[0].range_in - 8);
+    settle(90);
     expect(brain.state.ready).toBe(false);
     expect(brain.state.hold).toMatch(/outside the table/);
-    // A tenth of an inch inside the first row is a shot again.
-    s.game.upCellRangeIn = table.rows[0].range_in + (spec.calibration?.rangeTrim_in ?? 0) + 0.1;
-    for (let i = 0; i < 5; i++) brain.update(s, emptyGamepad(), i + 5, 1 / 60);
+    // And a few inches further out is a shot again.
+    place(table.rows[0].range_in + (spec.calibration?.rangeTrim_in ?? 0) + 4);
+    settle(90);
     expect(brain.state.hold).not.toMatch(/outside the table/);
     void rpmToRadS;
   }, 30_000);

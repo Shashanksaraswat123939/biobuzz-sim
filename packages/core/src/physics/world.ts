@@ -12,6 +12,7 @@ import { Battery } from './battery.js';
 import { MatchClock } from '../rules/match.js';
 import { Scorer, inFlowerScoringVolume, allianceOfNectar, type EndOfMatchCounts } from '../rules/scoring.js';
 import { Rng } from '../io/rng.js';
+import { TagCamera, type TagTruth } from './tagCamera.js';
 import { GROUPS } from './groups.js';
 import { inches, M_TO_IN, RAD, DEG, clamp, wrapPi } from '../units.js';
 import type { ActuatorFrame, Alliance, BallKind, GamepadState, Params, RobotSpec, SensorFrame, ShotRecord, Snapshot, Vec3 } from '../types.js';
@@ -66,6 +67,17 @@ function stageOnField(staging: StagedBall[], halfWidth_m: number, params: Params
   });
 }
 
+/** One robot's dead-reckoned pose and the error terms it carries. See localizerReading. */
+interface Odo {
+  started: boolean;
+  x: number; y: number; heading: number;
+  lastX: number; lastY: number; lastYaw: number; lastT: number;
+  /** Drawn once per run: a wheel diameter that is not quite what was typed in. */
+  scale: number;
+  /** Drawn once and then random-walked: the gyro's zero. */
+  gyroBias: number;
+}
+
 export class World {
   readonly geom: FieldGeometry;
   readonly physics: RAPIER.World;
@@ -89,11 +101,23 @@ export class World {
   seq = 0;
   telemetry: [string, string][] = [];
 
+  /** The tag pipeline. Public so the HUD and the tools can report how blind it was. */
+  readonly tagCam: TagCamera;
+  /** The opponent's own camera: its own frame timing, its own latency buffer. */
+  readonly oppTagCam: TagCamera;
+
   private readonly rng: Rng;
   private readonly params: Params;
   private lastActuators: ActuatorFrame = { seq: 0, motors: {}, servos: {} };
   private gamepads: [GamepadState, GamepadState] = [emptyGamepad(), emptyGamepad()];
   private imuBuffer: ImuSample[] = [];
+  /**
+   * DEAD-RECKONED POSE, PER ROBOT. The localization port carries one of these because it
+   * was written against a one-robot world; there are two robots here, and the opponent's
+   * estimate drifting into the player's would be a bug nobody could see from the outside.
+   * Keyed on the Robot so a world with no opponent allocates nothing for it.
+   */
+  private odos = new Map<Robot, Odo>();
   private oppImuBuffer: ImuSample[] = [];
   private oppActuators: ActuatorFrame = { seq: 0, motors: {}, servos: {} };
   private leftStart: Record<Alliance, boolean> = { red: false, blue: false };
@@ -104,6 +128,10 @@ export class World {
     this.params = opts.params;
     this.alliance = opts.alliance;
     this.rng = new Rng(opts.seed ?? opts.params.sim.seed);
+    // Its own stream, forked from the world's: adding or removing a camera frame must not
+    // shift the launch scatter and silently re-roll every shot in a seeded run.
+    this.tagCam = new TagCamera(opts.robot.sensors.tag, this.rng.fork(0x7a6));
+    this.oppTagCam = new TagCamera(opts.robot.sensors.tag, this.rng.fork(0x7a7));
     this.geom = buildFieldGeometry(opts.params);
     this.clock = new MatchClock(opts.params.match);
     this.battery = new Battery(opts.params.battery);
@@ -461,6 +489,13 @@ export class World {
     this.physics.step();
     this.t += dt;
 
+    // THE CAMERA RUNS AT WORLD RATE, NOT LOOP RATE. Its latency buffer has to be sampled as
+    // fast as the world moves or the lag it serves is quantised to the brain's period, and
+    // its frame rate has to be its own so that "the pipeline is slower than the loop" -- the
+    // whole reason a fix goes stale between shots -- is actually represented.
+    this.tagCam.step(this.t, this.tagTruthFor(this.robot));
+    if (this.opponent) this.oppTagCam.step(this.t, this.tagTruthFor(this.opponent));
+
     for (const a of ['red', 'blue'] as const) {
       if (this.hives[a].takeTip()) {
         this.scorer.tip(a, this.clock.period, this.t);
@@ -544,8 +579,8 @@ export class World {
     const rec: ShotRecord = {
       n: this.shotLog.length + 1,
       t: this.t,
-      rangeIn: s.game.upCellRangeIn,
-      bearingDeg: s.game.upCellAzimuthDeg,
+      rangeIn: s.game.truth.upCellRangeIn,
+      bearingDeg: s.game.truth.upCellAzimuthDeg,
       hoodDeg: r.hoodAngle,
       rpm: r.lastShotRpm,
       targetRpm: r.lastTargetRpm,
@@ -860,19 +895,143 @@ export class World {
     return Math.acos(Math.max(-1, Math.min(1, cos))) * RAD;
   }
 
+  private odoFor(r: Robot): Odo {
+    let o = this.odos.get(r);
+    if (!o) {
+      o = { started: false, x: 0, y: 0, heading: 0, lastX: 0, lastY: 0, lastYaw: 0, lastT: 0, scale: 1, gyroBias: 0 };
+      this.odos.set(r, o);
+    }
+    return o;
+  }
+
+  /**
+   * What a camera on the turret is looking at this instant: which CELL's tag is up, where it
+   * is, and whether the rocker is moving. `TagCamera` decides how much of this ever reaches
+   * the robot -- this is only the truth it is pointed at.
+   *
+   * Per robot, because each alliance has its own hive to find and its own turret to find it
+   * with. The port's version reads `this.robot` and `this.alliance` directly; a world with an
+   * opponent in it cannot.
+   */
+  private tagTruthFor(r: Robot): TagTruth {
+    const hive = this.hives[r.alliance];
+    const p = r.pos;
+    // THE PANEL, NOT THE MOUTH. A camera is pointed at the am-5888 panel, which sits about
+    // 10 in from the CELL mouth on the same rocker; reporting the mouth's own bearing hands
+    // the robot a measurement of a thing no camera can see. TagTargetProvider puts the
+    // offset back, keyed on the ID.
+    const tag = hive.upCellTagWorld();
+    const dx = tag[0] - p[0];
+    const dz = tag[2] - p[2];
+    const yawDeg = worldYawToFtcHeadingDeg(r.yaw);
+    // Incidence on the PANEL's face, measured FROM the panel TO the robot: the angle between
+    // its outward normal and the direction it is being looked at from.
+    const n = hive.upCellTagNormalWorld();
+    const dn = Math.hypot(dx, dz) || 1;
+    const nn = Math.hypot(n[0], n[2]) || 1;
+    const cos = (-dx * n[0] + -dz * n[2]) / (dn * nn);
+    return {
+      // Two CELLs, two tags. A TIP swaps which is up, so the ID in view changes with it --
+      // which is the only way a camera ever learns the goal turned round.
+      id: hive.upCell.id === 'A' ? 1 : 2,
+      bearingDeg: wrapPi((worldDirToFtcBearingDeg(dx, dz) - yawDeg) * DEG) * RAD,
+      rangeIn: dn * M_TO_IN,
+      openDeg: Math.acos(Math.max(-1, Math.min(1, cos))) * RAD,
+      turretDeg: r.spec.turret.enabled ? r.turretAngle : 0,
+      tipping: hive.tipping,
+    };
+  }
+
   private localizerReading(r: Robot, ftcP: Vec3, ftcV: Vec3, yawDeg: number, yawRate: number): SensorFrame['localizer'] {
     const n = r.spec.sensors.localizer.noise;
+    const d = r.spec.sensors.localizer.drift;
     const g = (sigma: number) => (sigma > 0 ? this.rng.gauss(0, sigma) : 0);
     const velSigma = n.vel_mps ?? 0;
+
+    if (!d || d.enabled === false) {
+      // The old model, kept so a run can be compared against a robot that cannot drift.
+      return {
+        x: ftcP[0] + g(n.xy_in), y: ftcP[1] + g(n.xy_in), heading: yawDeg + g(n.heading_deg),
+        vx: ftcV[0] + g(velSigma) * M_TO_IN, vy: ftcV[1] + g(velSigma) * M_TO_IN,
+        omega: yawRate + g(n.omegaDps ?? 0),
+      };
+    }
+
+    const o = this.odoFor(r);
+    if (!o.started) {
+      // The pods are zeroed on the robot where it stands, so the estimate starts correct and
+      // every inch of error after this is the robot's own.
+      o.x = ftcP[0];
+      o.y = ftcP[1];
+      o.heading = yawDeg;
+      o.lastX = ftcP[0];
+      o.lastY = ftcP[1];
+      o.lastYaw = yawDeg;
+      o.scale = 1 + g(d.scaleErr);
+      o.gyroBias = g(d.gyroBias_dps);
+      o.started = true;
+    }
+
+    // What the robot TRULY did since the last read, in the field frame.
+    const trueDx = ftcP[0] - o.lastX;
+    const trueDy = ftcP[1] - o.lastY;
+    const dYawTrue = wrapPi((yawDeg - o.lastYaw) * DEG) * RAD;
+    const dt = Math.max(this.t - o.lastT, 1e-6);
+    o.lastX = ftcP[0];
+    o.lastY = ftcP[1];
+    o.lastYaw = yawDeg;
+    o.lastT = this.t;
+
+    // HEADING FIRST, because everything else is measured in the frame it defines.
+    o.gyroBias += g(d.gyroWalk_dps * Math.sqrt(dt));
+    o.heading += dYawTrue + (o.gyroBias + g(d.gyroNoise_dps)) * dt;
+
+    // The step, rotated by the heading error the estimate has accumulated and stretched by
+    // the scale error. This is the whole mechanism: a heading that is 3 deg out turns every
+    // subsequent foot of driving into 0.6 in of position error, and none of it is recoverable.
+    const err = wrapPi((o.heading - yawDeg) * DEG);
+    const c = Math.cos(err);
+    const sn = Math.sin(err);
+    o.x += (trueDx * c - trueDy * sn) * o.scale;
+    o.y += (trueDx * sn + trueDy * c) * o.scale;
+
+    // SLIP, proportional to how hard the robot is being driven. A wheel that breaks traction
+    // is distance the encoder counts and the robot does not travel.
+    const step = Math.hypot(trueDx, trueDy);
+    if (step > 0 && d.slipFrac > 0) {
+      o.x += g(d.slipFrac * step);
+      o.y += g(d.slipFrac * step);
+    }
+
+    // The pose CORRECTION the brain has fed back, if any. tools/... the fuser writes here so
+    // the drift it removes is really gone rather than being hidden at the reporting layer.
     return {
-      x: ftcP[0] + g(n.xy_in),
-      y: ftcP[1] + g(n.xy_in),
-      heading: yawDeg + g(n.heading_deg),
-      // Metres per second in, inches per second out: the frame is FTC's.
-      vx: ftcV[0] + g(velSigma) * M_TO_IN,
-      vy: ftcV[1] + g(velSigma) * M_TO_IN,
-      omega: yawRate + g(n.omegaDps ?? 0),
+      x: o.x + g(n.xy_in),
+      y: o.y + g(n.xy_in),
+      heading: o.heading + g(n.heading_deg),
+      // Velocity is differentiated locally, so it does NOT inherit the accumulated position
+      // error -- only the scale error and its own noise. That is why the motion lead survives
+      // a drifted pose while the aim does not.
+      vx: ftcV[0] * o.scale + g(velSigma) * M_TO_IN,
+      vy: ftcV[1] * o.scale + g(velSigma) * M_TO_IN,
+      omega: yawRate + o.gyroBias + g(n.omegaDps ?? 0),
     };
+  }
+
+  /** Apply a pose correction to the dead-reckoned estimate. The fuser's half of the loop. */
+  correctOdometry(dx: number, dy: number, dHeadingDeg: number, r: Robot = this.robot): void {
+    const o = this.odoFor(r);
+    o.x += dx;
+    o.y += dy;
+    o.heading += dHeadingDeg;
+  }
+
+  /** True minus estimated position, inches. Measurement only -- the robot cannot see this. */
+  odometryErrorIn(r: Robot = this.robot): number {
+    const o = this.odoFor(r);
+    if (!o.started) return 0;
+    const ftcR = worldToFtc(r.pos);
+    return Math.hypot(ftcR[0] - o.x, ftcR[1] - o.y);
   }
 
   sensors(): SensorFrame {
@@ -932,30 +1091,22 @@ export class World {
       localizer: this.localizerReading(r, ftcP, ftcV, yawDeg, yawRate),
       gamepad1: gamepads[0],
       gamepad2: gamepads[1],
+      // THE TAG PIPELINE'S OUTPUT, which is what a robot actually has. Stale by
+      // construction: `sampleT` is when the photons left, not now.
+      tag: (r === this.robot ? this.tagCam : this.oppTagCam).read(),
       game: {
-        upCellAzimuthDeg: wrapPi((bearing - yawDeg) * DEG) * RAD,
-        upCellRangeIn: Math.hypot(dx, dz) * M_TO_IN,
-        hiveTipping: this.hives[r.alliance].tipping,
-        // IS THE MOUTH OPEN TOWARDS ME? 0 deg is square onto the opening, 90 is edge-on to
-        // the mouth plane, 180 is behind the goal looking at the back of the pocket.
-        //
-        // A TIP SWAPS WHICH FACE IS UP, and the new up CELL opens the other way: measured
-        // here, the mouth jumps from Z +15.7 in to -16.1 in the instant the rocker goes over.
-        // Nothing in the robot knew that. It stood where it was, kept reporting "clear to
-        // fire", and put 40 more balls into the back of the goal -- which is most of why the
-        // stopped control case read 0.12 landed per second while tools/landcal.ts, which
-        // stops before a tip, measured 85%. On a real robot this is the AprilTag going out
-        // of view; here it is ground truth, like the bearing and the range (PHYSICS 9.10).
-        upCellOpenDeg: this.upCellOpenAngleDeg(r),
-        // Bin plus magazine: a ball waiting at the nip is still a ball you can fire.
         hopper: r.heldBalls().length,
         flywheelRpm: r.reportedFlywheelRpm,
-        // Only the robot whose sensors these are gets a sighting; the opponent's camera is
-        // its own problem and it has its own frame.
-        tag: r === this.robot ? (() => {
-          const t = this.tagSighting();
-          return t ? { azimuthDeg: r.turretAngle + t.bearingDeg, rangeIn: t.rangeIn, px: t.px, obliquityDeg: t.obliquityDeg } : null;
-        })() : null,
+        // GROUND TRUTH, MEASUREMENT ONLY. These four were read straight off the world by
+        // both brains -- perfect bearing, perfect range, and the exact instant the HIVE
+        // went over. No robot has any of that. Behind `truth` so every consumer has to say
+        // so; the tools and the HUD use them to measure the error the robot is making.
+        truth: {
+          upCellAzimuthDeg: wrapPi((bearing - yawDeg) * DEG) * RAD,
+          upCellRangeIn: Math.hypot(dx, dz) * M_TO_IN,
+          hiveTipping: this.hives[r.alliance].tipping,
+          upCellOpenDeg: this.upCellOpenAngleDeg(r),
+        },
       },
     };
   }
@@ -1063,6 +1214,10 @@ export class World {
     this.stageCells();
     this.robot.reset();
     this.loadPreload();
+    this.tagCam.reset();
+    this.oppTagCam.reset();
+    // A new run is a new robot: the scale and gyro-bias draws go with it.
+    this.odos.clear();
     this.battery.reset();
     this.clock.reset();
     this.scorer.reset();

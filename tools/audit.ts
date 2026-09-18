@@ -90,7 +90,7 @@ export async function main(): Promise<void> {
         const rp = w.robot.pos;
         const trueBear = (Math.atan2(mouth[0] - rp[0], mouth[2] - rp[2]) * 180) / Math.PI;
         console.log(`   [aim] robotYaw=${((w.robot.yaw * 180) / Math.PI).toFixed(1)} turret=${w.robot.turretAngle.toFixed(1)} -> muzzleAz=${((mz.azimuth * 180) / Math.PI).toFixed(1)}`);
-        console.log(`   [aim] true bearing to mouth=${trueBear.toFixed(1)}  game.az=${w.sensors().game.upCellAzimuthDeg.toFixed(1)}`);
+        console.log(`   [aim] true bearing to mouth=${trueBear.toFixed(1)}  game.az=${w.sensors().game.truth.upCellAzimuthDeg.toFixed(1)}`);
         console.log(`   [aim] robot at (${(rp[0] * M_TO_IN).toFixed(0)}, ${(rp[2] * M_TO_IN).toFixed(0)})  mouth at (${(mouth[0] * M_TO_IN).toFixed(0)}, ${(mouth[2] * M_TO_IN).toFixed(0)})`);
       }
       for (let f = 0; f < 200 && w.robot.shots === 0; f++) step(fire);
@@ -100,7 +100,7 @@ export async function main(): Promise<void> {
       if (false) {
         const sf = w.sensors();
         console.log(`   [trial 0] shots=${w.robot.shots} note="${brain.state.note}" ready=${brain.state.ready}`);
-        console.log(`   [trial 0] rpm=${sf.game.flywheelRpm.toFixed(0)} target=${brain.state.targetRpm.toFixed(0)} range=${sf.game.upCellRangeIn.toFixed(0)} az=${sf.game.upCellAzimuthDeg.toFixed(0)} turretErr=${brain.state.turretErrDeg.toFixed(1)} hopper=${sf.game.hopper}`);
+        console.log(`   [trial 0] rpm=${sf.game.flywheelRpm.toFixed(0)} target=${brain.state.targetRpm.toFixed(0)} range=${sf.game.truth.upCellRangeIn.toFixed(0)} az=${sf.game.truth.upCellAzimuthDeg.toFixed(0)} turretErr=${brain.state.turretErrDeg.toFixed(1)} hopper=${sf.game.hopper}`);
       }
       if (w.robot.shots === 0) { land.push(NaN); continue; }
       inCell += ball.state === 'cell' ? 1 : 0;

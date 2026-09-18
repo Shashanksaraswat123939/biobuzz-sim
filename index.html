@@ -58,7 +58,11 @@
 
       <!-- ------------------------------------------------------------- status strip -->
       <aside id="status">
-        <div class="stat"><label>Shooter</label><b id="st-note">idle</b></div>
+        <div class="stat lead"><label>Shooter</label><b id="st-note">idle</b></div>
+        <!-- CAN IT SEE THE GOAL. Since the target came off a camera instead of the world's
+             truth this is the first thing to check when the robot will not shoot, so it is
+             on the HUD rather than three clicks into a panel. -->
+        <div class="stat"><label>Tag</label><b id="st-tag">—</b></div>
         <div class="stat"><label>Range</label><b id="st-range">—</b></div>
         <div class="stat"><label>Turret</label><b id="st-turret">—</b></div>
         <div class="stat"><label>Flywheel</label><b id="st-rpm">—</b></div>

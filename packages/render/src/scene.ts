@@ -149,6 +149,13 @@ export interface ZonePayload {
   yawScatterDeg: number;
   cells: ZoneCellData[];
   cellsTipped?: ZoneCellData[];
+  /**
+   * WHERE THE TAG CAN BE DECODED FROM (tools/tagmap.ts), keyed 'x,z' on the same grid. A spot
+   * the physics loves is worth nothing if the robot cannot see the goal from it, and since
+   * the target stopped being handed over for free that is a real second constraint. Absent on
+   * an older map, in which case nothing is dimmed and the overlay behaves as it used to.
+   */
+  tagVisible?: Set<string>;
 }
 
 export class Scene {
@@ -160,6 +167,17 @@ export class Scene {
   readonly renderer: THREE.WebGLRenderer;
   cameraMode: CameraMode = 'orbit';
   showTrajectory = true;
+  /** Draw the line of sight from the tag panel to the camera. */
+  showSightLine = true;
+  /** Draw the robot's believed mouth position beside the true one. */
+  showBelief = true;
+  /** Where the robot believes the mouth is, world metres. Null hides the marker. */
+  private belief: Vec3 | null = null;
+
+  /** Set the robot's believed mouth position. Nothing here derives it -- the brain does. */
+  setBelief(p: Vec3 | null): void {
+    this.belief = p;
+  }
 
   private ballMeshes: THREE.Mesh[] = [];
   private rockers: THREE.Group[] = [];
@@ -210,6 +228,8 @@ export class Scene {
    */
   viewYaw = 0;
   private aimMarker: THREE.Mesh;
+  private beliefMarker!: THREE.Mesh;
+  /** Where the ROBOT thinks the mouth is. Not the same object as the one above. */
   /**
    * Where the viewer is looking, degrees, in the same frame as the robot's heading.
    * Right-drag turns this; the UI feeds it to the brain so the robot follows the view.
@@ -296,11 +316,63 @@ export class Scene {
     this.ballTrail.visible = false;
     this.scene.add(this.ballTrail);
 
+    // THE LINE OF SIGHT, tag panel to camera.
+    //
+    // The single most confusing thing about the camera is that "it cannot see it" is
+    // invisible: the robot just sits there sweeping, or aims on odometry, and nothing on
+    // screen says why. This draws the ray the pipeline is trying to decode along -- GREEN
+    // while it is decoding, RED while the geometry refuses -- so the grazing limit and the
+    // rocker swinging become things you watch rather than things you read about.
+    this.sightLine = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ color: 0x4faa63, transparent: true, opacity: 0.5, depthWrite: false }),
+    );
+    this.sightLine.renderOrder = 3;
+    this.sightLine.visible = false;
+    this.scene.add(this.sightLine);
+
     this.aimMarker = new THREE.Mesh(
       new THREE.RingGeometry(0.06, 0.09, 24),
       new THREE.MeshBasicMaterial({ color: 0xffd166, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }),
     );
     this.scene.add(this.aimMarker);
+
+    // WHERE THE ROBOT THINKS THE MOUTH IS.
+    //
+    // The ring above is drawn at the TRUE mouth, straight off the physics, so it does not
+    // move when the robot is wrong -- and nothing on screen showed the robot's own belief
+    // at all. The estimation error had to be inferred from a near miss.
+    //
+    // This one is the belief the shooter is aiming with: the tag when it can see one,
+    // odometry plus the surveyed geometry when it cannot. THE GAP BETWEEN THE TWO RINGS IS
+    // THE ERROR, drawn to scale. Violet, so it is neither the yellow prediction nor the
+    // blue flown path.
+    this.beliefMarker = new THREE.Mesh(
+      new THREE.RingGeometry(0.10, 0.125, 24),
+      new THREE.MeshBasicMaterial({ color: 0xc77dff, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }),
+    );
+    this.beliefMarker.renderOrder = 3;
+    this.beliefMarker.visible = false;
+    this.scene.add(this.beliefMarker);
+
+    // WHERE THE ROBOT THINKS THE MOUTH IS.
+    //
+    // The ring above is drawn at the TRUE mouth, straight off the physics, so it does not
+    // move when the robot is wrong -- and nothing on screen showed the robot's own belief at
+    // all. The estimation error had to be inferred from a near miss, or read as the gap
+    // between two numbers in a panel.
+    //
+    // This one is the belief: the target estimate the shooter is actually aiming with, which
+    // comes from the tag when it can see one and from odometry plus the surveyed geometry
+    // when it cannot. The DISTANCE BETWEEN THE TWO RINGS is the error, drawn to scale.
+    // Violet, because it is neither the yellow prediction nor the blue flown path.
+    this.beliefMarker = new THREE.Mesh(
+      new THREE.RingGeometry(0.10, 0.125, 24),
+      new THREE.MeshBasicMaterial({ color: 0xc77dff, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }),
+    );
+    this.beliefMarker.renderOrder = 3;
+    this.beliefMarker.visible = false;
+    this.scene.add(this.beliefMarker);
 
     this.applyVisibility();
     this.loadCad();
@@ -311,6 +383,7 @@ export class Scene {
   private colliders = false;
   private cadStatics: THREE.Object3D[] = [];
   private cadLoaded = false;
+  private sightLine!: THREE.Mesh;
   private zoneMesh: THREE.Mesh | null = null;
   private zone: ZonePayload | null = null;
   private zoneSide: 0 | 1 = 0;
@@ -348,6 +421,37 @@ export class Scene {
     this.zoneMesh = mesh;
     this.scene.add(mesh);
     this.repaintZone([0, 0]);
+  }
+
+  /**
+   * The ray the tag pipeline is trying to decode along: panel -> camera.
+   *
+   * GREEN while it decodes, RED while the geometry refuses. This is the only thing on screen
+   * that makes the camera's limits visible -- without it, "blind" and "looking the wrong way"
+   * and "the rocker is mid-swing" all look identical, which is a robot standing still for no
+   * stated reason.
+   *
+   * ponytail: drawn from the robot's tracked point at muzzle height, because that is where
+   * the MODEL puts the camera -- there is no mount offset in tagCamera.ts, so inventing one
+   * here would draw a lie. Give the camera a real mount and this should follow it.
+   */
+  setSightLine(from: Vec3 | null, to: Vec3 | null, decoding: boolean): void {
+    if (!this.showSightLine || !from || !to) {
+      this.sightLine.visible = false;
+      return;
+    }
+    const a = new THREE.Vector3(from[0], from[1], from[2]);
+    const b = new THREE.Vector3(to[0], to[1], to[2]);
+    if (a.distanceTo(b) < 1e-3) {
+      this.sightLine.visible = false;
+      return;
+    }
+    this.sightLine.geometry.dispose();
+    this.sightLine.geometry = new THREE.TubeGeometry(new THREE.LineCurve3(a, b), 1, decoding ? 0.006 : 0.003, 6, false);
+    const mat = this.sightLine.material as THREE.MeshBasicMaterial;
+    mat.color.setHex(decoding ? 0x4faa63 : 0xe0453c);
+    mat.opacity = decoding ? 0.55 : 0.28;
+    this.sightLine.visible = true;
   }
 
   /**
@@ -1234,6 +1338,14 @@ export class Scene {
       this.aimMarker.visible = true;
     } else {
       this.aimMarker.visible = false;
+    }
+
+    if (this.belief && this.showBelief) {
+      this.beliefMarker.position.set(this.belief[0], this.belief[1], this.belief[2]);
+      this.beliefMarker.lookAt(this.camera.position);
+      this.beliefMarker.visible = true;
+    } else {
+      this.beliefMarker.visible = false;
     }
 
     // ---- the live trail: follow the ball from THIS shot, and keep it drawn until the next

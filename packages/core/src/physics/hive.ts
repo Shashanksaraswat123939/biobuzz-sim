@@ -213,6 +213,25 @@ export class Hive {
     return this.toWorld(fromCellLocal(cell, (slot - 1) * (radius * 2 + 0.01), u, 0));
   }
 
+  /**
+   * The up CELL's am-5888 panel centre, world frame. THIS IS WHAT A CAMERA SEES, and it is
+   * not the mouth: the panel is about 10 in away on the same rocker (tools/tagoffsets.ts).
+   * It swings with the rocker like everything else bolted to it, so a TIP moves it -- and
+   * brings the OTHER CELL's panel, with the other ID, up in its place.
+   */
+  upCellTagWorld(): Vec3 {
+    return this.toWorld(this.upCell.tagBody_m);
+  }
+
+  /** Unit vector out of the tag's face, world frame. See `sensors.tag.panelNormal_source`. */
+  upCellTagNormalWorld(): Vec3 {
+    const t = this.upCell.tagBody_m;
+    const n = Math.hypot(t[1], t[2]) || 1;
+    const d = this.toWorld([0, t[1] / n, t[2] / n]);
+    const o = this.toWorld([0, 0, 0]);
+    return [d[0] - o[0], d[1] - o[1], d[2] - o[2]];
+  }
+
   upCellMouthNormalWorld(): Vec3 {
     const cell = this.upCell;
     const a = this.toWorld(cellMouthCentre(cell));

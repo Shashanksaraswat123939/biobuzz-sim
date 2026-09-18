@@ -125,7 +125,7 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
       shotsSeen = w.robot.shots;
       const st = brain.state;
       const ls = w.robot.lastShot!;
-      console.log(`    shot ${shotsSeen}  rng ${w.sensors().game.upCellRangeIn.toFixed(0).padStart(3)}  open ${w.sensors().game.upCellOpenDeg.toFixed(0).padStart(3)}  v ${Math.hypot(w.robot.body.linvel().x, w.robot.body.linvel().z).toFixed(2)}  exit ${ls.v_exit.toFixed(2)} want ${st.leadSpeed.toFixed(2)}  hood ${w.robot.hoodAngle.toFixed(1)} want ${st.leadElevDeg.toFixed(1)}  rpm ${w.robot.lastShotRpm.toFixed(0)}/${st.targetRpm.toFixed(0)}  lead ${st.leadDeg.toFixed(0)}  pLand ${st.pLand.toFixed(2)} pSpeed ${st.pSpeed.toFixed(2)} pAim ${st.pAim.toFixed(2)}`);
+      console.log(`    shot ${shotsSeen}  rng ${w.sensors().game.truth.upCellRangeIn.toFixed(0).padStart(3)}  open ${w.sensors().game.truth.upCellOpenDeg.toFixed(0).padStart(3)}  v ${Math.hypot(w.robot.body.linvel().x, w.robot.body.linvel().z).toFixed(2)}  exit ${ls.v_exit.toFixed(2)} want ${st.leadSpeed.toFixed(2)}  hood ${w.robot.hoodAngle.toFixed(1)} want ${st.leadElevDeg.toFixed(1)}  rpm ${w.robot.lastShotRpm.toFixed(0)}/${st.targetRpm.toFixed(0)}  lead ${st.leadDeg.toFixed(0)}  pLand ${st.pLand.toFixed(2)} pSpeed ${st.pSpeed.toFixed(2)} pAim ${st.pAim.toFixed(2)}`);
     }
     const q = w.robot.pos;
     if (!process.argv.includes('--pass') || Math.abs(bearingOff) <= 60) { dist += Math.hypot(q[0] - prev[0], q[2] - prev[2]); inSector++; }
@@ -134,7 +134,7 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
       console.log(`    t=${(i / 60).toFixed(2)} v=${Math.hypot(w.robot.body.linvel().x, w.robot.body.linvel().z).toFixed(2)} yaw=${(w.robot.body.angvel().y * RAD).toFixed(0).padStart(4)}dps bOff=${bearingOff.toFixed(0).padStart(4)} aimErr=${st.turretAimErrDeg.toFixed(1).padStart(5)} servoErr=${st.turretErrDeg.toFixed(1).padStart(5)} lead=${st.leadDeg.toFixed(1).padStart(5)} vr=${st.vRadial.toFixed(2)} hold=${st.hold || '-'}`);
     }
     if (process.argv.includes('--trace') && i % 60 === 0) {
-      const sg = w.sensors().game;
+      const sg = w.sensors().game.truth;
       console.log(`    t=${(i / 60).toFixed(0)} at (${(q[0] * 39.37).toFixed(0)},${(q[2] * 39.37).toFixed(0)}) in  rng ${sg.upCellRangeIn.toFixed(0)}  open ${sg.upCellOpenDeg.toFixed(0)}  yaw ${(w.robot.yaw * RAD).toFixed(0)}  bearingOff ${bearingOff.toFixed(0)}  yawErr ${yawErr.toFixed(0)}  hold ${brain.state.hold || '-'}  shots ${w.robot.shots} cred ${w.landedInUpCell('red')}`);
     }
     prev = q;

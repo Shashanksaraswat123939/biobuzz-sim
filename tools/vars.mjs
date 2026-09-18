@@ -126,6 +126,21 @@ out.push(section('Game elements', [
 
 out.push(section('Field and environment', rows(params.env, ['rho', 'g', 'tileSize_m', 'tileThick_m', 'fieldInside_m', 'wallGlassTop_m', 'railTop_m', 'tileMu'], 'env'), inches));
 
+// ---------------------------------------------------------------- sensors
+//
+// These were missing from this document entirely, which is the worst omission it could have
+// had: they are the numbers that decide WHAT THE ROBOT KNOWS, and the ones most likely to be
+// wrong. `sensors.tag` in particular replaced a block of ground truth, so every guess in it
+// is now load-bearing on every aiming result in the repo.
+out.push('## What the robot can actually sense');
+out.push('');
+out.push(section('Odometry', rows(robot.sensors.localizer.noise, ['xy_in', 'heading_deg', 'vel_mps', 'omegaDps'], 'sensors.localizer.noise')));
+out.push(section('Tag camera', [
+  ...rows(robot.sensors.tag, ['enabled', 'mount', 'fov_deg', 'maxRange_in', 'maxIncidence_deg', 'frameRateHz', 'latencyMs'], 'sensors.tag'),
+  ...rows(robot.sensors.tag.noise, ['bearing_deg', 'rangeFrac', 'open_deg'], 'sensors.tag.noise'),
+]));
+out.push(section('Tag target (the aim it turns into)', rows(robot.sensors.tag.target, ['holdS', 'maxFireAgeS', 'scanRateDps'], 'sensors.tag.target')));
+
 // ---------------------------------------------------------------- hub / sim
 out.push('## Control Hub emulation');
 out.push('');

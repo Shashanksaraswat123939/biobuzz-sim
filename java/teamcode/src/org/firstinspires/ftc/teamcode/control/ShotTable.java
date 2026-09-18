@@ -48,14 +48,37 @@ public class ShotTable {
     public double rpmFor(double rangeIn) { return lerp(rpm, rangeIn); }
     public double marginFor(double rangeIn) { return lerp(margin, rangeIn); }
 
-    /** The range with the widest tolerance: where DriveToRange wants to be. */
+    /**
+     * The range with the widest tolerance: where DriveToRange wants to be.
+     *
+     * THE MIDDLE OF THE GOOD BAND, not the single best row, and that is not a refinement --
+     * it is the difference between the autonomous scoring and not.
+     *
+     * Taking the argmax returned 30.0 in for the shipped table, which is also the table's
+     * FIRST row. DriveToRange then parked the robot exactly on the table's floor, where an
+     * inch of overshoot or a noisy range reading puts it at 28 in and `usable()` is false. So
+     * AutoOneTip's "back off until the table has an answer" loop could never satisfy its exit
+     * condition, ran out its twelve seconds, and fell through to PARK having fired nothing.
+     * That is the unexplained "Auto One Tip does not currently score its shots" in the README.
+     *
+     * Every row within 95% of the best margin is good enough to shoot from -- mirroring
+     * ShotTable.bestBand() in the TypeScript -- so aim at the centre of that band and keep the
+     * edges as tolerance instead of spending them on arriving.
+     */
     public double bestRange() {
+        if (range.length == 0) return 0;
         double best = 0;
-        double bestR = range.length == 0 ? 0 : range[0];
+        for (int i = 0; i < range.length; i++) if (margin[i] > best) best = margin[i];
+        int lo = -1;
+        int hi = -1;
         for (int i = 0; i < range.length; i++) {
-            if (margin[i] > best) { best = margin[i]; bestR = range[i]; }
+            if (margin[i] >= best * 0.95) {
+                if (lo < 0) lo = i;
+                hi = i;
+            }
         }
-        return bestR;
+        if (lo < 0) return range[0];
+        return (range[lo] + range[hi]) / 2;
     }
 
     /** Is this range worth shooting from at all? */

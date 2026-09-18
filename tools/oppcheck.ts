@@ -68,7 +68,7 @@ async function one(seed: number, trace = false) {
       why[k] = (why[k] ?? 0) + 1;
     }
     if (trace) {
-      if (world.seq % 120 === 0) console.log(`    t=${world.t.toFixed(0)}s ${world.clock.period} ${bot.phase.padEnd(8)} hop=${os.game.hopper} rng=${os.game.upCellRangeIn.toFixed(0)} open=${os.game.upCellOpenDeg.toFixed(0)} rpm=${os.game.flywheelRpm.toFixed(0)} hold=${oppBrain.state.hold || '-'} at=(${os.localizer.x.toFixed(0)},${os.localizer.y.toFixed(0)}) want=(${bot.target[0].toFixed(0)},${bot.target[1].toFixed(0)}) world=(${opp.pos.map((v)=>(v*M_TO_IN).toFixed(0)).join(',')}) red=(${world.robot.pos.map((v)=>(v*M_TO_IN).toFixed(0)).join(',')}) v=${Math.hypot(opp.vel[0],opp.vel[2]).toFixed(3)}`);
+      if (world.seq % 120 === 0) console.log(`    t=${world.t.toFixed(0)}s ${world.clock.period} ${bot.phase.padEnd(8)} hop=${os.game.hopper} rng=${os.game.truth.upCellRangeIn.toFixed(0)} open=${os.game.truth.upCellOpenDeg.toFixed(0)} rpm=${os.game.flywheelRpm.toFixed(0)} hold=${oppBrain.state.hold || '-'} at=(${os.localizer.x.toFixed(0)},${os.localizer.y.toFixed(0)}) want=(${bot.target[0].toFixed(0)},${bot.target[1].toFixed(0)}) world=(${opp.pos.map((v)=>(v*M_TO_IN).toFixed(0)).join(',')}) red=(${world.robot.pos.map((v)=>(v*M_TO_IN).toFixed(0)).join(',')}) v=${Math.hypot(opp.vel[0],opp.vel[2]).toFixed(3)}`);
     }
   }
   if (trace) console.log('    time per phase:', Object.entries(phaseT).map(([k, v]) => `${k} ${v.toFixed(0)}s`).join(', '));

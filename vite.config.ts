@@ -17,6 +17,9 @@ export default defineConfig({
       '@ui': r('./packages/ui/src'),
     },
   },
-  server: { port: 5173, open: false },
+  // 5180, not Vite's default 5173. Two checkouts of this repo on one machine both want the
+  // default, and the second one silently loses the socket to the first -- the dev server
+  // reports "ready on 5173" and every request still goes to the other tree. PORT overrides it.
+  server: { port: Number(process.env.PORT) || 5180, strictPort: true, open: false },
   build: { target: 'es2022', chunkSizeWarningLimit: 2000 },
 });

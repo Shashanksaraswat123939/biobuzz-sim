@@ -8,6 +8,10 @@ import { clamp, DEG, RAD, inches, wrapPi, rpmToRadS } from '../units.js';
 import { pThread } from '../physics/ballistics.js';
 import type { LandCalibration } from './entryModel.js';
 import type { HoodCell, HoodTable } from './hoodTable.js';
+import { TagTarget, type TagTargetState } from './tagTarget.js';
+import { PoseFuser } from './poseFuser.js';
+import { shotIsBlocked, type ObstacleSpec } from './clearShot.js';
+import tagOffsets from '../../../../config/tagoffsets.json' with { type: 'json' };
 import type { ActuatorFrame, GamepadState, RobotSpec, SensorFrame } from '../types.js';
 
 export interface ShotRow {
@@ -311,6 +315,8 @@ export interface TeleOpState {
   leadVRadial: number;
   /** Inches the table lookup was moved to where the ball will actually leave from. */
   rangeLeadIn: number;
+  /** The other HIVE's structure is across the shot line. No hood angle fixes that. */
+  blocked: boolean;
   /** How far the motion lead moved the aim, degrees. */
   leadDeg: number;
   /** The bearing the lead ASKED for, before the turret's travel clamped it. */
@@ -342,7 +348,7 @@ export const newTeleOpState = (): TeleOpState => ({
   turretManualDeg: 0, flywheelOn: false, speedScale: 1,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, turretAimErrDeg: 0, halfLatNow: -1, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
-  lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, pSpeed: -1, pStayNow: -1, pAim: -1, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0, rowHoodDeg: 0, rowRpm: 0,
+  lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, pSpeed: -1, pStayNow: -1, pAim: -1, headingZero: 0, blocked: false, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0, rowHoodDeg: 0, rowRpm: 0,
 });
 
 const edge = (now: boolean, was: boolean) => now && !was;
@@ -366,7 +372,77 @@ export class BuiltinTeleOp {
      * never chases a target, so it never lags one, and its tachometer stops gating shots.
      */
     private readonly hoodTable: HoodTable | null = null,
-  ) {}
+    /**
+     * Which HIVE this robot shoots into. It picks the baked mouth position the odometry
+     * fallback aims at, and which CELL is up at the buzzer, so a brain built for the wrong
+     * alliance aims across the field the moment the camera blinks.
+     */
+    alliance: 'red' | 'blue' = 'red',
+  ) {
+    const tg = spec.sensors.tag.target;
+    this.targetFix = new TagTarget({
+      // The same numbers the hub gets, from the same generated file -- the mirror has to
+      // apply the tag -> mouth offset or it aims 2.8 in off where the deliverable does.
+      mouthDx: { 1: tagOffsets.states.A.groundOffset_in, 2: tagOffsets.states.B.groundOffset_in },
+      mouthFacingX: {
+        1: tagOffsets.states.A.mouthNormalZ >= 0 ? 1 : -1,
+        2: tagOffsets.states.B.mouthNormalZ >= 0 ? 1 : -1,
+      },
+      // A PRIOR AND A RIGID OFFSET, not a hardcoded goal position: the robot measures the
+      // HIVE's pivot for itself the moment it decodes a tag, and aims off that.
+      anchorPrior: tagOffsets.anchorPrior_in[alliance],
+      mouthFromAnchor: {
+        1: tagOffsets.states.A.mouthFromAnchor_in,
+        2: tagOffsets.states.B.mouthFromAnchor_in,
+      },
+      anchorAlpha: tg.anchorAlpha ?? 0.15,
+      fireOnOdometry: tg.fireOnOdometry !== false,
+      measAlpha: tg.measAlpha ?? 0.35,
+      // The rocker starts on the stop its alliance's CELL A sits up on for red, B for blue
+      // (Hive's constructor: side = red ? -1 : +1). That is a fact at the buzzer and an
+      // assumption from the first TIP nobody saw, which is what stateFromTag is for.
+      startId: alliance === 'red' ? 1 : 2,
+      holdS: tg.holdS,
+      maxFireAgeS: tg.maxFireAgeS,
+      scanRateDps: tg.scanRateDps,
+      turretMinDeg: spec.turret.range_deg[0],
+      turretMaxDeg: spec.turret.range_deg[1],
+    });
+    const fuse = spec.sensors.localizer.fuse;
+    this.fuser = new PoseFuser({
+      gain: fuse?.gain ?? 0.15,
+      headingGain: fuse?.headingGain ?? 0.05,
+      rejectOver_in: fuse?.rejectOver_in ?? 36,
+    });
+    // The TAG's own surveyed position, not the mouth's: pivot, out to the CELL, then back off
+    // the rigid tag -> mouth correction. This is the known point the fix is measured against.
+    const anchor = tagOffsets.anchorPrior_in[alliance];
+    const tagOf = (st: { mouthFromAnchor_in: { x: number }; groundOffset_in: number }) =>
+      ({ x: anchor.x + st.mouthFromAnchor_in.x - st.groundOffset_in, y: anchor.y });
+    this.tagField = { 1: tagOf(tagOffsets.states.A), 2: tagOf(tagOffsets.states.B) };
+    const ob = tagOffsets.obstacle_in;
+    this.obstacle = {
+      x: ob[alliance].x,
+      y: ob[alliance].y,
+      radius_in: ob.radius_in,
+      halfWidth_in: ob.halfWidth_in,
+    };
+  }
+
+  /** The pose the aim actually used: odometry plus every tag correction so far. */
+  pose_(): { x: number; y: number; heading: number } { return this.pose; }
+  /** Tag fixes taken, thrown out, and how far the last one moved the estimate. */
+  fuseStats(): { applied: number; rejected: number; lastIn: number } {
+    return { applied: this.fuser.applied, rejected: this.fuser.rejected, lastIn: this.fuser.lastCorrectionIn };
+  }
+
+  /**
+   * The current target fix, for anything outside the brain that has to steer by it -- the
+   * AUTO routine decides where to stand from the same estimate the shooter aims with, rather
+   * than from a truth block the robot does not have. One loop behind, which does not matter
+   * to a driving decision.
+   */
+  target(): TagTargetState { return this.tgt; }
 
   /** Recent flywheel readings, for the moving average the gate compares against tolRpm. */
   private readonly rpmHistory: number[] = [];
@@ -391,6 +467,28 @@ export class BuiltinTeleOp {
   private aimEst = 0;
   /** One-pole filtered localizer velocity. The lead is only ever as good as this. */
   private velFilt = { x: 0, y: 0 };
+  /**
+   * WHERE THE GOAL IS, from the camera rather than from the world. The mirror of the Java
+   * deliverable's TagTargetProvider, and the reason every aiming number below is now an
+   * estimate: `s.game.truth` is still in the frame and reading it here would be cheating.
+   */
+  private readonly targetFix: TagTarget;
+  /** Tag fixes correcting the dead-reckoned pose. The other half of the loop from TagTarget. */
+  private readonly fuser: PoseFuser;
+  /** The SURVEYED tag position per rocker state, which is what makes a fix a pose measurement. */
+  private readonly tagField: Record<number, { x: number; y: number }>;
+  /** The corrected pose, so telemetry and the AUTO routine read what the aim used. */
+  private pose = { x: 0, y: 0, heading: 0 };
+  /** The OTHER HIVE, as an obstacle. Its CELLs sweep a disc, so its state does not matter. */
+  private readonly obstacle: ObstacleSpec;
+  private lastFusedT = -1e9;
+  /** Last answer from it, so telemetry and the gate read the same one. */
+  private tgt: TagTargetState = {
+    azimuthDeg: 0, rangeIn: 0, openDeg: 180, valid: false, fresh: false,
+    ageS: Infinity, lostLock: false, scanning: true, id: 0,
+    fromOdometry: false, stateFromTag: false,
+    anchor: { x: 0, y: 0 }, anchorFromTag: false,
+  };
   /** The fixed-speed solution for this loop, or null when there is no shot from here. */
   private hoodCell: HoodCell | null = null;
 
@@ -454,10 +552,10 @@ export class BuiltinTeleOp {
     const sy = -g.left_stick_x * slow;   // stick left
     const om = -g.right_stick_x * slow;
 
-    const robotCentric = !g.right_stick_button;  // hold R3 for field-centric instead
+    const fieldCentric = g.right_stick_button;   // hold R3 for field-centric; robot-centric otherwise
     const h = (s.imu.yaw - st.headingZero) * DEG;
-    const vx = robotCentric ? sx : sx * Math.cos(h) + sy * Math.sin(h);   // robot forward
-    const vy = robotCentric ? sy : -sx * Math.sin(h) + sy * Math.cos(h);  // robot left
+    const vx = fieldCentric ? sx * Math.cos(h) + sy * Math.sin(h) : sx;   // robot forward
+    const vy = fieldCentric ? -sx * Math.sin(h) + sy * Math.cos(h) : sy;  // robot left
 
     // The wire carries what the motor is actually told, so a reversed motor is negated
     // here exactly as the Java does with setDirection(REVERSE). The world then applies the
@@ -478,6 +576,28 @@ export class BuiltinTeleOp {
     motors.intake = { mode: 'RUN_WITHOUT_ENCODER', power: intake };
 
     // ---- aim
+    //
+    // WHERE THE GOAL IS, FIRST, because nothing below means anything without it. The camera
+    // rides the turret and is blind most of the time: out of the lens, past its range, too
+    // far round the side, and -- the case that used to be free -- for the whole of a TIP.
+    // `tgt` is the fix carried on odometry between detections, and `tgt.fresh` is the only
+    // thing that may fire. `s.game.truth` is right there and reading it is cheating.
+    // CORRECT THE POSE FIRST, then aim with it. A tag at a surveyed position is a measurement
+    // of the ROBOT before it is anything else, and odometry now drifts, so this is the only
+    // thing keeping the estimate tied to the field.
+    this.pose = this.fuser.propagate(s.t, s.localizer);
+    if (s.tag && s.tag.sampleT > this.lastFusedT) {
+      this.lastFusedT = s.tag.sampleT;
+      const tf = this.tagField[s.tag.id];
+      const face = s.tag.id === 2
+        ? (tagOffsets.states.B.mouthNormalZ >= 0 ? 1 : -1)
+        : (tagOffsets.states.A.mouthNormalZ >= 0 ? 1 : -1);
+      if (tf) this.pose = this.fuser.observe(tf.x, tf.y, s.tag.bearingDeg, s.tag.rangeIn, face, s.tag.openDeg, s.tag.sampleT);
+    }
+    const tgt = this.targetFix.update(s.t, this.pose, s.tag, dt,
+      s.tag ? this.fuser.poseAt(s.tag.sampleT) : undefined);
+    this.tgt = tgt;
+
     // The table is looked up at the TRIMMED range. A group that lands 8 in long means the
     // table's answer for R actually reaches R+8, so asking it for R-8 lands on the mouth --
     // one number, measured from a collected run, that corrects every range at once. This is
@@ -503,11 +623,11 @@ export class BuiltinTeleOp {
     // velocity is the filtered one for the same reason the lead uses it: an unfiltered radial
     // velocity would jitter the table lookup.
     const cal = this.spec.calibration ?? { rangeTrim_in: 0, turretTrim_deg: 0 };
-    const bearingNow = (s.imu.yaw + s.game.upCellAzimuthDeg) * DEG;
+    const bearingNow = (s.imu.yaw + tgt.azimuthDeg) * DEG;
     const vrNow = velX * Math.cos(bearingNow) + velY * Math.sin(bearingNow);
     const rangeLead = this.spec.flywheel.rangeLead_s ?? 0;
-    const rangeAtRelease = s.game.upCellRangeIn - (vrNow * rangeLead) / 0.0254;
-    st.rangeLeadIn = rangeAtRelease - s.game.upCellRangeIn;
+    const rangeAtRelease = tgt.rangeIn - (vrNow * rangeLead) / 0.0254;
+    st.rangeLeadIn = rangeAtRelease - tgt.rangeIn;
     // THE ROW IS FOR NOW; ONLY THE WHEEL LOOKS AHEAD.
     //
     // This looked the whole row up at the predicted release range, and handed the hood and
@@ -519,13 +639,13 @@ export class BuiltinTeleOp {
     // current range it crossed 1 cm high. The wheel is the one thing that lags -- that is
     // what the range lead was measured against -- so the look-ahead goes to the rpm target
     // alone, as the rpm the table will want by the time the wheel has got there.
-    const row = this.table.lookup(s.game.upCellRangeIn - cal.rangeTrim_in);
+    const row = this.table.lookup(tgt.rangeIn - cal.rangeTrim_in);
     const rowAhead = this.table.lookup(rangeAtRelease - cal.rangeTrim_in);
     // INSIDE THE TABLE'S FIRST ROW THERE IS NO SHOT. lookup() clamps to the nearest row and
     // says nothing, so a robot 6 in from the hive fired the 30 in solution and put every
     // ball into the front of the pocket. The shot map has always painted this band as "too
     // close"; the brain now agrees with it.
-    const rangeHere = s.game.upCellRangeIn - cal.rangeTrim_in;
+    const rangeHere = tgt.rangeIn - cal.rangeTrim_in;
     const inTable = this.table.rows.length === 0
       || (rangeHere >= this.table.rows[0].range_in && rangeHere <= this.table.rows[this.table.rows.length - 1].range_in);
     const ticksPerDeg = this.spec.turret.motor.ticksPerDeg ?? 8;
@@ -596,31 +716,20 @@ export class BuiltinTeleOp {
     const mv = muzzleVelocity(leadVx, leadVy, s.localizer.omega, s.imu.yaw, turretActualDeg, this.spec.turret.muzzleOffset_m);
     const muzzleDvx = mv.vx - leadVx;
     const muzzleDvy = mv.vy - leadVy;
-    // AIM OFF THE TAG WHEN THE CAMERA CAN SEE IT, AND OFF THE LOCALIZER WHEN IT CANNOT.
-    //
-    // BEARING ONLY, deliberately. A tag bearing is measured relative to the camera, so it
-    // carries no accumulated heading error -- and heading is what kills this shot: an FTC IMU
-    // drifts 1-3 deg a minute uncorrected and 5 deg of yaw error is half the mouth gone at
-    // 54 in (tools/tagstudy.ts). RANGE is the opposite case: a tag's range comes from its
-    // apparent SIZE, so the error grows with the square of distance, and odometry beats it
-    // everywhere that matters. Taking the better half of each is the whole trick.
-    const azimuth = s.game.tag ? s.game.tag.azimuthDeg : s.game.upCellAzimuthDeg;
-    st.tagLocked = s.game.tag !== null;
-    st.tagPx = s.game.tag?.px ?? 0;
-    const lead = leadShot(azimuth, tableSpeed, hoodDeg, mv.vx, mv.vy, s.imu.yaw, this.spec.hood.angleRange_deg);
+    const lead = leadShot(tgt.azimuthDeg, tableSpeed, hoodDeg, mv.vx, mv.vy, s.imu.yaw, this.spec.hood.angleRange_deg);
 
     // ---- FIXED-SPEED PATH: the wheel holds one speed and the hood aims.
     //
     // The robot's radial velocity -- how fast it is closing on the mouth -- is the table's
     // second axis rather than something to cancel. Positive is closing. Lateral motion barely
     // moves the answer, which is why this is the only component that has to be known.
-    const bearingField = (s.imu.yaw + azimuth) * DEG;
+    const bearingField = (s.imu.yaw + tgt.azimuthDeg) * DEG;
     const vRadial = (velX + muzzleDvx) * Math.cos(bearingField) + (velY + muzzleDvy) * Math.sin(bearingField);
     st.vRadial = vRadial;
     this.hoodCell = this.hoodTable && !this.hoodTable.isEmpty
-      ? this.hoodTable.lookup(s.game.upCellRangeIn - cal.rangeTrim_in, vRadial)
+      ? this.hoodTable.lookup(tgt.rangeIn - cal.rangeTrim_in, vRadial)
       : null;
-    st.leadDeg = wrapPi((lead.azimuthDeg - azimuth) * DEG) * RAD;
+    st.leadDeg = wrapPi((lead.azimuthDeg - tgt.azimuthDeg) * DEG) * RAD;
     st.leadAzDeg = lead.azimuthDeg;
     let turretDeg: number;
     /** The unfiltered solution, kept so the gate can see the filter's own lag. */
@@ -658,7 +767,7 @@ export class BuiltinTeleOp {
       // raised to where the shots land, "turret N deg off" became the top hold at speed:
       // 22-35% of loops at 0.6-0.85 m/s (tools/zonerun.ts --cap). Both rates are known from
       // the localizer, so both go through the accumulator before the filter sees anything.
-      const rangeNowM = Math.max(0.3, inches(s.game.upCellRangeIn));
+      const rangeNowM = Math.max(0.3, inches(tgt.rangeIn));
       const bearingRate = ((velX * Math.sin(bearingField) - velY * Math.cos(bearingField)) / rangeNowM) * RAD;
       this.aimHold += (bearingRate - s.localizer.omega) * dt;
       this.aimEst += (bearingRate - s.localizer.omega) * dt;
@@ -856,7 +965,7 @@ export class BuiltinTeleOp {
     //
     // It is range-dependent in a way a fixed "within 3 degrees" gate never was: 3 deg is 2
     // in at 40 in and 4 in at 70 in, against a half-width of 8 in.
-    const rangeM = inches(s.game.upCellRangeIn);
+    const rangeM = inches(tgt.rangeIn);
     const sigmaLat = rangeM * Math.tan(f.scatter.yaw_deg * DEG);
     const meanLat = rangeM * Math.tan(st.turretAimErrDeg * DEG);
     // THE MOUTH IS NARROWER FROM THE SIDE. `halfLat_m` is the CELL's half-width measured
@@ -873,8 +982,9 @@ export class BuiltinTeleOp {
     // tools/shotzone.ts has always rebuilt the whole aperture per square, which is why the
     // map and the robot disagreed about the same spot. This is the brain's cheap version of
     // the same geometry: one cosine, no solver call per loop.
-    const openCos = Math.max(0.05, Math.cos(s.game.upCellOpenDeg * DEG));
-    const halfLatNow = row.halfLat_m === undefined ? undefined : row.halfLat_m * openCos;
+    const halfLatNow = row.halfLat_m === undefined
+      ? undefined
+      : row.halfLat_m * Math.max(0, Math.cos(tgt.openDeg * DEG));
     st.halfLatNow = halfLatNow ?? -1;
     const pAim = halfLatNow === undefined
       ? 1
@@ -957,7 +1067,15 @@ export class BuiltinTeleOp {
     // has no area at all, so anything under it "can" enter -- and it is far too generous.
     // Swept, it costs shots at both ends: see fireOpenCap_deg in config/robot.json.
     const openCap = this.spec.turret.fireOpenCap_deg ?? 75;
-    const mouthOpen = s.game.upCellOpenDeg <= openCap;
+    const mouthOpen = tgt.openDeg <= openCap;
+    // IS THE OTHER HIVE IN THE WAY? The two rockers are 25.5 in apart and 20 in wide, so a
+    // shot taken from the far side of theirs crosses their structure -- and the solver never
+    // knew, because it integrates a ball through empty air and checks only the target's own
+    // lips. The physics gives both rockers colliders, so the ball really does hit.
+    const mouthX = this.pose.x + tgt.rangeIn * Math.cos((this.pose.heading + tgt.azimuthDeg) * DEG);
+    const mouthY = this.pose.y + tgt.rangeIn * Math.sin((this.pose.heading + tgt.azimuthDeg) * DEG);
+    const blocked = tgt.valid && shotIsBlocked(this.pose.x, this.pose.y, mouthX, mouthY, this.obstacle);
+    st.blocked = blocked;
 
     // SPINNING FASTER THAN THE TURRET CAN FOLLOW.
     //
@@ -1032,12 +1150,14 @@ export class BuiltinTeleOp {
     const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
     st.readyCount = atSpeed ? st.readyCount + 1 : 0;
     st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretAimErrDeg) < 3
-      && st.turretPastStopDeg < 0.5 && !s.game.hiveTipping && mouthOpen && accelOk && yawOk && aimPossible && leadOk;
+      && st.turretPastStopDeg < 0.5 && tgt.fresh && !blocked && mouthOpen && accelOk && yawOk && aimPossible && leadOk;
 
     st.hold = !wheelOn ? ''
-      : s.game.hiveTipping ? 'hive is tipping'
-      : !mouthOpen ? `${s.game.upCellOpenDeg.toFixed(0)} deg off the opening, cap ${openCap.toFixed(0)} - DRIVE ROUND`
-      : !inTable ? `${s.game.upCellRangeIn.toFixed(0)} in is outside the table (${this.table.rows[0]?.range_in ?? 0}-${this.table.rows[this.table.rows.length - 1]?.range_in ?? 0}) - BACK OFF`
+      : tgt.scanning ? `searching for the tag (turret sweeping ${tgt.azimuthDeg.toFixed(0)} deg)`
+      : !tgt.fresh ? `tag fix ${(tgt.ageS * 1000).toFixed(0)} ms old - holding`
+      : blocked ? 'the other HIVE is in the way - DRIVE ROUND IT'
+      : !mouthOpen ? `${tgt.openDeg.toFixed(0)} deg off the opening, cap ${openCap.toFixed(0)} - DRIVE ROUND`
+      : !inTable ? `${tgt.rangeIn.toFixed(0)} in is outside the table (${this.table.rows[0]?.range_in ?? 0}-${this.table.rows[this.table.rows.length - 1]?.range_in ?? 0}) - BACK OFF`
       : !accelOk ? `accelerating out of the band: ${(st.accelBudget * 100).toFixed(0)}% of it before the ball leaves`
       : !yawOk ? `turning too fast to aim: ${Math.abs(s.localizer.omega).toFixed(0)} deg/s, cap ${yawCap.toFixed(0)}`
       : !leadOk ? `too much of this shot is the robot's own motion: ${Math.abs(st.leadDeg).toFixed(0)} deg of lead, cap ${leadCap.toFixed(0)} - SLOW DOWN`
@@ -1137,8 +1257,8 @@ export class BuiltinTeleOp {
       ? 'shooter idle'
       : !atSpeed
         ? `spinning up ${rpm.toFixed(0)}/${st.targetRpm.toFixed(0)}`
-        : s.game.hiveTipping
-          ? 'hive is tipping - hold'
+        : !tgt.fresh
+          ? (tgt.scanning ? 'searching for the tag' : `tag fix ${(tgt.ageS * 1000).toFixed(0)} ms old`)
           : Math.abs(st.turretAimErrDeg) >= 3
             ? `turret slewing ${st.turretAimErrDeg.toFixed(0)} deg`
             : s.game.hopper === 0
@@ -1156,7 +1276,10 @@ export class BuiltinTeleOp {
       },
       telemetry: [
         // Metres for the reader; the hub's own sensor stays in the FTC frame's inches.
-        ['range', `${(s.game.upCellRangeIn * 0.0254).toFixed(2)} m`],
+        // The fix and how old it is, first: every other number on this list is derived from
+        // it, and when it is stale they are all describing where the goal used to be.
+        ['tag', tgt.scanning ? 'SEARCHING' : `CELL ${tgt.id === 2 ? 'B' : 'A'}, ${(tgt.ageS * 1000).toFixed(0)} ms old`],
+        ['range', `${(tgt.rangeIn * 0.0254).toFixed(2)} m`],
         ['target rpm', st.targetRpm.toFixed(0)],
         ['rpm', rpm.toFixed(0)],
         ['ready', String(st.ready)],

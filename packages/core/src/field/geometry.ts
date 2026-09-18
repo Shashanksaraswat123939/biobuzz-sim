@@ -52,6 +52,21 @@ export const CAD = {
   mouthDepth_in: 14, // across the mouth (tangential)
   cellDepth_in: 12.04, // radial
   plateThick_in: 0.25,
+  /**
+   * The am-5888 AprilTag panel, in the rocker body frame: 14.10 in out from the pivot at
+   * 6.08 deg off the rocker's long axis, one per CELL on opposite sides.
+   *
+   * MEASURED off cad/parts.json by tools/tagstudy.ts, which is the only place the four panels
+   * are read. They are here because the camera has to be pointed at the TAG, and the tag is
+   * NOT the mouth: the mouth of the same CELL is 22.07 in out at 14.7 deg, about 10 in away
+   * on the same rocker. Modelling the tag at the mouth -- which the first version of the
+   * camera did -- hands the robot a bearing to a thing that is not there.
+   *
+   * Everything bolted to the rocker rotates with it, so this is a body-frame constant and the
+   * rotation is Hive.toWorld's, same as the pocket's.
+   */
+  tagRadius_in: 14.10,
+  tagBodyAngle_deg: 6.08,
   frameHalfX_in: 24.74,
   frameHalfZ_in: 19.48,
   frameTopBarY_in: 41.4,
@@ -121,6 +136,8 @@ export interface CellGeometry {
   radius_m: number;
   /** Half extents of the pocket interior: [alongAxis, radial, tangential], m. */
   halfInterior: Vec3;
+  /** This CELL's am-5888 panel centre, rocker body frame, metres. Rotates with the rocker. */
+  tagBody_m: Vec3;
   pieces: BoxPiece[];
 }
 
@@ -198,12 +215,22 @@ export function buildFieldGeometry(params: Params): FieldGeometry {
   const axA = CELL_A_AXIS_BODY_ANGLE_DEG * DEG;
   const radius_m = inches(CELL_RADIUS_IN);
 
+  /**
+   * The CELL's tag panel in the rocker body frame. `side` is the sign of the CELL's own z, so
+   * A gets the panel on the +z half and B the mirror -- the same pairing tools/tagoffsets.ts
+   * makes, and the one that survives a rename in the CAD.
+   */
+  const tagBody = (side: 1 | -1): Vec3 => {
+    const phi = CAD.tagBodyAngle_deg * DEG;
+    return [0, inches(-CAD.tagRadius_in * Math.sin(phi)), inches(side * CAD.tagRadius_in * Math.cos(phi))];
+  };
+
   const a = pocketPieces(phiA, axA, radius_m, 'A');
   const b = pocketPieces(-phiA, -axA, radius_m, 'B');
 
   const cells: [CellGeometry, CellGeometry] = [
-    { id: 'A', bodyAngle_rad: phiA, axisAngle_rad: axA, radius_m, halfInterior: a.half, pieces: a.pieces },
-    { id: 'B', bodyAngle_rad: -phiA, axisAngle_rad: -axA, radius_m, halfInterior: b.half, pieces: b.pieces },
+    { id: 'A', bodyAngle_rad: phiA, axisAngle_rad: axA, radius_m, halfInterior: a.half, pieces: a.pieces, tagBody_m: tagBody(1) },
+    { id: 'B', bodyAngle_rad: -phiA, axisAngle_rad: -axA, radius_m, halfInterior: b.half, pieces: b.pieces, tagBody_m: tagBody(-1) },
   ];
 
   // Frame: an open A-frame, approximated by four corner posts, a top bar and two ACM side

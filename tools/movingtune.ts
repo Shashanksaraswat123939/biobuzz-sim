@@ -176,7 +176,7 @@ export async function run(opts: {
     if (world.robot.shots > seen) {
       seen = world.robot.shots;
       const s = world.sensors();
-      const bf = (s.imu.yaw + s.game.upCellAzimuthDeg) * Math.PI / 180;
+      const bf = (s.imu.yaw + s.game.truth.upCellAzimuthDeg) * Math.PI / 180;
       // The muzzle's own lateral velocity, and where it was actually POINTED, both measured
       // at the muzzle rather than inferred: turret error is the axis against its command and
       // says nothing about whether the command was right.
@@ -195,7 +195,7 @@ export async function run(opts: {
         hoodErr: brain.state.hoodErrDeg,
         turretErr: brain.state.turretErrDeg,
         vr: s.localizer.vx * 0.0254 * Math.cos(bf) + s.localizer.vy * 0.0254 * Math.sin(bf),
-        range: s.game.upCellRangeIn,
+        range: s.game.truth.upCellRangeIn,
         omega: (om * 180) / Math.PI,
         muzzleLat: (-om * rz) * uz - (om * rx) * ux,
         aimErr: ((Math.atan2(mz.dir[0], mz.dir[2]) - Math.atan2(dx, dz)) * 180) / Math.PI,

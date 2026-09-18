@@ -45,7 +45,7 @@ export async function main(argv: string[] = []): Promise<void> {
     w.step(brain.update(s, still ? emptyGamepad() : driverInput(i * dt, true), i, dt));
     if (i % 60 === 0) {
       const st = brain.state;
-      console.log(`  ${(i * dt).toFixed(0).padStart(4)}   ${String(s.game.hopper).padStart(3)}  ${String(w.robot.shots).padStart(5)}  ${s.game.upCellRangeIn.toFixed(0).padStart(4)}  ${s.game.upCellOpenDeg.toFixed(0).padStart(5)}  ${s.game.flywheelRpm.toFixed(0).padStart(4)}  ${st.turretAimErrDeg.toFixed(1).padStart(6)}  ${st.pLand.toFixed(2).padStart(6)}  ${st.pSpeed.toFixed(2).padStart(6)}  ${(spec.flywheel.k * spec.flywheel.r_fly_m * s.game.flywheelRpm * Math.PI / 30).toFixed(3).padStart(7)}   ${(() => { const r = table.lookup(s.game.upCellRangeIn - (spec.calibration?.rangeTrim_in ?? 0)); return `${(r.speedLo ?? 0).toFixed(3)}-${(r.speedHi ?? 0).toFixed(3)}`; })()}   ${st.hold || '-'}`);
+      console.log(`  ${(i * dt).toFixed(0).padStart(4)}   ${String(s.game.hopper).padStart(3)}  ${String(w.robot.shots).padStart(5)}  ${s.game.truth.upCellRangeIn.toFixed(0).padStart(4)}  ${s.game.truth.upCellOpenDeg.toFixed(0).padStart(5)}  ${s.game.flywheelRpm.toFixed(0).padStart(4)}  ${st.turretAimErrDeg.toFixed(1).padStart(6)}  ${st.pLand.toFixed(2).padStart(6)}  ${st.pSpeed.toFixed(2).padStart(6)}  ${(spec.flywheel.k * spec.flywheel.r_fly_m * s.game.flywheelRpm * Math.PI / 30).toFixed(3).padStart(7)}   ${(() => { const r = table.lookup(s.game.truth.upCellRangeIn - (spec.calibration?.rangeTrim_in ?? 0)); return `${(r.speedLo ?? 0).toFixed(3)}-${(r.speedHi ?? 0).toFixed(3)}`; })()}   ${st.hold || '-'}`);
     }
   }
   console.log(`\n  ended: ${w.robot.shots} shots, our CELL ${w.landedInUpCell('red')}, theirs ${w.landedInUpCell('blue')}\n`);

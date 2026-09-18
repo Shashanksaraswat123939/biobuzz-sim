@@ -43,7 +43,19 @@ public class TeleOpMain extends LinearOpMode {
                 // Hands off the sticks: close the range to the table's best band.
                 forward = toRange.update(aim.rangeIn(), robot.target() == null ? 0 : robot.target().getAzimuthDeg());
             }
-            robot.drive.driveFieldCentric(forward, left, turn);
+            // ROBOT-CENTRIC: forward is whichever way the INTAKE points, always.
+            //
+            // This was field-centric, rotating the stick into the field frame so up meant
+            // "away from the driver station" whichever way the robot faced. The argument was
+            // that a turret lets the chassis point anywhere so the driver should not have to
+            // track its nose -- which is right about the SHOT and wrong about the driver. You
+            // do not drive a robot at the field, you drive it at a BALL, and the intake is the
+            // only end that can pick one up. Hold Y for the old behaviour.
+            if (gamepad1.y) {
+                robot.drive.driveFieldCentric(forward, left, turn);
+            } else {
+                robot.drive.driveRobotCentric(forward, left, turn);
+            }
 
             if (gamepad1.right_trigger > 0.1) {
                 robot.intake.collect();

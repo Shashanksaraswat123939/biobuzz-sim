@@ -49,7 +49,7 @@ async function one(seed: number): Promise<Run> {
   const dt = p.sim.dt * p.sim.substepsPerFrame;
   while (world.clock.period === 'AUTO') {
     const s = world.sensors();
-    const g = routine.update(s, dt, world.robot.shots, world.clock.remaining);
+    const g = routine.update(s, dt, world.robot.shots, world.clock.remaining, brain.target());
     world.setGamepads(g, { ...g, a: false, b: false, right_bumper: false });
     world.step(brain.update(s, g, world.seq, dt));
   }

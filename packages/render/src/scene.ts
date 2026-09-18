@@ -1128,8 +1128,22 @@ export class Scene {
     // lead moves the target rpm every loop and the readiness gate needs three consecutive
     // loops inside 60 rpm, so on the move the gate essentially never latches. A map that
     // turns greener as you drive at the hive would be describing shots this robot cannot
-    // take. `repaintZone` still takes a velocity, so re-enabling it is one line once firing
-    // on the move works.
+    // take, so it is repainted at the speed the robot is ACTUALLY doing.
+    //
+    // The cells carry parameters rather than a finished probability precisely so this can be
+    // done every frame: the lead keeps a shot's ground path the same whatever the robot is
+    // doing, so the aperture, the speed band and the entry rate belong to the SPOT and were
+    // solved once. What driving changes is the speed the shot must LEAVE at -- retreating
+    // needs a faster one -- and launch scatter is a fraction of exit speed, so the error at
+    // the mouth grows with it. The green is therefore a different shape at 1 m/s than it is
+    // standing still, and the map was drawing the standing-still one all match.
+    if (this.showShotZone) {
+      const v: [number, number] = [s.robot.v[0], s.robot.v[2]];
+      // Repaint on a real change only. It rasterises 841 cells into a 512 px canvas, which is
+      // cheap but not free, and below a tenth of a metre per second the picture does not
+      // visibly move -- so this runs a few times a second while driving and never when parked.
+      if (Math.hypot(v[0] - this.zoneVel[0], v[1] - this.zoneVel[1]) > 0.1) this.repaintZone(v);
+    }
 
     if (s.opponent) {
       if (!this.opponentGroup) this.buildOpponent();

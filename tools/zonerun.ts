@@ -70,14 +70,17 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
     const bearingOff = wrapPi(Math.atan2(dx, dz) - Math.atan2(nrm[0], nrm[2]) + Math.PI) * RAD;
     // Turn round at the sector's edge, once, with hysteresis: flipping every frame past the
     // edge is a robot that stands still and reads as 0.04 m/s.
-    if (bearingOff < -30) dir = -1;
-    else if (bearingOff > 30) dir = 1;
+    const edge = process.argv.includes('--nohold') ? 45 : 30;
+    if (bearingOff < -edge) dir = -1;
+    else if (bearingOff > edge) dir = 1;
     const g: GamepadState = emptyGamepad();
     // Face the mouth: a yaw correction the fire gate can live with.
     const yawErr = wrapPi(Math.atan2(dx, dz) - w.robot.yaw) * RAD;
     g.right_stick_x = -Math.max(-0.25, Math.min(0.25, yawErr / 40));
     g.left_stick_x = -dir * stick;                         // strafe across
-    g.left_stick_y = -Math.max(-0.3, Math.min(0.3, (range - R) / 0.5)); // hold the range
+    // --nohold: no range correction, so a full stick is a full stick (about 1.2 m/s), the
+    // sector is +-45 deg, and each pass across it is the 0.7 s a driver actually gets.
+    g.left_stick_y = process.argv.includes('--nohold') ? 0 : -Math.max(-0.3, Math.min(0.3, (range - R) / 0.5));
     w.setGamepads(g, emptyGamepad());
     w.step(brain.update(w.sensors(), g, w.seq, dt));
     const h = brain.state.hold;

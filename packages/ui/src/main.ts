@@ -102,6 +102,12 @@ async function boot(): Promise<void> {
 function build(): void {
   world = new World({ params, robot: robotSpec, staging, alliance, seed: params.sim.seed, preload: 4, opponent: opponentOn });
   brain = new BuiltinTeleOp(robotSpec, shotTable, loadLandCal());
+  // A HANDLE FOR MEASURING THE APP ITSELF. Every harness drives a World from Node; none of
+  // them drives THIS one, through this input path, at this frame rate -- and "it aims at
+  // the wrong hive" is a report about this one. Read-only from the console, never written.
+  // `loop` is the app's own frame, exposed so a measurement can step it with synthetic
+  // timestamps when the tab is hidden and requestAnimationFrame is not firing.
+  (window as unknown as { __sim: unknown }).__sim = { get world() { return world; }, get brain() { return brain; }, loop };
   // The opponent gets its own brain, not a share of yours: it has its own flywheel to spin,
   // its own aim to hold and its own readiness to wait for.
   oppBrain = world.opponent ? new BuiltinTeleOp(robotSpec, shotTable, loadLandCal()) : null;
@@ -391,8 +397,24 @@ function predictShot(s: Snapshot): Vec3[] | null {
   // wait. Once the wheel is at speed and the hood has arrived the two are the same curve.
   const targetRpm = brain.state.targetRpm > 0 ? brain.state.targetRpm : s.robot.flywheel.rpm;
   const speed = rpmToSpeed(targetRpm, robotSpec.flywheel.k, robotSpec.flywheel.r_fly_m);
+  // THE BALL LEAVES WITH THE MUZZLE'S VELOCITY, and so must the curve. This integrated the
+  // exit velocity alone, which is exact standing still and wrong by the whole lead on the
+  // move: at 1.2 m/s across the mouth the aim correctly points the muzzle 30-40 deg
+  // upstream of the hive, and this drew a parabola landing 30-40 deg upstream of the hive --
+  // over by the opponent's -- while the actual ball, exit plus chassis, went in. Measured
+  // in the app itself (window.__sim, 13.7 s of full-stick driving): the four worst frames
+  // had the muzzle 38-40 deg off our CELL with the chassis not yawing and the aim error
+  // under 3 deg. "It aims at the wrong hive" was this line. Same term as Robot.launch():
+  // v_cg + omega x r, with r from the tracked point to the muzzle.
+  const cv = s.robot.v;
+  const om = (s.robot.omegaDps * Math.PI) / 180;
+  const rx = mz.pos[0] - s.robot.p[0], rz = mz.pos[2] - s.robot.p[2];
+  const gx = mz.dir[0] * speed + cv[0] - om * rz;
+  const gy = mz.dir[1] * speed + cv[1];
+  const gz = mz.dir[2] * speed + cv[2] + om * rx;
+  const gspeed = Math.hypot(gx, gy, gz);
   const traj = simulateShot(params, {
-    from: mz.pos, azimuth: mz.azimuth, elevation: mz.elevation, speed,
+    from: mz.pos, azimuth: Math.atan2(gx, gz), elevation: Math.asin(gy / gspeed), speed: gspeed,
     radius: params.ball.pollen.d_m / 2,
     mass: params.ball.pollen.m_kg,
     spin: robotSpec.flywheel.type === 'single' ? speed / (params.ball.pollen.d_m / 2) : 0,

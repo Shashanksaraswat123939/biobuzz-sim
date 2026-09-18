@@ -1868,3 +1868,95 @@ Who/where:   tools/flightcheck.ts (new), tests/ballistics.test.ts (new),
              tools/shottable.ts (branch, loadMeasuredStay), java/teamcode/assets/shottable.csv,
              config/shotzone.json, config/robot.json (rangeLead_s_source), tools/shoterror.ts,
              tools/shotzone.ts (raw), tests/landprob.test.ts
+
+## 2026-09-18 — Shooting at speed: the band measured, the cap re-measured, the estimator carrying the motion
+
+Plan said:   "Move at high speed, aim perfectly and shoot every time in the green zone; 90%
+             accuracy and good fire timings." The patrol harness (tools/zonerun.ts, new)
+             drives the shooting sector at a held speed with the latch on and the real
+             rocker, which is that question asked the way a driver asks it.
+
+Found:       THE BAND WAS NARROWER THAN THE POCKET, half of it resolution. tools/bandcheck.ts
+             (new) scales the world's wheel against the brain's and lands four balls a step:
+             the pocket accepts -6..+5% of exit speed at 40 in, -6..+5 at 55, -5..+5 at 70.
+             The solver said +-3.4%. speedBand searched in 0.125 m/s steps, +-2.3% at 5.4
+             m/s -- coarser than the band it resolved -- and at 0.025 m/s the geometric
+             aperture alone solves +-4.6% at 56 in. The rest is the lips deflecting a
+             grazing ball inward: hive.lipClearanceFrac = 0.5 (measured) solves +-5.6 / 5.1 /
+             4.4, inside the measurement everywhere.
+
+             THE RANGE LEAD IS ZERO. Re-swept on the wheel target alone: 0 s 91%, 0.15 s
+             86%, 0.30 s 87%; the wheel is 2 rpm off at release and slews eight times faster
+             than the target moves.
+
+             THE LEAD CAP WAS 20 DEG FROM THE OLD LEAD. tools/movingtune.ts --lead cannot
+             re-measure it -- none of its cases reach 12 deg of lead, so it read the same 106
+             shots at every cap. zonerun --cap, at 0.80 m/s: 20 lands 88% of 8 shots at 0.06
+             balls/s with 89% of loops refused; 45 lands 94% of 16; no cap is identical to
+             45 because the outrun and hood-travel gates take over past it. Set to 45.
+
+             THE AIM FILTER LAGGED BOTH KNOWN RATES, and the gate measured noise. The filter
+             on the turret command is for localizer noise; a chassis yawing at w drags the
+             bearing at -w, and one crossing the mouth at 0.84 m/s from 38 in turns it at
+             50 deg/s. Both were being filtered as if they were noise (66 deg/s of spin was
+             refused 80% of the time for "turret 2 deg off"). And the pointing error was the
+             raw solution minus the axis: at a 27 deg lead, 0.04 m/s of velocity noise is
+             1.1 deg, and on a steady 1 m/s leg the 3 deg gate tripped on noise 5-10% of the
+             loops while the axis was within a degree of where it had been sent. At each
+             reversal the lead swings 55 deg in 0.3 s and the axis is 11 deg behind for
+             real; that hold is honest.
+
+             A TIP CREDITED NOTHING. Hive.tips increments at 90% of the far stop; the balls
+             left the CELL's volume a quarter of a second before. 28 shots, 0 credited, on a
+             stationary robot that had put nine in and tipped the hive.
+
+Did instead: Both rates fed forward through the aim accumulator; the pointing error measured
+             against an estimate that carries them and takes out only the per-loop noise,
+             with a faster pole than the command so a real lag still shows. Cap 45. Range
+             lead 0. Clearance 0.5, band search at 0.025 m/s. A tip credits the most the
+             cell held since the last one. Cycle time re-swept and kept at 1.0 s (90%);
+             0.8 s is the throughput option at 88%.
+
+             MEASURED. Spinning at 66 deg/s: 94% in, nothing wild (was refused). Patrol,
+             60 s x 2 seeds, real rocker, land% and balls credited per second:
+
+               0.00 m/s   79%   0.73/s
+               0.62 m/s   88%   0.64/s     (was 87%, 0.23 with the cap at 20)
+               0.79 m/s   88%   0.64/s     (was 88%, 0.06)
+               0.83 m/s   88%   0.56/s     (was 88%, 0.06)
+               0.84 m/s   79%   0.51/s     (was 88%, 0.06)
+
+             Calibration against the shipped table: 85 / 92 / 90 / 85 / 94% at 40-80 in,
+             model 92 / 94 / 92 / 87 / 85 -- within a few points everywhere. Ceiling 94%.
+
+Costs/risks: 1.5 m/s is not this drivetrain: four 5203-312s on 48 mm wheels free-run at 1.57
+             m/s and load to about 1.2, and the patrol tops out at 0.84 with the range held.
+             The design shot has 2.1 m/s of horizontal speed, so closing at 1.2 m/s asks the
+             hood for 83 deg against its 80. What holds shots at speed now is the reversal
+             itself, 14-23% of loops, which is the axis's 261 deg/s. The stationary patrol
+             reads 79% because it fires into a pocket that tips at twelve; the last few of
+             those meet the pile. 100% is not on offer from a shooter with 1.5% of speed
+             scatter into a mouth 3 sigma deep, and nothing here pretends otherwise.
+
+             THE TURRET'S TRAVEL IS NOT THE WRONG-HIVE STORY ANY MORE. A continuous turret
+             (+-3600, a slip ring with no stop) against the roaming driver reads 2.1% of
+             loops more than 45 deg off our CELL -- the same as +-270 -- so the residual is
+             not the unwind. It is the chassis: a button-slammed turn is 273 deg/s against a
+             261 deg/s axis, and a 500 deg/s axis brings it to 1.5%, 900 to 1.0%. That is a
+             servo choice, not a control one; the config stays at +-270.
+
+             AND THE PICTURE WAS LYING. Measured in the app itself through its real input
+             path (a read-only window.__sim handle, the frame loop stepped by hand while the
+             tab is hidden): 13.7 s of full-stick driving, the muzzle never more than 45 deg
+             off our CELL, and the four worst frames 38-40 deg off with the chassis not
+             yawing and the aim error under 3 deg. That is the lead doing its job at 1.2 m/s.
+             But the on-screen predicted arc integrated the exit velocity alone -- exact at
+             rest, wrong by the whole lead on the move -- so it drew the ball landing 30-40
+             deg upstream of the hive, by the opponent's, while the real ball went in. "It
+             aims at the wrong hive most of the time" was the curve, not the aim. It now
+             adds v_cg + omega x r, the same term Robot.launch() has.
+Who/where:   tools/zonerun.ts, tools/bandcheck.ts (new), packages/core/src/robot/builtinTeleOp.ts
+             (feed-forwards, aimEst), packages/core/src/physics/ballistics.ts (steps),
+             packages/core/src/physics/world.ts (tip credit), config/robot.json
+             (fireLeadCap_deg, rangeLead_s, cycleTime_s notes), config/params.json
+             (lipClearanceFrac), tools/shottable.ts / hoodtable.ts / shotzone.ts (clearance)

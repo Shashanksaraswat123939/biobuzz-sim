@@ -799,7 +799,7 @@ interface Action { label: string; title: string; run: () => void; on?: () => boo
 
 const DECK: Record<Mode, Action[]> = {
   practice: [
-    { label: 'Auto-aim (M1)', title: 'Turret and hood solve for the CELL continuously, including a lead for the robot’s own motion. Off means , and . aim it by hand. M1 on the pad, T on the keyboard.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
+    { label: 'Auto-aim (L1)', title: 'Turret and hood solve for the CELL continuously, including a lead for the robot’s own motion. Off, the , and . keys aim it by hand. L1 on the pad, T on the keyboard — M1 and M2 are the manual nudge, not this.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
     { label: 'Auto-fire (R1)', title: 'Latch. Spins the flywheel, waits for it to be in tolerance and the turret to be on target, then feeds at the cycle time until you press it again. R1 on the pad, space on the keyboard. L3 (G) fires by hand instead, for as long as you hold it.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
     { label: 'Opponent', title: 'Put a real robot on the other alliance and play against it. It collects, lines up on its own CELL’s opening, fires through the same readiness gate you do, tips its own HIVE and PARKs at the buzzer — driving a real chassis through a real brain, so nothing it does is something you could not. Toggling it rebuilds the match.', run: () => { opponentOn = !opponentOn; build(); }, on: () => opponentOn },
     { label: 'Auto-fill hopper', title: 'Practice aid, not a game rule: quietly picks up the nearest POLLEN off the floor whenever the hopper has room, so you can work on aiming without driving a collection lap.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
@@ -823,7 +823,7 @@ const DECK: Record<Mode, Action[]> = {
     { label: 'Reset', title: 'Rebuild the match and clear the shot log.', run: () => build() },
   ],
   test: [
-    { label: 'Auto-aim (M1)', title: 'Turret and hood solve for the CELL continuously. Off means , and . aim it by hand.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
+    { label: 'Auto-aim (L1)', title: 'Turret and hood solve for the CELL continuously. Off, the , and . keys aim it by hand.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
     { label: 'Auto-fire (R1)', title: 'Latch. Spins up and feeds at the cycle time until pressed again. L3 fires by hand.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
     { label: 'Auto-fill hopper', title: 'Keeps the hopper topped up from the floor so a test run does not stop for ammunition.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
     { label: 'Drop a POLLEN in the CELL', title: 'Places one POLLEN into your up CELL by hand. The quickest way to watch the HIVE tip: it takes 12.', run: () => dropBall() },

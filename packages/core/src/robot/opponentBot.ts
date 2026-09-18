@@ -25,7 +25,7 @@ import { clamp, M_TO_IN } from '../units.js';
 import { driveTo, type AutoRoutineField } from './autoRoutine.js';
 import type { GamepadState, Period, SensorFrame } from '../types.js';
 
-export type OpponentPhase = 'collect' | 'position' | 'shoot' | 'park' | 'idle';
+export type OpponentPhase = 'collect' | 'position' | 'shoot' | 'flower' | 'park' | 'idle';
 
 export interface OpponentSight {
   /** Loose balls it may pick up, FTC inches. G408 filtering belongs to the caller. */
@@ -46,6 +46,12 @@ export interface OpponentSight {
  */
 export class OpponentBot {
   phase: OpponentPhase = 'idle';
+  /** Which tube it is working on. Rotated so it does not pile every ball into one. */
+  private flowerIx = 0;
+  /** True once FLOWER mode and the latch are on for this attempt. */
+  private lobArmed = false;
+  /** The stand-off chosen when the attempt began. Held so the robot can arrive at it. */
+  private lobSpot: [number, number] | null = null;
   note = 'waiting for the match';
   fired = 0;
   /** Where it is heading, FTC inches, for the UI to draw. */
@@ -177,6 +183,17 @@ export class OpponentBot {
       }
 
       case 'position': {
+        // IT SHOOTS THE CELL. It does NOT go looking for FLOWERs, and that is measured
+        // rather than assumed: sending every third load to a tube took the opponent from
+        // 52 points a match to 11, because it spent 154 of the 150 playing seconds in the
+        // flower phase and placed nothing. The lob itself is fine -- tools/flowercheck.ts
+        // lands 67-88% of it from a held 14 in stand-off -- what this bot cannot do is
+        // DRIVE to that stand-off and stop on it. Its go() overshoots a spot this tight.
+        //
+        // So the phase stays, reachable only from the shoot phase's exit when the CELL has
+        // turned away and there are still balls aboard, which is rare and is the one case
+        // where a tube genuinely beats waiting. Making it the bot's routine needs a
+        // position controller that can park within 3 in, which is its own piece of work.
         this.target = shootAt;
         const d = this.go(g, s, shootAt[0], shootAt[1], face[0], face[1], dt);
         const facing = s.game.truth.upCellOpenDeg;
@@ -201,6 +218,53 @@ export class OpponentBot {
         // refusing from here: all three mean stop and go round again.
         if (s.game.hopper === 0 || s.game.truth.upCellOpenDeg > 75 || this.since > 15) {
           g.right_bumper = true;      // edge again: latch back off
+          // A FULL HOPPER AND A GOAL THAT WILL NOT TAKE IT IS WHAT FLOWERS ARE FOR. If the
+          // CELL turned away while there are still balls aboard, the tubes are 2 points
+          // each and do not tip, so go and use them rather than drive a lap back to the
+          // same mouth. With the hopper empty there is nothing to place either way.
+          this.retarget(s.game.hopper > 0 && (f.flowers?.length ?? 0) > 0 ? 'flower' : 'collect');
+        }
+        break;
+      }
+
+      case 'flower': {
+        // 14 IN OFF THE TUBE, measured. tools/flowercheck.ts flew the table from four
+        // stand-offs at all four flowers: at 10 in the gate refuses (inside the solved band
+        // once the muzzle offset comes off), 22 in fires nothing, 18 in lands 11-50%, and
+        // 14 in lands 67-88%. So the bot goes to 14 and stays there.
+        const fl = f.flowers?.[this.flowerIx];
+        if (!fl) { this.retarget('collect'); break; }
+        // ONCE PER ATTEMPT, NOT EVERY FRAME. Recomputing the stand-off from where the robot
+        // IS puts it 14 in from the tube on the robot's current bearing -- so it MOVES as
+        // the robot approaches, and the robot orbits it for ever. Traced: 1 in from the
+        // target and still driving, because the target had already stepped sideways. The
+        // spot is chosen when the phase begins and then held.
+        if (!this.lobSpot) {
+          const fdx = fl.x - s.localizer.x, fdy = fl.y - s.localizer.y;
+          const fd = Math.hypot(fdx, fdy) || 1;
+          this.lobSpot = [fl.x - (fdx / fd) * 14, fl.y - (fdy / fd) * 14];
+        }
+        const stand: [number, number] = this.lobSpot;
+        this.target = stand;
+        const away = this.go(g, s, stand[0], stand[1], fl.x, fl.y, dt);
+        // ARM ON ARRIVAL, NOT ON ENTRY. The first version flipped FLOWER mode and the fire
+        // latch the instant the phase began -- while the robot was still several feet away
+        // and driving -- so it lobbed at nothing from the wrong stand-off and the opponent's
+        // score fell from 52 to 22 points. The lob has 0.6 in of tolerance in the hole; it
+        // has to be standing still on the right spot before anything is armed.
+        if (!this.lobArmed && away < 3) {
+          this.lobArmed = true;
+          g.dpad_left = true;        // edge: FLOWER mode on
+          g.right_bumper = true;     // edge: latch the fire on
+        }
+        this.note = this.lobArmed
+          ? `lobbing into flower ${this.flowerIx} (${s.game.hopper} left)`
+          : `driving to flower ${this.flowerIx} (${away.toFixed(0)} in off)`;
+        if (s.game.hopper === 0 || this.since > 18) {
+          if (this.lobArmed) { g.dpad_left = true; g.right_bumper = true; }  // edges: both off
+          this.lobArmed = false;
+          this.lobSpot = null;
+          this.flowerIx = (this.flowerIx + 1) % Math.max(1, f.flowers?.length ?? 1);
           this.retarget('collect');
         }
         break;

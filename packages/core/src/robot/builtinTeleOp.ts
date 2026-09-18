@@ -8,6 +8,7 @@ import { clamp, DEG, RAD, inches, wrapPi, rpmToRadS } from '../units.js';
 import { pThread } from '../physics/ballistics.js';
 import type { LandCalibration } from './entryModel.js';
 import type { HoodCell, HoodTable } from './hoodTable.js';
+import type { FlowerCell, FlowerTable } from './flowerTable.js';
 import { TagTarget, type TagTargetState } from './tagTarget.js';
 import { PoseFuser } from './poseFuser.js';
 import { shotIsBlocked, type ObstacleSpec } from './clearShot.js';
@@ -276,6 +277,15 @@ export interface TeleOpState {
   pLandRaw: number;
   /** True when pLand has been through a measured calibration and is a real probability. */
   calibrated: boolean;
+  /**
+   * FLOWER mode: aim at the nearest tube and lob into its top instead of shooting the CELL.
+   * A different target, a different table, and about a third of the exit speed.
+   */
+  flowerMode: boolean;
+  /** Which term of the FLOWER gate is failing, for diagnosis. */
+  flowerWhy: string;
+  /** The tube being aimed at, its range and the solution, when in FLOWER mode. */
+  flower: { index: number; range_in: number; bearingDeg: number; cell: FlowerCell | null } | null;
   /** Why the shot is being held, or '' if it is not. */
   hold: string;
   targetRpm: number;
@@ -348,6 +358,7 @@ export const newTeleOpState = (): TeleOpState => ({
   turretManualDeg: 0, flywheelOn: false, speedScale: 1,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, turretAimErrDeg: 0, halfLatNow: -1, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
+  flowerMode: false, flower: null, flowerWhy: '',
   lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, pSpeed: -1, pStayNow: -1, pAim: -1, headingZero: 0, blocked: false, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0, rowHoodDeg: 0, rowRpm: 0,
 });
 
@@ -378,6 +389,11 @@ export class BuiltinTeleOp {
      * alliance aims across the field the moment the camera blinks.
      */
     alliance: 'red' | 'blue' = 'red',
+    /**
+     * The FLOWER solution and where the four tubes are. Without it FLOWER mode is simply
+     * unavailable and says so, rather than aiming at a target it has no shot for.
+     */
+    private readonly flowerTable: FlowerTable | null = null,
   ) {
     const tg = spec.sensors.tag.target;
     this.targetFix = new TagTarget({
@@ -450,6 +466,8 @@ export class BuiltinTeleOp {
   private lastVel = { x: 0, y: 0, t: 0 };
   private accel = { x: 0, y: 0 };
   /** The gimbal's held bearing: filtered and deadbanded, so the axis locks instead of hunting. */
+  /** FLOWER mode's own settle counter; the CELL path owns st.readyCount. */
+  private flowerSettled = 0;
   private aimHold = 0;
   /**
    * The solution with the per-loop noise taken out but none of the motion: the estimate
@@ -529,6 +547,10 @@ export class BuiltinTeleOp {
       // button. Square the robot up to the field and tap it.
       if (edge(g.left_stick_button, p.left_stick_button)) st.headingZero = s.imu.yaw;
       if (edge(g.right_bumper, p.right_bumper)) st.firing = !st.firing;
+      // FLOWER mode on the same kind of edge. The manual turret nudge reads dpad_left as
+      // well, and deliberately: nudging by hand is for when auto-aim is off, and FLOWER
+      // mode aims itself, so the two are never wanted at once.
+      if (edge(g.dpad_left, p.dpad_left) && this.flowerTable) st.flowerMode = !st.flowerMode;
     }
     this.prev = { ...g };
 
@@ -729,6 +751,34 @@ export class BuiltinTeleOp {
     this.hoodCell = this.hoodTable && !this.hoodTable.isEmpty
       ? this.hoodTable.lookup(tgt.rangeIn - cal.rangeTrim_in, vRadial)
       : null;
+    // ---- FLOWER MODE: a different target, a different table, a third of the exit speed.
+    //
+    // The tube is a 4.0 in hole at 22.6 in and a POLLEN is 2.80, so the whole tolerance is
+    // 0.6 in either side and the lob has to come DOWN through it -- a ball passing over is
+    // a ball behind the flower. tools/flowertable.ts solves the pair per stand-off; here
+    // the robot only has to pick the nearest tube and read the row.
+    //
+    // It aims off the FUSED POSE, not off a tag: the tubes carry no AprilTag, so a flower
+    // shot is exactly as good as the odometry, which is 1.1 in over a 30 s lap
+    // (tools/driftcheck.ts) against 0.6 in of hole. That is why the gate below wants the
+    // fix fresh even though it is not aiming at the fix.
+    let flowerLead = null as null | { azimuthDeg: number; cell: FlowerCell };
+    if (st.flowerMode && this.flowerTable && !this.flowerTable.isEmpty) {
+      const near = this.flowerTable.nearest(this.pose.x, this.pose.y);
+      // FROM THE MUZZLE, NOT THE ROBOT'S CENTRE. tools/flowertable.ts flies every row from
+      // the muzzle, and the pose is the chassis origin: the muzzle sits muzzleOffset_m out
+      // along the shot line. On a 50 in CELL shot that 4.7 in is 9% and nobody notices; on
+      // a 14 in flower it is a THIRD of the range, and the first version lobbed 68 balls
+      // without one going in.
+      const muzzleOff_in = this.spec.turret.muzzleOffset_m / 0.0254;
+      const cell = near ? this.flowerTable.lookup(near.range_in - muzzleOff_in) : null;
+      st.flower = near ? { ...near, cell } : null;
+      if (near && cell) {
+        flowerLead = { azimuthDeg: wrapPi((near.bearingDeg - this.pose.heading) * DEG) * RAD, cell };
+      }
+    } else {
+      st.flower = null;
+    }
     st.leadDeg = wrapPi((lead.azimuthDeg - tgt.azimuthDeg) * DEG) * RAD;
     st.leadAzDeg = lead.azimuthDeg;
     let turretDeg: number;
@@ -751,7 +801,8 @@ export class BuiltinTeleOp {
       // is per-frame. And a deadband holds the command still while the solution is inside it,
       // so the axis stops rather than creeping: below the launch yaw scatter there is nothing
       // to chase, because a tenth of a degree of aim is invisible next to a degree of scatter.
-      const raw = lead.azimuthDeg - cal.turretTrim_deg;
+      // In FLOWER mode the turret points at the tube, not at the CELL.
+      const raw = (flowerLead ? flowerLead.azimuthDeg : lead.azimuthDeg) - cal.turretTrim_deg;
       aimRawDeg = raw;
       // FEED THE CHASSIS ROTATION FORWARD THROUGH THE FILTER. The one-pole filter below is
       // for localizer noise, and it lags whatever it is fed; a chassis turning at w drags the
@@ -885,7 +936,8 @@ export class BuiltinTeleOp {
     // less, shooting while retreating needs more.
     // ONE SPEED, ALL MATCH, when the fixed-speed table is loaded: the lead's rpm correction is
     // exactly the thing that made the wheel chase a moving target, so there is none.
-    const leadRpm = this.hoodTable && !this.hoodTable.isEmpty
+    const leadRpm = flowerLead ? flowerLead.cell.rpm
+      : this.hoodTable && !this.hoodTable.isEmpty
       ? this.hoodTable.fixedRpm
       : (st.autoAim && tableSpeed > 0 ? (row.rpm * lead.speed) / tableSpeed : row.rpm) + (rowAhead.rpm - row.rpm);
     // Firing implies spinning. Asking a driver to arm the wheel and then arm the feed is
@@ -1149,6 +1201,56 @@ export class BuiltinTeleOp {
     st.accelBudget = Number.isFinite(halfBand) && halfBand > 0 ? dSpeedByRelease / halfBand : 0;
     const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
     st.readyCount = atSpeed ? st.readyCount + 1 : 0;
+    // A FLOWER LOB IS A DIFFERENT SHOT AND A DIFFERENT GATE. None of the CELL's conditions
+    // apply to it -- there is no mouth to be square to, no tipping rocker, no motion lead
+    // worth the name at 1.1 m/s of exit speed -- and two of its own do: the stand-off has to
+    // be inside the solved band, and the hood has to have arrived, because at 0.6 in of
+    // tolerance the hood IS the shot.
+    if (flowerLead) {
+      const hoodOk = Math.abs(hoodNow - flowerLead.cell.hoodDeg) <= (this.spec.hood.tolDeg ?? 2);
+      // ITS OWN SETTLE COUNTER. The CELL path increments st.readyCount further down, which
+      // this branch returns before reaching -- so the count never grew, ready stayed false
+      // for ever, and the first version lobbed nothing while reporting the wheel on speed,
+      // the hood on angle and the hold string empty. A gate that reads clear and fires
+      // nothing is the worst of both.
+      const flowerOk = inWindow && hoodOk && Math.abs(st.turretAimErrDeg) < 3
+        && st.turretPastStopDeg < 0.5 && yawOk;
+      // A COUNTER OF ITS OWN. Sharing st.readyCount does not work: the CELL path zeroes it a
+      // few lines above, on ITS conditions, which are never met in FLOWER mode -- so the
+      // count went 0 -> 1 -> 0 -> 1 for ever and readySteps was never reached. Every gate
+      // term read true and the robot lobbed nothing, which took a per-frame dump to see.
+      this.flowerSettled = flowerOk ? this.flowerSettled + 1 : 0;
+      st.readyCount = this.flowerSettled;
+      st.flowerWhy = `win=${inWindow ? 1 : 0} hood=${hoodOk ? 1 : 0} aim=${Math.abs(st.turretAimErrDeg) < 3 ? 1 : 0} stop=${st.turretPastStopDeg < 0.5 ? 1 : 0} yaw=${yawOk ? 1 : 0}`;
+      st.ready = this.flowerSettled >= f.readySteps && flowerOk;
+      st.hold = !wheelOn ? ''
+        : !st.flower?.cell ? `no FLOWER within ${this.flowerTable?.maxRange.toFixed(0) ?? 0} in - DRIVE UP TO ONE`
+        : !inWindow ? `wheel ${rpm.toFixed(0)}/${st.targetRpm.toFixed(0)} rpm`
+        : !hoodOk ? `hood ${hoodNow.toFixed(0)} deg, the lob wants ${flowerLead.cell.hoodDeg.toFixed(0)}`
+        : !yawOk ? `turning too fast to aim: ${Math.abs(s.localizer.omega).toFixed(0)} deg/s`
+        : Math.abs(st.turretAimErrDeg) >= 3 ? `turret ${st.turretAimErrDeg.toFixed(0)} deg off`
+        : '';
+      const ftp = this.spec.transfer;
+      // THE BELT HAS TO RUN. This branch returns before the CELL path sets motors.transfer,
+      // so the first version lobbed nothing at all while reporting "clear to fire": the
+      // tube stayed empty, no ball ever reached the nip, and the gate had nothing to let
+      // through. Same belt, same reason as the CELL shot -- it keeps the feed loaded.
+      motors.transfer = { mode: 'RUN_WITHOUT_ENCODER', power: wheelOn ? 1 : 0 };
+      const mayFeed = st.ready && s.t - st.lastFeedT >= ftp.cycleTime_s;
+      if (mayFeed) { st.lastFeedT = s.t; st.pulsing = true; }
+      if (st.pulsing && s.t - st.lastFeedT >= ftp.feedPulse_s) st.pulsing = false;
+      return {
+        seq, motors,
+        servos: {
+          hood: this.hoodCommand(flowerLead.cell.hoodDeg),
+          gate: st.pulsing && st.ready ? this.spec.transfer.gate.open : this.spec.transfer.gate.closed,
+        },
+        telemetry: [['mode', 'FLOWER'], ['tube', String(st.flower?.index ?? -1)],
+          ['range in', (st.flower?.range_in ?? 0).toFixed(1)],
+          ['hood deg', flowerLead.cell.hoodDeg.toFixed(1)], ['rpm', flowerLead.cell.rpm.toFixed(0)],
+          ['hold', st.hold || 'clear']],
+      };
+    }
     st.ready = st.readyCount >= f.readySteps && Math.abs(st.turretAimErrDeg) < 3
       && st.turretPastStopDeg < 0.5 && tgt.fresh && !blocked && mouthOpen && accelOk && yawOk && aimPossible && leadOk;
 
@@ -1271,6 +1373,7 @@ export class BuiltinTeleOp {
       seq,
       motors,
       servos: {
+        // FLOWER mode returned above, so this is always the CELL shot.
         hood: st.autoAim ? this.hoodCommand(lead.elevationDeg) : 0.5,
         gate: mayFire ? this.spec.transfer.gate.open : this.spec.transfer.gate.closed,
       },

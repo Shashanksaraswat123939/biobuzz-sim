@@ -38,6 +38,11 @@ export interface AutoRoutineField {
   halfWidth_m: number;
   /** The shot table's usable range band, inches. The stand-off is the middle of it. */
   band_in: [number, number];
+  /**
+   * The FLOWER tubes, FTC inches. Optional: without them a bot simply never places, which
+   * is what it did before the lob existed.
+   */
+  flowers?: { x: number; y: number }[];
 }
 
 /**

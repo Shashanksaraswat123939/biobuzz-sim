@@ -26,6 +26,9 @@ import tagOffsets from '../../../config/tagoffsets.json';
 import { World, initPhysics, emptyGamepad } from '@core/physics/world.js';
 import { BuiltinTeleOp, ShotTable } from '@core/robot/builtinTeleOp.js';
 import { loadLandCal } from '@core/robot/loadCal.js';
+import { loadFlowerTable } from '@core/robot/loadFlower.js';
+/** The tubes, read once: the bot needs them as well as the brain. */
+const flowerTbl = loadFlowerTable();
 import { buildMotor } from '@core/physics/motor.js';
 import { AutoDriver, defaultPlan, type AutoPlan } from '@core/robot/autoDriver.js';
 import { AutoRoutine } from '@core/robot/autoRoutine.js';
@@ -104,7 +107,7 @@ async function boot(): Promise<void> {
 
 function build(): void {
   world = new World({ params, robot: robotSpec, staging, alliance, seed: params.sim.seed, preload: 4, opponent: opponentOn });
-  brain = new BuiltinTeleOp(robotSpec, shotTable, loadLandCal());
+  brain = new BuiltinTeleOp(robotSpec, shotTable, loadLandCal(), null, alliance, flowerTbl);
   // A HANDLE FOR MEASURING THE APP ITSELF. Every harness drives a World from Node; none of
   // them drives THIS one, through this input path, at this frame rate -- and "it aims at
   // the wrong hive" is a report about this one. Read-only from the console, never written.
@@ -113,7 +116,7 @@ function build(): void {
   (window as unknown as { __sim: unknown }).__sim = { get world() { return world; }, get brain() { return brain; }, loop };
   // The opponent gets its own brain, not a share of yours: it has its own flywheel to spin,
   // its own aim to hold and its own readiness to wait for.
-  oppBrain = world.opponent ? new BuiltinTeleOp(robotSpec, shotTable, loadLandCal()) : null;
+  oppBrain = world.opponent ? new BuiltinTeleOp(robotSpec, shotTable, loadLandCal(), null, alliance === 'red' ? 'blue' : 'red', flowerTbl) : null;
   bot = world.opponent ? new OpponentBot() : null;
   // ZERO THE FIELD FRAME ON THE DRIVER, not on the world's axes.
   //
@@ -927,6 +930,7 @@ const DECK: Record<Mode, Action[]> = {
   practice: [
     { label: 'Auto-aim (L1)', title: 'Turret and hood solve for the CELL continuously, including a lead for the robot’s own motion. Off, the , and . keys aim it by hand. L1 on the pad, T on the keyboard — M1 and M2 are the manual nudge, not this.', run: () => (brain.state.autoAim = !brain.state.autoAim), on: () => brain.state.autoAim },
     { label: 'Auto-fire (R1)', title: 'Latch. Spins the flywheel, waits for it to be in tolerance and the turret to be on target, then feeds at the cycle time until you press it again. R1 on the pad, space on the keyboard. L3 (G) fires by hand instead, for as long as you hold it.', run: () => (brain.state.firing = !brain.state.firing), on: () => brain.state.firing },
+    { label: 'FLOWER lob', title: 'Aim at the nearest FLOWER and lob into the top of its tube instead of shooting the CELL. A different table: hood 57-80 deg at about 1200 rpm, a third of the CELL shot. The tube is a 4.0 in hole for a 2.8 in ball, so stand 12-16 in off it -- closer and the bumper is against the column, further and the lob runs out of hood.', run: () => (brain.state.flowerMode = !brain.state.flowerMode), on: () => brain.state.flowerMode },
     { label: 'Opponent', title: 'Put a real robot on the other alliance and play against it. It collects, lines up on its own CELL’s opening, fires through the same readiness gate you do, tips its own HIVE and PARKs at the buzzer — driving a real chassis through a real brain, so nothing it does is something you could not. Toggling it rebuilds the match.', run: () => { opponentOn = !opponentOn; build(); }, on: () => opponentOn },
     { label: 'Auto-fill hopper', title: 'Practice aid, not a game rule: quietly picks up the nearest POLLEN off the floor whenever the hopper has room, so you can work on aiming without driving a collection lap.', run: () => setAutoLoad(!autoLoad), on: () => autoLoad },
     { label: 'Joystick', title: 'On-screen sticks: left translates, right looks around. They feed the same gamepad frame the keyboard and a real controller do, so a phone or a trackpad can drive without either.', run: () => (sticks.visible = !sticks.visible), on: () => sticks.visible },
@@ -1054,6 +1058,7 @@ function makeRoutine(): AutoRoutine {
     loading: [zone.min[0], zone.min[2], zone.max[0], zone.max[2]],
     halfWidth_m: world.geom.halfWidth_m,
     band_in: [Math.min(...ranges), Math.max(...ranges)],
+    flowers: flowerTbl?.flowers,
   });
 }
 
@@ -1233,6 +1238,7 @@ function opponentField() {
     loading: [zone.min[0], zone.min[2], zone.max[0], zone.max[2]] as [number, number, number, number],
     halfWidth_m: world.geom.halfWidth_m,
     band_in: [Math.min(...ranges), Math.max(...ranges)] as [number, number],
+    flowers: flowerTbl?.flowers,
   };
 }
 

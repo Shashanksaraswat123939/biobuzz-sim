@@ -16,10 +16,12 @@ import { World, initPhysics, emptyGamepad } from '../packages/core/src/physics/w
 import { BuiltinTeleOp, ShotTable } from '../packages/core/src/robot/builtinTeleOp.js';
 import { OpponentBot } from '../packages/core/src/robot/opponentBot.js';
 import { loadLandCal } from '../packages/core/src/robot/loadCal.js';
+import { FlowerTable } from '../packages/core/src/robot/flowerTable.js';
 import { worldToFtc } from '../packages/core/src/field/ftcFrame.js';
 import { M_TO_IN } from '../packages/core/src/units.js';
 import type { BallKind, Params, RobotSpec, Vec3 } from '../packages/core/src/types.js';
 
+const flowerTbl = FlowerTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/flowertable.csv', import.meta.url), 'utf8'));
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 const balls = (staging.balls as { kind: string; pos: number[] }[]).map((b) => ({ kind: b.kind as BallKind, pos: b.pos as Vec3 }));
 
@@ -31,7 +33,7 @@ async function one(seed: number, trace = false) {
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
   const world = new World({ params: p, robot: spec, staging: balls, alliance: 'red', seed, preload: spec.hopper.capacity, opponent: true });
-  const oppBrain = new BuiltinTeleOp(spec, table, loadLandCal());
+  const oppBrain = new BuiltinTeleOp(spec, table, loadLandCal(), null, 'blue', flowerTbl);
   const bot = new OpponentBot();
   const opp = world.opponent!;
   const hive = world.hives[opp.alliance];
@@ -51,6 +53,7 @@ async function one(seed: number, trace = false) {
       loading: [zone.min[0], zone.min[2], zone.max[0], zone.max[2]],
       halfWidth_m: world.geom.halfWidth_m,
       band_in: [Math.min(...ranges), Math.max(...ranges)],
+      flowers: flowerTbl.flowers,
     }, { loose, remaining: world.clock.remaining, period: world.clock.period, shotsTaken: opp.shots });
     world.setOpponentActuators(oppBrain.update(os, g, world.seq, dt));
     world.setGamepads(emptyGamepad(), emptyGamepad());

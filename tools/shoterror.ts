@@ -36,13 +36,18 @@ import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src
 
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 
-interface S { rpmErr: number; long: number; lat: number; vr: number; hoodErr: number; sincePrev: number; range: number; omega: number; turretErr: number; aimErr: number; muzzleLat: number; clampedBy: number }
+interface S { rpmErr: number; long: number; lat: number; vr: number; hoodErr: number; sincePrev: number; range: number; omega: number; turretErr: number; aimErr: number; muzzleLat: number; clampedBy: number; inCell: number }
 
 async function run(drive: [number, number], wobble: number, startIn: number, secs: number, seed: number, tau?: number, turn = 0): Promise<S[]> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
   if (tau !== undefined) spec.transfer.leadLatency_s = tau;
+  // --pin: a rocker that cannot tip. A TIP dumps the up CELL's balls two metres beyond the
+  // mouth, and a ball that entered below the mouth's centre height never crossed it
+  // descending, so the log scores it where it STOPPED: two metres long. Pinning the rocker
+  // separates a wild shot from a scored one that was dumped.
+  if (process.argv.includes('--pin')) p.hive.massKg = 200;
   const staging = Array.from({ length: 80 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
   const world = new World({ params: p, robot: spec, staging, alliance: 'red', seed });
   for (const b of world.balls.balls) world.balls.park(b);
@@ -93,7 +98,12 @@ async function run(drive: [number, number], wobble: number, startIn: number, sec
       const ux = dxm / n;
       const uz = dzm / n;
       at.push({
-        rpmErr: world.robot.lastShotRpm - world.robot.lastTargetRpm,
+        // AGAINST THE BRAIN'S TARGET. `Robot.lastTargetRpm` is the duty cycle times the free
+        // speed, which is what a RUN_USING_ENCODER command would mean and is nothing at all
+        // for the open-loop feedforward the brain actually sends: it read +64 rpm on a
+        // stationary robot whose wheel was 6 rpm off (tools/flightcheck.ts). Every
+        // conclusion drawn from this column before this line was drawn from that number.
+        rpmErr: world.robot.lastShotRpm - brain.state.targetRpm,
         vr: (v.x * dxm + v.z * dzm) / n,
         hoodErr: brain.state.hoodErrDeg,
         sincePrev: world.t - prevT,
@@ -106,6 +116,7 @@ async function run(drive: [number, number], wobble: number, startIn: number, sec
         // against the CLAMPED command, so it reads zero on an axis pinned at its end stop and
         // the readiness gate cannot tell the difference between aimed and jammed.
         clampedBy: brain.state.turretPastStopDeg,
+        inCell: world.landedInUpCell('red'),
       });
       prevT = world.t;
     }
@@ -131,6 +142,14 @@ async function run(drive: [number, number], wobble: number, startIn: number, sec
     const r = world.robot.pos;
     const n = Math.hypot(mouth[0] - r[0], mouth[2] - r[2]) * M_TO_IN;
     if (n < 33 || n > 82 || Math.abs(r[0]) > wall || Math.abs(r[2]) > wall) break;
+    // A POCKET THAT NEVER EMPTIES IS NOT THE GAME. Every "wild" turning shot this tool ever
+    // reported left with the wheel, hood and turret on target and went two metres long --
+    // and every one of them was fired into a pocket already holding eight or more balls
+    // (tools/flightcheck.ts --case turning --scatter --gate: the ninth and eleventh balls
+    // diverge from the solver 30-35 frames out, before the mouth, and end 203 cm long and 120
+    // cm wide; the first eight all score). A real rocker tips at four to six. Firing past
+    // that measures the pile, so a pass ends when the pocket would have tipped.
+    if (world.landedInUpCell('red') >= 6) break;
   }
   // Only what was fired IN BAND while driving. The fire latch stays set through the
   // settling tail, so without this the sample is padded with shots taken while coasting to a
@@ -186,12 +205,12 @@ export async function main(argv: string[] = []): Promise<void> {
     }
     const wild = all.filter((x) => Math.abs(x.long) > 60 || Math.abs(x.lat) > 60);
     console.log(`WILD ${turning ? 'TURNING' : 'SHUTTLING'} SHOTS: ${wild.length} of ${all.length}`);
-      console.log('   long   lat   rpmErr  hoodErr    v_r   range  sincePrev  pastStop  yawRate  turretErr');
+      console.log('   long   lat   rpmErr  hoodErr    v_r   range  sincePrev  pastStop  yawRate  turretErr  inCell');
     for (const w of wild) {
       console.log(
         `  ${w.long.toFixed(0).padStart(5)} ${w.lat.toFixed(0).padStart(5)}  ${w.rpmErr.toFixed(0).padStart(6)}  ` +
         `${w.hoodErr.toFixed(2).padStart(6)} ${w.vr.toFixed(2).padStart(6)} ${w.range.toFixed(0).padStart(6)}  ` +
-        `${w.sincePrev.toFixed(2).padStart(8)}  ${w.clampedBy.toFixed(1).padStart(7)}  ${w.omega.toFixed(0).padStart(7)}  ${w.turretErr.toFixed(2).padStart(9)}`,
+        `${w.sincePrev.toFixed(2).padStart(8)}  ${w.clampedBy.toFixed(1).padStart(7)}  ${w.omega.toFixed(0).padStart(7)}  ${w.turretErr.toFixed(2).padStart(9)}  ${String(w.inCell).padStart(6)}`,
       );
     }
     const ok = all.filter((x) => !wild.includes(x));
@@ -205,6 +224,7 @@ export async function main(argv: string[] = []): Promise<void> {
     ['stopped 50in', [0, 0], 0, 50, 0],
     ['shuttling 50in', [0, 0], 0.35, 50, 0],
     ['closing 76in', [0, 0.18], 0, 76, 0],
+    ['closing+wobble 62in', [0, 0.22], 0.35, 62, 0],
     ['turning 50in', [0, 0], 0, 50, 0.5],
     ['turn+drive 50in', [0, 0], 0.25, 50, 0.4],
   ];

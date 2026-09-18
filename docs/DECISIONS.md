@@ -1776,3 +1776,92 @@ Who/where:   tools/landcal.ts (per-factor and per-range breakdown, raw sample du
              java/teamcode/assets/shottable.csv (pStay column), config/landcal.json,
              config/landcal-samples.json, config/shotzone.json,
              packages/core/src/robot/builtinTeleOp.ts (the three factors on the state)
+
+## 2026-09-18 — Why the ball arrived at the wrong height on the move: four faults, none of them the flight
+
+Plan said:   "Do a deep analysis of the entire physics and projectile motion ... it's struggling
+             to hit the right height while moving." The suspects, in the order everyone reaches
+             for them: the drag and Magnus constants, the integrator, the lead's vertical.
+
+Found:       `tools/flightcheck.ts` (new) fires with scatter and ball variance OFF and splits
+             every flight into four parts -- launch geometry, integrator, execution, aim --
+             each measured against the next from the same initial state.
+
+             THE FLIGHT IS FINE. Rapier at 1/240 s with its own angular damping and
+             `simulateShot` at 1/480 s agree to 0.4-0.7 cm at the mouth plane from one initial
+             state, standing still at 36, 50 and 70 in and moving. The muzzle is 0.4 cm above
+             the table's assumption. The mouth lips are at the manual's 53.5 / 65.6 in, so
+             PHYSICS_AND_SIMULATION.md section 9.3 was already fixed. Receding and strafing
+             were within 2 cm. Nothing in aero.ts or ballistics.ts moved.
+
+             CLOSING WAS 6.6 CM LOW, with the wheel 3 rpm off, the hood 0.03 deg off and the
+             velocity estimate 0.005 m/s off. `rangeLead_s` (0.15 s, measured against the
+             WHEEL's lag) looked the whole row up at the predicted release range and handed
+             the hood and the lead that row too. The hood is a servo and the lead is
+             arithmetic; both are re-solved every loop up to the frame the ball leaves, so a
+             row for 0.15 s ahead is a row for a shot 0.15 * v_radial too close.
+
+             THE TABLE ZIGZAGGED BETWEEN BRANCHES from 74 to 102 in: 60 deg / 2570 rpm at 74
+             next to 70.7 deg / 2901 at 78, then 60 at 94, 66.7 at 98, 50.7 at 102. The robot
+             interpolates between rows, so crossing 74-78 in it was handed 65 deg at 2735 --
+             halfway between two solutions. `preferHoodPos`'s continuity weight was 0.04 per
+             unit of hood against a score of order 1, i.e. nothing.
+
+             THE BRAIN FIRED FROM INSIDE THE TABLE. `ShotTable.lookup` clamps to the nearest
+             row and says nothing; a robot 6 in from the hive fired the 30 in solution. The
+             Java deliverable has always refused this through `usable(range)`; the mirror
+             never did.
+
+             REGENERATING THE TABLE THREW AWAY A CALIBRATION. The `pStay` column had been
+             hand-edited to the measured retention (2026-09-18, above). `tools/shottable.ts`
+             wrote the entry model's 0.58-0.65 back over it, and nothing said so.
+
+             AND TWO METRICS WERE LYING. `Robot.lastTargetRpm` is duty times free speed --
+             meaningless for the open-loop feedforward the brain sends -- so `tools/shoterror.ts`
+             reported +64 rpm on a stationary wheel that was 6 rpm off; the "+66 to +103 rpm at
+             release" carried in these notes as an unchased systematic error was that number.
+             And the seven "wild" turning shots that went two metres long with every release
+             term on target were all fired into a pocket already holding eight or more balls
+             (flightcheck --case turning --scatter --gate: the first eight score, the ninth
+             diverges from the solver before the mouth). shoterror's harness never emptied the
+             pocket; a real rocker tips at four to six.
+
+Did instead: The row is looked up at the CURRENT range and only the wheel's rpm target carries
+             the 0.15 s look-ahead (as the rpm the table will want by the time the wheel is
+             there). `bestShot` takes `maxHoodJumpDeg` and `buildTable` passes 5, anchored on
+             the first range; the table is now monotone, hood 73 -> 44 deg and 2210 -> 3343
+             rpm over 30-150 in, apex 60-70 in, descent 25-36 deg -- the shape of the design
+             table in PHYSICS_AND_SIMULATION.md section 2.4. The brain holds with "outside the
+             table - BACK OFF" past either end. `buildTable` reads the retention per range from
+             `config/landcal-samples.json` (landed / threading factors) so a regenerated table
+             keeps the measurement. shoterror measures rpm against the brain's target and ends
+             a pass when the pocket holds six.
+
+             Measured, scatter off, at the mouth plane: closing 0.23 m/s from 42 in +0.5 cm,
+             from 33 in +1.8; closing 0.5 m/s from 52 in -3.6 (the same row shows -1.5
+             standing still from that 56 deg off-axis spot); turning +-1 cm on eleven of
+             eleven. Gate and scatter on (tools/movingfire.ts): stopped 85%, closing 95%,
+             strafing 80%, shuttle 90%, wobble 80%, long error 2 / 1 / -2 / 4 cm. Land rate by
+             range from a fresh tools/landcal.ts run: 81% at 40 in, 86 at 50, 90 at 60, 87 at
+             70, 88 at 80 -- against 62 / 78 / 89 / 84 / 78 before. Ceiling 92% (was 89).
+
+             tests/ballistics.test.ts (new): the vacuum parabola, the drag and lift laws, the
+             world against the solver from one state, table continuity, the out-of-table
+             refusal. Section 11 of the physics document asked for these; there were none.
+
+Costs/risks: 30 in with the 2 in range trim is now "outside the table": the effective minimum
+             is 32 in, which the shot map already painted as too close. The wheel-only range
+             lead measured 3.6 cm low against 1.0 cm high with no lead at all on the one
+             scatter-off case; both are inside a 30 cm mouth and the gated harness could not
+             tell them apart. Re-sweep it with tools/movingtune.ts --rangelead if the flywheel
+             changes. The calibration curve is nearly flat (0.78-0.89), so the calibrated map
+             reads 0.86 almost everywhere a shot exists; the map's shape test now reads the raw
+             score. The wobble case still throws 26 +- 55 cm laterally in movingfire; the
+             harness cannot separate that from the pile, and shoterror's rebuilt version of it
+             is the next thing to read.
+Who/where:   tools/flightcheck.ts (new), tests/ballistics.test.ts (new),
+             packages/core/src/robot/builtinTeleOp.ts (row at now, wheel-only lead, inTable,
+             rowHoodDeg/rowRpm), packages/core/src/physics/ballistics.ts (maxHoodJumpDeg),
+             tools/shottable.ts (branch, loadMeasuredStay), java/teamcode/assets/shottable.csv,
+             config/shotzone.json, config/robot.json (rangeLead_s_source), tools/shoterror.ts,
+             tools/shotzone.ts (raw), tests/landprob.test.ts

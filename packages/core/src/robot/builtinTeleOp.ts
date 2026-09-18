@@ -303,6 +303,8 @@ export interface TeleOpState {
   aimOutrun: number;
   /** The exit speed and elevation the motion lead solved for, before the hood clamp. */
   leadSpeed: number; leadElevDeg: number;
+  /** The table row the lead started from: its hood angle and rpm. Diagnostics. */
+  rowHoodDeg: number; rowRpm: number;
   /** Radial velocity the lead worked from, m/s. Compare against the truth to see it lag. */
   leadVRadial: number;
   /** Inches the table lookup was moved to where the ball will actually leave from. */
@@ -338,7 +340,7 @@ export const newTeleOpState = (): TeleOpState => ({
   turretManualDeg: 0, flywheelOn: false, speedScale: 1,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, turretAimErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
-  lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, pSpeed: -1, pStayNow: -1, pAim: -1, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0,
+  lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, pSpeed: -1, pStayNow: -1, pAim: -1, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0, rowHoodDeg: 0, rowRpm: 0,
 });
 
 const edge = (now: boolean, was: boolean) => now && !was;
@@ -490,12 +492,33 @@ export class BuiltinTeleOp {
     const rangeLead = this.spec.flywheel.rangeLead_s ?? 0;
     const rangeAtRelease = s.game.upCellRangeIn - (vrNow * rangeLead) / 0.0254;
     st.rangeLeadIn = rangeAtRelease - s.game.upCellRangeIn;
-    const row = this.table.lookup(rangeAtRelease - cal.rangeTrim_in);
+    // THE ROW IS FOR NOW; ONLY THE WHEEL LOOKS AHEAD.
+    //
+    // This looked the whole row up at the predicted release range, and handed the hood and
+    // the lead that row too. The hood is a servo and the lead is arithmetic: both are
+    // re-solved every loop right up to the frame the ball leaves, so the row they need is
+    // the one for where the robot IS, and a row for 0.15 s ahead is a row for a shot that is
+    // 0.15 * v_radial too close. Measured with scatter off (tools/flightcheck.ts): closing at
+    // 0.5 m/s from 52 in the ball crossed the mouth plane 6.6 cm LOW; with the row at the
+    // current range it crossed 1 cm high. The wheel is the one thing that lags -- that is
+    // what the range lead was measured against -- so the look-ahead goes to the rpm target
+    // alone, as the rpm the table will want by the time the wheel has got there.
+    const row = this.table.lookup(s.game.upCellRangeIn - cal.rangeTrim_in);
+    const rowAhead = this.table.lookup(rangeAtRelease - cal.rangeTrim_in);
+    // INSIDE THE TABLE'S FIRST ROW THERE IS NO SHOT. lookup() clamps to the nearest row and
+    // says nothing, so a robot 6 in from the hive fired the 30 in solution and put every
+    // ball into the front of the pocket. The shot map has always painted this band as "too
+    // close"; the brain now agrees with it.
+    const rangeHere = s.game.upCellRangeIn - cal.rangeTrim_in;
+    const inTable = this.table.rows.length === 0
+      || (rangeHere >= this.table.rows[0].range_in && rangeHere <= this.table.rows[this.table.rows.length - 1].range_in);
     const ticksPerDeg = this.spec.turret.motor.ticksPerDeg ?? 8;
     const hoodDeg = this.spec.hood.enabled
       ? this.spec.hood.angleRange_deg[0] + row.hoodPos * (this.spec.hood.angleRange_deg[1] - this.spec.hood.angleRange_deg[0])
       : this.spec.hood.fixedAngle_deg;
     const tableSpeed = this.spec.flywheel.k * this.spec.flywheel.r_fly_m * rpmToRadS(row.rpm);
+    st.rowHoodDeg = hoodDeg;
+    st.rowRpm = row.rpm;
     // LEAD ON THE VELOCITY THE ROBOT WILL HAVE WHEN THE BALL LEAVES, not the one it has now.
     //
     // leadShot's own note says acceleration is not worth compensating because the a*t^2 term
@@ -718,7 +741,7 @@ export class BuiltinTeleOp {
     // exactly the thing that made the wheel chase a moving target, so there is none.
     const leadRpm = this.hoodTable && !this.hoodTable.isEmpty
       ? this.hoodTable.fixedRpm
-      : st.autoAim && tableSpeed > 0 ? (row.rpm * lead.speed) / tableSpeed : row.rpm;
+      : (st.autoAim && tableSpeed > 0 ? (row.rpm * lead.speed) / tableSpeed : row.rpm) + (rowAhead.rpm - row.rpm);
     // Firing implies spinning. Asking a driver to arm the wheel and then arm the feed is
     // two controls where the game only has one decision: shoot or do not.
     const wheelOn = st.flywheelOn || st.firing;
@@ -864,7 +887,7 @@ export class BuiltinTeleOp {
     const hoodThere = usingHood
       ? (!!cell && hoodNow >= cell.lo && hoodNow <= cell.hi)
       : Math.abs(st.hoodErrDeg) <= (this.spec.hood.tolDeg ?? 2);
-    const haveShot = !usingHood || !!cell;
+    const haveShot = (!usingHood || !!cell) && inTable;
     const probOk = usingHood ? st.pLand >= minP : !haveModel || st.pLand >= minP;
     // IS THE MOUTH STILL OPEN TOWARDS US? A TIP swaps which CELL is up and the new one opens
     // the other way, so a robot that was square onto the goal is suddenly behind it. Nothing
@@ -960,6 +983,7 @@ export class BuiltinTeleOp {
     st.hold = !wheelOn ? ''
       : s.game.hiveTipping ? 'hive is tipping'
       : !mouthOpen ? `${s.game.upCellOpenDeg.toFixed(0)} deg off the opening, cap ${openCap.toFixed(0)} - DRIVE ROUND`
+      : !inTable ? `${s.game.upCellRangeIn.toFixed(0)} in is outside the table (${this.table.rows[0]?.range_in ?? 0}-${this.table.rows[this.table.rows.length - 1]?.range_in ?? 0}) - BACK OFF`
       : !accelOk ? `accelerating out of the band: ${(st.accelBudget * 100).toFixed(0)}% of it before the ball leaves`
       : !yawOk ? `turning too fast to aim: ${Math.abs(s.localizer.omega).toFixed(0)} deg/s, cap ${yawCap.toFixed(0)}`
       : !leadOk ? `too much of this shot is the robot's own motion: ${Math.abs(st.leadDeg).toFixed(0)} deg of lead, cap ${leadCap.toFixed(0)} - SLOW DOWN`

@@ -74,10 +74,59 @@ export function mouthLips(
   return { x_m: g.hiveX_m.red, near, far, facing };
 }
 
+/**
+ * RETENTION AS MEASURED FROM REAL SHOTS, per range, from tools/landcal.ts's raw sample dump.
+ *
+ * The `pStay` column used to be hand-edited into the CSV after a calibration run -- 0.725 at
+ * 40 in, 0.829 at 55, 1.0 at 70 (docs/DECISIONS.md) -- because the entry model this tool
+ * multiplies into its OBJECTIVE is built from balls injected at the mouth on independent
+ * axes, and it had the sign of the slope wrong against real shots. A hand edit is a
+ * calibration that the next `npm run tool -- tools/shottable.ts` silently throws away, which
+ * is exactly what happened: the regenerated table carried 0.58-0.65 where 0.73-1.0 had been
+ * measured, and nothing said so.
+ *
+ * So the column now comes from the samples themselves: at each range, the fraction that
+ * landed divided by the model's own threading and aim factors, which is P(stays | arrives).
+ * The objective still uses the entry model, because that is a function of the arrival the
+ * solver is choosing between; the column is what the robot and the map believe afterwards.
+ * Endpoints held past the measured band. Null when no samples exist yet, and the entry
+ * model stands in -- the first table has to be built before anything can be measured on it.
+ */
+export function loadMeasuredStay(): ((range_in: number) => number) | null {
+  const url = new URL('../config/landcal-samples.json', import.meta.url);
+  if (!existsSync(url)) return null;
+  const all = JSON.parse(readFileSync(url, 'utf8')) as { landed: boolean; range_in: number; pSpeed: number; pAim: number }[];
+  const by = new Map<number, { n: number; landed: number; thread: number }>();
+  for (const x of all) {
+    const b = by.get(x.range_in) ?? { n: 0, landed: 0, thread: 0 };
+    b.n++;
+    if (x.landed) b.landed++;
+    b.thread += (x.pSpeed ?? 1) * (x.pAim ?? 1);
+    by.set(x.range_in, b);
+  }
+  const pts = [...by.entries()]
+    .filter(([, b]) => b.n >= 20)
+    .map(([r, b]) => ({ r, stay: Math.min(1, b.landed / Math.max(1e-6, b.thread)) }))
+    .sort((a, b) => a.r - b.r);
+  if (pts.length < 2) return null;
+  return (range_in: number) => {
+    if (range_in <= pts[0].r) return pts[0].stay;
+    if (range_in >= pts[pts.length - 1].r) return pts[pts.length - 1].stay;
+    for (let i = 1; i < pts.length; i++) {
+      if (range_in <= pts[i].r) {
+        const t = (range_in - pts[i - 1].r) / (pts[i].r - pts[i - 1].r);
+        return pts[i - 1].stay + t * (pts[i].stay - pts[i - 1].stay);
+      }
+    }
+    return pts[pts.length - 1].stay;
+  };
+}
+
 export function buildTable(
   p: Params, spec: RobotSpec, min = 30, max = 150, step = 4,
   entry: EntryModel | null = null,
   objective: 'margin' | 'pLand' = 'pLand',
+  measuredStay: ((range_in: number) => number) | null = loadMeasuredStay(),
 ): ShotTableRow[] {
   const g = buildFieldGeometry(p);
   const lips = mouthLips(p);
@@ -105,6 +154,10 @@ export function buildTable(
       radius: ballR,
       mass: p.ball.pollen.m_kg,
       hoodRange: spec.hood.enabled ? spec.hood.angleRange_deg : [spec.hood.fixedAngle_deg, spec.hood.fixedAngle_deg],
+      // 31 steps is 1.33 deg. Tried 81 (0.5 deg): the objective is the band, not the centre
+      // crossing, and finer steps let it find wider bands that cross further off centre --
+      // tools/apercheck.ts worst offset went 6.4 -> 9.9 cm. The coarser grid is the better
+      // proxy for centring and every clearance stays over 12 cm either way.
       hoodSteps: spec.hood.enabled ? 31 : 1,
       spinPerSpeed,
       k: spec.flywheel.k,
@@ -137,6 +190,10 @@ export function buildTable(
       maxApex_m: 3.6,
       maxFlight_s: 2.0,
       preferHoodPos: prevHood,
+      // Rows are 4 in apart and the physics moves the hood about 2 deg per 6 in (the design
+      // table in PHYSICS_AND_SIMULATION.md section 2.4), so 5 deg is a generous step and a
+      // 10 deg one is the other branch.
+      maxHoodJumpDeg: 5,
       objective,
       entryRate: entry ? (v, d) => entry.lookup(v, d) : undefined,
       scatter: { speedFrac: spec.flywheel.scatter.speedFrac, angle_deg: spec.flywheel.scatter.angle_deg },
@@ -146,6 +203,7 @@ export function buildTable(
       // down the shot line and says nothing about width, so this is measured off the CELL
       // and carried so the robot can work out whether it is pointing well enough.
       row.halfLat_m = g.cells[0].halfInterior[0] - ballR;
+      if (measuredStay) row.pStay = measuredStay(rIn);
       rows.push(row);
       prevHood = row.hoodPos;
     }
@@ -183,7 +241,11 @@ export async function main(argv: string[] = []): Promise<void> {
     ? `entry model: config/entry.json, best cell ${entry.best().speed_mps} m/s at ${entry.best().descent_deg} deg -> ${(entry.best().rate * 100).toFixed(0)}%`
     : 'entry model: NONE (run tools/entrycheck.ts). Falling back to the margin-only objective, ' +
       'which optimises for threading the mouth and is blind to whether the ball stays in.');
-  const rows = buildTable(p, spec, num('min', 30), num('max', 150), num('step', 4), entry);
+  const stay = loadMeasuredStay();
+  console.log(stay
+    ? `pStay column: MEASURED per range from config/landcal-samples.json (${stay(40).toFixed(3)} at 40 in, ${stay(55).toFixed(3)} at 55, ${stay(70).toFixed(3)} at 70)`
+    : 'pStay column: from the entry model (no config/landcal-samples.json yet; run tools/landcal.ts and regenerate)');
+  const rows = buildTable(p, spec, num('min', 30), num('max', 150), num('step', 4), entry, 'pLand', stay);
   const dir = new URL('../java/teamcode/assets/', import.meta.url);
   mkdirSync(dir, { recursive: true });
   writeFileSync(new URL('shottable.csv', dir), toCsv(rows));

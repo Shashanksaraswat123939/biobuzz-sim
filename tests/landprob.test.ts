@@ -237,9 +237,14 @@ describe('the shot zone map', () => {
     // The near wedge is small and sits mostly too close to the mouth to solve, so 12% of its
     // squares score at all against 20% of the far ones, and the two means crossed over on a
     // recalibration while the shootable squares still ordered correctly (0.83 against 0.73).
+    //
+    // ON THE RAW SCORE, not the calibrated one. The calibration maps score to the frequency
+    // that was measured, and that curve is nearly flat (0.78-0.89 over the whole range), so
+    // after it every wedge reads 0.86 and the comparison is of rounding. The aperture lives
+    // in the score; the calibration is about how much to believe it.
     const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
-    const near = cells.filter((c) => c.offAxisDeg < 30 && c.p > 0).map((c) => c.p);
-    const far = cells.filter((c) => c.offAxisDeg > 45 && c.p > 0).map((c) => c.p);
+    const near = cells.filter((c) => c.offAxisDeg < 30 && c.p > 0).map((c) => c.raw ?? c.p);
+    const far = cells.filter((c) => c.offAxisDeg > 45 && c.p > 0).map((c) => c.raw ?? c.p);
     expect(near.length).toBeGreaterThan(3);
     expect(far.length).toBeGreaterThan(3);
     expect(mean(near)).toBeGreaterThan(mean(far));

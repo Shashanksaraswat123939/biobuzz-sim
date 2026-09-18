@@ -223,6 +223,19 @@ export function bestShot(
      * because the robot interpolates between rows.
      */
     preferHoodPos?: number;
+    /**
+     * STAY ON ONE BRANCH. A lob and a flat drive can both thread the mouth, and picking the
+     * best-scoring one at each range independently put 60 deg / 2570 rpm at 74 in next to
+     * 70.7 deg / 2901 rpm at 78 in, then 60 at 94, 66.7 at 98 and 50.7 at 102. The robot
+     * INTERPOLATES between rows, so crossing 74-78 in it was handed 65 deg at 2735 rpm --
+     * halfway between two solutions, which is not a solution. `preferHoodPos` was meant to
+     * hold the branch and could not: 0.04 per unit of hood travel against a score of order 1.
+     *
+     * With this set, a row whose hood is more than this many degrees from the previous
+     * row's is only taken when nothing nearer threads at all. The walk anchors on the first
+     * range, the way tools/hoodtable.ts already does for the fixed-speed table.
+     */
+    maxHoodJumpDeg?: number;
     /** Reject arcs that go higher than this (m). Venue ceilings and sanity. */
     maxApex_m?: number;
     /** Reject arcs that take longer than this (s). A 2.5 s lob is useless at a 1.5 s cycle. */
@@ -254,10 +267,17 @@ export function bestShot(
   let best: ShotTableRow | null = null;
   let bestScore = -Infinity;
   const minDescent = opts.minDescentDeg ?? -90;
+  const prevHoodDeg = opts.preferHoodPos === undefined
+    ? undefined
+    : opts.hoodRange[0] + opts.preferHoodPos * (opts.hoodRange[1] - opts.hoodRange[0]);
+  const jump = opts.maxHoodJumpDeg;
 
   for (let i = 0; i < opts.hoodSteps; i++) {
     const frac = opts.hoodSteps === 1 ? 0.5 : i / (opts.hoodSteps - 1);
     const hoodDeg = opts.hoodRange[0] + frac * (opts.hoodRange[1] - opts.hoodRange[0]);
+    // Out of reach of the branch we are on: only worth having if the branch has run out,
+    // which is settled after the loop by the fallback below.
+    if (jump !== undefined && prevHoodDeg !== undefined && Math.abs(hoodDeg - prevHoodDeg) > jump) continue;
     const base = { from: opts.muzzle, azimuth: opts.azimuth, elevation: hoodDeg * DEG, radius: opts.radius, mass: opts.mass };
     const band = speedBand(params, base, opts.aperture, opts.spinPerSpeed);
     if (!band) continue;
@@ -314,6 +334,12 @@ export function bestShot(
       bestScore = score;
       best = row;
     }
+  }
+  // The branch ran out at this range: take whatever threads, and the next row re-anchors
+  // on it. A gap in the table would be honest too, but a row the robot can use beats a
+  // hole it cannot, and the jump is reported by the table printer.
+  if (!best && jump !== undefined && prevHoodDeg !== undefined) {
+    return bestShot(params, { ...opts, maxHoodJumpDeg: undefined, preferHoodPos: undefined });
   }
   return best;
 }

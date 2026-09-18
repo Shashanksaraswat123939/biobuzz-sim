@@ -47,6 +47,14 @@ export interface ZoneCell {
   /** P(land) for a STATIONARY robot, which is what the tool's own printout reports. */
   p: number;
   /**
+   * The same before calibration: the model's own score. The calibration maps score to the
+   * frequency that was MEASURED, and that curve is nearly flat -- 0.78 to 0.89 over the whole
+   * score range -- so `p` says almost the same thing everywhere a shot exists. Anything about
+   * the map's SHAPE (does it get worse off-axis, does it get worse with range) has to be asked
+   * of this one.
+   */
+  raw?: number;
+  /**
    * Everything needed to redo that probability at a different robot velocity WITHOUT
    * re-running the solver.
    *
@@ -196,6 +204,7 @@ export function buildZone(
       cells.push({
         ...here,
         p: cal ? cal.apply(raw) : raw,
+        raw,
         k: {
           lo: solved.speedLo, hi: solved.speedHi, sigma: solved.sigmaSpeed, pStay: solved.pStay,
           halfLat, ux: dx / dist, uz: dz / dist, dist, commanded, cosEl,

@@ -364,7 +364,36 @@ export async function main(argv: string[] = []): Promise<void> {
   // second. A gate that lifts the first by shooting less is not an improvement.
   const gi = argv.indexOf('--gate');
   const gate = gi >= 0 ? Number(argv[gi + 1]) : null;
-  const mutate = gate === null ? undefined : (_p: Params, r: RobotSpec) => { r.flywheel.minLandProb = gate; };
+  // --scatter <mult> scales the LAUNCH SCATTER: the 1 deg elevation, 1 deg yaw and 1.5% speed
+  // the shooter is modelled as having shot to shot. Those three are unsourced guesses and
+  // they are what sets the hit rate, so the useful question is not "what are they" but "what
+  // would they have to be". Sweeping turns a target hit rate into a hardware requirement.
+  const ci = argv.indexOf('--scatter');
+  const smul = ci >= 0 ? Number(argv[ci + 1]) : null;
+  if (smul !== null) console.log(`  launch scatter scaled to ${smul}x
+`);
+  // --epoly <e> overrides the ball-against-polycarbonate restitution, which params.json calls
+  // the single most consequential uncalibrated number for land rate and which is a guess.
+  const ei = argv.indexOf('--epoly');
+  const epoly = ei >= 0 ? Number(argv[ei + 1]) : null;
+  if (epoly !== null) console.log(`  e_poly forced to ${epoly}
+`);
+  const notip = argv.includes('--notip');
+  if (notip) console.log('  rocker pinned: no TIP can empty the CELL mid-count');
+  const mutate = gate === null && smul === null && epoly === null && !notip ? undefined : (_p: Params, r: RobotSpec) => {
+    if (epoly !== null) _p.ball.e_poly = epoly;
+    // --notip pins the rocker, the way tools/entrycheck.ts does, so a TIP cannot empty the
+    // CELL in the middle of a count. A tip is the robot SUCCEEDING -- 20 points -- and it
+    // takes the balls back out, so "what fraction stayed in" and "how often did you tip"
+    // are pulling against each other and the gap between these two runs is exactly that.
+    if (notip) _p.hive.massKg = 200;
+    if (gate !== null) r.flywheel.minLandProb = gate;
+    if (smul !== null) {
+      r.flywheel.scatter.angle_deg *= smul;
+      r.flywheel.scatter.yaw_deg *= smul;
+      r.flywheel.scatter.speedFrac *= smul;
+    }
+  };
   if (gate !== null) console.log(`  fire gate forced to ${gate}
 `);
   for (const [name, drive, wobble, range, bear, spin] of picked) rows.push(await pool(name, drive, wobble, range, seeds, mutate, bear, spin, noGate));

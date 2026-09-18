@@ -436,6 +436,10 @@ function paint(s: Snapshot): void {
   set('#st-rpm', `${r.flywheel.rpm.toFixed(0)}`, brain.state.ready ? 'on' : '');
   set('#st-hopper', `${r.hopper.count}/${r.hopper.capacity}`, r.hopper.count ? '' : 'off');
   set('#st-batt', `${r.battery.volts.toFixed(1)} V`, r.battery.volts < 11.5 ? 'off' : '');
+  // Is the aim MEASURED or dead-reckoned? That is the difference between a bearing with no
+  // heading error in it and one carrying however far the IMU has drifted this match.
+  const tag = brain.state.tagLocked;
+  set('#st-tag', tag ? `locked, ${brain.state.tagPx.toFixed(0)} px` : 'no tag — odometry', tag ? 'on' : 'off');
   const oppRow = $<HTMLElement>('#st-opp-row');
   oppRow.style.display = bot ? '' : 'none';
   if (bot) set('#st-opp', bot.note, bot.phase === 'shoot' ? 'on' : '');

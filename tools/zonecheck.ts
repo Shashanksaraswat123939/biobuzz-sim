@@ -51,6 +51,8 @@ export async function main(): Promise<void> {
     const r = countAbove(z.cells, v, z.threshold, z.maxSpeed, z.yawScatterDeg);
     console.log(`   ${name.padEnd(28)} ${String(r.good).padStart(8)}   ${area(r.good).padStart(12)}   ${String(r.any).padStart(12)}`);
   }
-  console.log('\n   Which sign helps depends where you are standing relative to the mouth -- the point is
-   the shape CHANGES, so a map frozen at zero is the wrong map whenever you are moving.\n');
+  console.log('');
+  console.log('   Which sign helps depends where you are standing relative to the mouth. The point is');
+  console.log('   that the shape CHANGES, so a map frozen at zero is the wrong map whenever you move.');
+  console.log('');
 }

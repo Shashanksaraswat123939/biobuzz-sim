@@ -202,6 +202,24 @@
   "turretTrim_deg_source": "measured: atan(mean lateral error / mean range) from a collected run. Subtracted from the commanded azimuth, so it also absorbs a turret encoder zero that is a degree off."
  },
  "sensors": {
+  "camera": {
+   "_about": "The AprilTag camera. TURRET-MOUNTED, which tools/tagstudy.ts calls the single highest-value hardware decision available: the turret already tracks the CELL, so a camera bolted to it is pointing at the tag whenever the shooter is aimed, by construction. A chassis-mounted one sees a tag only when the driver happens to be facing the right way.",
+   "mount": "turret",
+   "widthPx": 640,
+   "heightPx": 480,
+   "hfov_deg": 60,
+   "_source_optics": "ASSUMED, not measured. 640x480 is what the FTC SDK AprilTag pipeline usually runs at and 60 deg is a typical horizontal FOV for a C920-class webcam at 4:3. Swap in the real camera's numbers before trusting any range figure - CALIBRATE.",
+   "cornerNoise_px": 0.5,
+   "_source_noise": "ASSUMED. A well-lit, in-focus, square-on tag localises its corners to roughly a quarter pixel; a small, blurred or oblique one is far worse. 0.5 px is a deliberately unflattering middle, and every accuracy figure rests on it.",
+   "tagSize_in": 4.0,
+   "_source_tag": "ASSUMED. The am-5888 panel measures 17.00 x 4.34 in in the CAD, so the printed tag fits inside 4.34 in and 4 in is the common FTC size. NOT confirmed against the manual.",
+   "minTagPx": 12,
+   "_source_minTagPx": "ASSUMED. Below about a dozen pixels across, tag decode rate falls off a cliff. This is a range cutoff, not a decode model.",
+   "maxObliquity_deg": 70,
+   "_source_obliquity": "Geometric rather than guessed: a planar tag seen at angle t presents cos(t) of its width, so past about 70 deg the short axis is too few pixels to fit a homography, and it is also where the CELL's own lip begins to occlude the panel.",
+   "latencyMs": 50,
+   "_source_latency": "ASSUMED. Capture plus the SDK's AprilTag pipeline at 640x480 is tens of milliseconds; 50 ms is a common measured figure on a Control Hub - CALIBRATE."
+  },
   "imu": {
    "latencyMs": 40,
    "_source": "guess (Beta8397 uses 175ms; start lower)"

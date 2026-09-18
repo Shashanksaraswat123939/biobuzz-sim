@@ -703,6 +703,73 @@ export class World {
 
   // ------------------------------------------------------------------ io
 
+  /**
+   * WHAT THE CAMERA SEES OF OUR OWN CELL'S APRILTAG, or null when it does not see it.
+   *
+   * Every fiducial on this field is bolted to a rocker (am-5888, one on the underside of each
+   * CELL, facing out of the mouth) and the rocker moves -- there is no static tag anywhere.
+   * What saves it is that the rocker is bistable, so a tag has exactly two poses, and each
+   * CELL carries its own ID, so the ID you are reading tells you which. That is the premise
+   * `tools/tagstudy.ts` works through and this implements.
+   *
+   * THE BEARING IT RETURNS HAS NO HEADING TERM IN IT. That is the whole point, and the
+   * strongest argument in the study: aiming off a global pose inherits the IMU's yaw drift
+   * directly, and 5 deg of drift over a match is half the mouth. A bearing measured to the
+   * tag is relative, so there is nothing to drift.
+   *
+   * The camera is turret-mounted, so its boresight IS the turret's bearing and it is pointing
+   * at the tag whenever the shooter is aimed. Visibility is therefore three real conditions
+   * and no fudge: inside the horizontal field of view, not so oblique that the panel stops
+   * fitting a homography, and big enough in pixels to decode.
+   */
+  tagSighting(): { bearingDeg: number; rangeIn: number; obliquityDeg: number; px: number } | null {
+    const cam = this.robot.spec.sensors.camera;
+    if (!cam) return null;
+    const hive = this.hives[this.robot.alliance];
+    const m = hive.upCellMouthWorld();
+    const n = hive.upCellMouthNormalWorld();
+    const p = this.robot.pos;
+
+    const dx = m[0] - p[0];
+    const dz = m[2] - p[2];
+    const range_m = Math.hypot(dx, dz);
+    if (range_m < 1e-3) return null;
+
+    // Obliquity: the angle between the tag's own outward normal and the line back to the
+    // camera. A planar tag seen at t presents cos(t) of its width.
+    const nn = Math.hypot(n[0], n[2]) || 1;
+    const cosOb = -((dx * n[0] + dz * n[2]) / (range_m * nn));
+    const obliquity = Math.acos(clamp(-cosOb, -1, 1)) * RAD;
+    if (obliquity > cam.maxObliquity_deg) return null;
+
+    // Apparent width in pixels, foreshortened by the obliquity.
+    const fpx = cam.widthPx / (2 * Math.tan((cam.hfov_deg / 2) * DEG));
+    const tag_m = cam.tagSize_in * 0.0254;
+    const px = (tag_m * fpx * Math.cos(obliquity * DEG)) / range_m;
+    if (px < cam.minTagPx) return null;
+
+    // In the frame at all? The boresight is the turret, so this is the turret's own error.
+    const bearingWorld = Math.atan2(dx, dz) * RAD;
+    // `yaw` is radians and `turretAngle` is already degrees, which is exactly the kind of
+    // mixed-unit pair that reads fine and is wrong by a factor of 57.
+    const boresight = this.robot.yaw * RAD + this.robot.turretAngle;
+    const off = wrapPi((bearingWorld - boresight) * DEG) * RAD;
+    if (Math.abs(off) > cam.hfov_deg / 2) return null;
+
+    // Bearing noise from the pixel model: a corner located to `cornerNoise_px` over a focal
+    // length of `fpx` pixels is that many radians of angle, and the tag's own width averages
+    // the two side corners down by root two.
+    const sigmaBearing = ((cam.cornerNoise_px / Math.SQRT2) / fpx) * RAD;
+    // Range comes from apparent SIZE, so its error grows with the square of range.
+    const sigmaRange = (range_m * cam.cornerNoise_px) / Math.max(px, 1);
+    return {
+      bearingDeg: off + this.rng.gauss(0, sigmaBearing),
+      rangeIn: (range_m + this.rng.gauss(0, sigmaRange)) * M_TO_IN,
+      obliquityDeg: obliquity,
+      px,
+    };
+  }
+
   /** World point the robot should aim at: the mouth of its own hive's up CELL. */
   aimPoint(): Vec3 {
     return this.aimPointFor(this.alliance);
@@ -849,6 +916,12 @@ export class World {
         // Bin plus magazine: a ball waiting at the nip is still a ball you can fire.
         hopper: r.heldBalls().length,
         flywheelRpm: r.reportedFlywheelRpm,
+        // Only the robot whose sensors these are gets a sighting; the opponent's camera is
+        // its own problem and it has its own frame.
+        tag: r === this.robot ? (() => {
+          const t = this.tagSighting();
+          return t ? { azimuthDeg: r.turretAngle + t.bearingDeg, rangeIn: t.rangeIn, px: t.px, obliquityDeg: t.obliquityDeg } : null;
+        })() : null,
       },
     };
   }

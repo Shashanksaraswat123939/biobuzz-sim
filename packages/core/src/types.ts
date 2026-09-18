@@ -113,7 +113,19 @@ export interface RobotSpec {
    * than regenerating a table, and the Analysis tab computes them from a collected run.
    */
   calibration: { rangeTrim_in: number; turretTrim_deg: number };
-  sensors: { imu: { latencyMs: number }; distance: { name: string; mount_m: Vec3; dir: Vec3; unit: string; max_m: number }[]; localizer: { source: string; noise: {
+  sensors: {
+    /**
+     * The AprilTag camera. Turret-mounted, so its boresight IS the turret's bearing.
+     * Optional: a robot without one falls back to the localizer for aiming, which is the
+     * behaviour every version before this had.
+     */
+    camera?: {
+      mount: 'turret' | 'chassis';
+      widthPx: number; heightPx: number; hfov_deg: number;
+      cornerNoise_px: number; tagSize_in: number;
+      minTagPx: number; maxObliquity_deg: number; latencyMs: number;
+    };
+    imu: { latencyMs: number }; distance: { name: string; mount_m: Vec3; dir: Vec3; unit: string; max_m: number }[]; localizer: { source: string; noise: {
     xy_in: number; heading_deg: number;
     /** One sigma on the REPORTED velocity, m/s. The motion lead is built on this number. */
     vel_mps?: number;
@@ -178,7 +190,14 @@ export interface SensorFrame {
   localizer: { x: number; y: number; heading: number; vx: number; vy: number; omega: number };
   gamepad1: GamepadState;
   gamepad2: GamepadState;
-  game: { upCellAzimuthDeg: number; upCellRangeIn: number; hiveTipping: boolean; upCellOpenDeg: number; hopper: number; flywheelRpm: number };
+  game: { upCellAzimuthDeg: number; upCellRangeIn: number; hiveTipping: boolean; upCellOpenDeg: number; hopper: number; flywheelRpm: number;
+    /**
+     * The AprilTag on our own up CELL, as the camera actually sees it, or null when it does
+     * not. `azimuthDeg` is robot-relative like `upCellAzimuthDeg` and is the one number worth
+     * having: it is measured to the tag, so unlike a bearing derived from the localizer it
+     * carries no accumulated heading error at all.
+     */
+    tag: { azimuthDeg: number; rangeIn: number; px: number; obliquityDeg: number } | null };
 }
 
 // ---------------------------------------------------------------- snapshot

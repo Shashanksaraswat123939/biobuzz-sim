@@ -214,6 +214,9 @@ export class Robot {
 
   // ------------------------------------------------------------------ pose
 
+  /** Place the turret directly, for measurement rigs that are not testing the servo. */
+  setTurretForTest(deg: number): void { this.turretAngle = deg; this.turretTargetDeg = deg; }
+
   /** Chassis velocity, world m/s. The intake needs it: slip is relative to the ROBOT. */
   get vel(): Vec3 {
     const v = this.body.linvel();
@@ -1205,6 +1208,7 @@ export class Robot {
   }
 }
 
+// Put the turret at an angle without running its servo. Measurement rigs only.
 export function quatY(a: number): { x: number; y: number; z: number; w: number } {
   return { x: 0, y: Math.sin(a / 2), z: 0, w: Math.cos(a / 2) };
 }

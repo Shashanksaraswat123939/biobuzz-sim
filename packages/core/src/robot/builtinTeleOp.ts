@@ -305,6 +305,10 @@ export interface TeleOpState {
   pulsing: boolean;
   /** Closing speed on the mouth, m/s. The fixed-speed table's second axis. */
   vRadial: number;
+  /** True when the aim is coming off the AprilTag rather than off the localizer. */
+  tagLocked: boolean;
+  /** How many pixels across the tag is right now. Below the decode floor it is 0. */
+  tagPx: number;
 }
 
 export const newTeleOpState = (): TeleOpState => ({
@@ -312,7 +316,7 @@ export const newTeleOpState = (): TeleOpState => ({
   turretManualDeg: 0, flywheelOn: false, speedScale: 1,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
-  lastFeedT: -999, pulsing: false, vRadial: 0, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0,
+  lastFeedT: -999, pulsing: false, vRadial: 0, tagLocked: false, tagPx: 0, headingZero: 0, accelBudget: 0, aimClampedDeg: 0, aimOutrun: 0, leadSpeed: 0, leadElevDeg: 0, leadVRadial: 0, rangeLeadIn: 0,
 });
 
 const edge = (now: boolean, was: boolean) => now && !was;
@@ -531,20 +535,31 @@ export class BuiltinTeleOp {
     const mv = muzzleVelocity(leadVx, leadVy, s.localizer.omega, s.imu.yaw, turretActualDeg, this.spec.turret.muzzleOffset_m);
     const muzzleDvx = mv.vx - leadVx;
     const muzzleDvy = mv.vy - leadVy;
-    const lead = leadShot(s.game.upCellAzimuthDeg, tableSpeed, hoodDeg, mv.vx, mv.vy, s.imu.yaw, this.spec.hood.angleRange_deg);
+    // AIM OFF THE TAG WHEN THE CAMERA CAN SEE IT, AND OFF THE LOCALIZER WHEN IT CANNOT.
+    //
+    // BEARING ONLY, deliberately. A tag bearing is measured relative to the camera, so it
+    // carries no accumulated heading error -- and heading is what kills this shot: an FTC IMU
+    // drifts 1-3 deg a minute uncorrected and 5 deg of yaw error is half the mouth gone at
+    // 54 in (tools/tagstudy.ts). RANGE is the opposite case: a tag's range comes from its
+    // apparent SIZE, so the error grows with the square of distance, and odometry beats it
+    // everywhere that matters. Taking the better half of each is the whole trick.
+    const azimuth = s.game.tag ? s.game.tag.azimuthDeg : s.game.upCellAzimuthDeg;
+    st.tagLocked = s.game.tag !== null;
+    st.tagPx = s.game.tag?.px ?? 0;
+    const lead = leadShot(azimuth, tableSpeed, hoodDeg, mv.vx, mv.vy, s.imu.yaw, this.spec.hood.angleRange_deg);
 
     // ---- FIXED-SPEED PATH: the wheel holds one speed and the hood aims.
     //
     // The robot's radial velocity -- how fast it is closing on the mouth -- is the table's
     // second axis rather than something to cancel. Positive is closing. Lateral motion barely
     // moves the answer, which is why this is the only component that has to be known.
-    const bearingField = (s.imu.yaw + s.game.upCellAzimuthDeg) * DEG;
+    const bearingField = (s.imu.yaw + azimuth) * DEG;
     const vRadial = (velX + muzzleDvx) * Math.cos(bearingField) + (velY + muzzleDvy) * Math.sin(bearingField);
     st.vRadial = vRadial;
     this.hoodCell = this.hoodTable && !this.hoodTable.isEmpty
       ? this.hoodTable.lookup(s.game.upCellRangeIn - cal.rangeTrim_in, vRadial)
       : null;
-    st.leadDeg = wrapPi((lead.azimuthDeg - s.game.upCellAzimuthDeg) * DEG) * RAD;
+    st.leadDeg = wrapPi((lead.azimuthDeg - azimuth) * DEG) * RAD;
     st.leadAzDeg = lead.azimuthDeg;
     let turretDeg: number;
     if (st.autoAim) {
@@ -617,6 +632,7 @@ export class BuiltinTeleOp {
       // Wrapping to (-180, 180] first guarantees the base candidate is always reachable, so
       // the choice below is a real choice between wraps rather than a fallback.
       const base = wrapPi(this.aimHold * DEG) * RAD;
+      const firingNow = st.firing || g.b;
       const drift = -s.localizer.omega;
       const look = this.spec.turret.unwindLookahead_s ?? 1.5;
       let want = base;
@@ -632,7 +648,14 @@ export class BuiltinTeleOp {
         // Travel is charged at what it actually costs in seconds, so the two are comparable:
         // going the long way round is 360 deg at the axis's own slew rate.
         const cost = Math.abs(cand - here) / Math.max(1, this.spec.turret.speed_dps);
-        const score = cost - Math.min(look, lasts);
+        // UNWIND ON YOUR OWN TIME, NOT ON THE SHOT. A traverse takes 360 deg at the axis's
+        // slew rate -- about 1.4 s -- and it has to happen somewhere. Doing it while the
+        // driver is lining up is the worst moment: the muzzle sweeps the field, crosses the
+        // opponent's hive, and the gate refuses the whole way round. So while nothing is
+        // being fired, a wrap that leaves the axis near the middle of its travel is worth
+        // real seconds later, and is bought now when it costs nothing.
+        const idlePull = firingNow ? 0 : Math.abs(cand) / Math.max(1, hi) * look * 0.5;
+        const score = cost - Math.min(look, lasts) + idlePull;
         if (score < bestScore) { bestScore = score; want = cand; }
       }
       turretDeg = clamp(want, lo, hi);

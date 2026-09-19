@@ -189,8 +189,16 @@ export async function main(argv: string[] = []): Promise<void> {
     const agg: Record<string, number> = {};
     let tot = 0;
     for (const r of rs) for (const [k, v] of Object.entries(r.why)) { agg[k] = (agg[k] ?? 0) + v; tot += v; }
-    const top = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${((v / tot) * 100).toFixed(0)}% ${k}`);
-    console.log(`          ${top.join('   |   ')}`);
+    // WHAT THE TIME WENT ON, all of it. "88% of the balls went in" is conditional on a ball
+    // going at all, and says nothing about a robot that spends the drive refusing -- which
+    // is the thing a driver actually feels. So: the share of loops the gate was open, and
+    // every reason it was not, in full rather than a top three.
+    const held = tot - (agg['clear to fire'] ?? 0);
+    console.log(`          gate OPEN ${(((agg['clear to fire'] ?? 0) / tot) * 100).toFixed(0)}% of the drive, HELD ${((held / tot) * 100).toFixed(0)}%`);
+    for (const [k, v] of Object.entries(agg).sort((a, b) => b[1] - a[1])) {
+      if (k === 'clear to fire') continue;
+      console.log(`            ${((v / tot) * 100).toFixed(1).padStart(5)}%  ${k}`);
+    }
   }
   console.log('');
 }

@@ -413,6 +413,8 @@ export class BuiltinTeleOp {
       },
       anchorAlpha: tg.anchorAlpha ?? 0.15,
       fireOnOdometry: tg.fireOnOdometry !== false,
+      // Unset means the old behaviour, which is to trust a decoded state for ever.
+      maxStateAgeS: tg.maxStateAgeS ?? Infinity,
       measAlpha: tg.measAlpha ?? 0.35,
       // The rocker starts on the stop its alliance's CELL A sits up on for red, B for blue
       // (Hive's constructor: side = red ? -1 : +1). That is a fact at the buzzer and an

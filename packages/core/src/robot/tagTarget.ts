@@ -58,6 +58,16 @@ export interface TagTargetSpec {
   anchorAlpha: number;
   /** May a shot be taken on odometry alone? Never before a tag has been seen at least once. */
   fireOnOdometry: boolean;
+  /**
+   * How long a DECODED ROCKER STATE may be trusted without seeing a tag again, seconds.
+   *
+   * `fireOnOdometry` says the robot may keep shooting on the surveyed geometry once it knows
+   * which CELL is up. It may -- for a while. A TIP changes which CELL is up and hides itself
+   * at the same time, because the new tag faces away from where the robot is standing, so
+   * "no detection" and "nothing has changed" look identical from here. Past this age they
+   * are not the same claim any more and the robot goes and looks.
+   */
+  maxStateAgeS: number;
   /** Which CELL is up at the start of a match. The assumption odometry begins from. */
   startId: number;
   /** How long a fix may be carried on odometry before the target counts as lost, s. */
@@ -236,8 +246,14 @@ export class TagTarget {
     // geometry, which is a policy call -- `fireOnOdometry` -- and is refused outright until a
     // tag has been decoded at least once, because until then WHICH CELL IS UP is an
     // assumption and shooting into the wrong one moves the HIVE for the other alliance.
+    // A DECODED STATE GOES OFF. The second arm used to have no clock in it: decode a tag
+    // once and the robot would fire on the surveyed geometry for the rest of the match. Fine
+    // for a fix that blinks; wrong across a TIP, which is the one event that changes which
+    // CELL is up and hides the evidence in the same motion. tools/tipcheck.ts: 60 balls fired
+    // after a tip, none credited, CLEAR TO FIRE the whole way.
+    const stateAgeOk = ageS <= Math.max(this.spec.maxStateAgeS, this.spec.maxFireAgeS);
     const fresh = (have && ageS <= this.spec.maxFireAgeS)
-      || (this.spec.fireOnOdometry && this.seenTag);
+      || (this.spec.fireOnOdometry && this.seenTag && stateAgeOk);
 
     // BOTH, CROSSFADED BY AGE -- not one or the other at a threshold.
     //
@@ -325,7 +341,7 @@ export class TagTarget {
             ? 180
             : Math.acos(Math.max(-1, Math.min(1, ((loc.x - m.x) * facing) / d))) * RAD,
           valid: true,
-          fresh: this.spec.fireOnOdometry && this.seenTag,
+          fresh: this.spec.fireOnOdometry && this.seenTag && stateAgeOk,
           ageS,
           lostLock: have,
           scanning: false,

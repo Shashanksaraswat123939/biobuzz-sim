@@ -169,6 +169,8 @@ export interface RobotSpec {
         scanRateDps: number;
         /** May a shot be taken on odometry alone, with no tag in view? */
         fireOnOdometry?: boolean;
+      /** How long a decoded rocker state may be trusted without seeing a tag again, s. */
+      maxStateAgeS?: number;
         /** One-pole on the HIVE pivot the robot tracks for itself. */
         anchorAlpha?: number;
         /** How much of each new detection to take into the target estimate. */

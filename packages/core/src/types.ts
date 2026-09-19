@@ -72,6 +72,15 @@ export interface RobotSpec {
     rollerRadius_m: number; rollerMu: number; squeeze_N: number;
   };
   hopper: { capacity: number };
+  /** Shot policy that is not the table's and not the flywheel's. */
+  shot?: {
+    /**
+     * Refuse shots closer than this, inches. 0 means only the table's own lower end applies.
+     * Close in the only arc that fits is a steep lob that bounces back out, so a shot exists
+     * there and is not worth taking -- see the note in BuiltinTeleOp.
+     */
+    minRange_in?: number;
+  };
   transfer: { motor: MotorSpec;
     /**
      * Seconds between the lead being computed and the ball actually leaving the muzzle.

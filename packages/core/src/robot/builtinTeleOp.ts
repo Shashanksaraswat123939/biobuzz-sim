@@ -744,8 +744,18 @@ export class BuiltinTeleOp {
     // ball into the front of the pocket. The shot map has always painted this band as "too
     // close"; the brain now agrees with it.
     const rangeHere = tgt.rangeIn - cal.rangeTrim_in;
+    // A FLOOR ABOVE THE TABLE'S OWN. The table solves a shot from 30 in, and one exists --
+    // it threads the mouth. It just does not STAY: close in the only arc that fits is a steep
+    // lob, and a steep lob arrives nearly vertically and bounces back out of the pocket. The
+    // per-shot ceiling is 86-88% at 30-42 in against 95% at 54 (tools/ceiling.ts), and the
+    // shots bear it out -- 385 settled shots split by range land 71% under 42 in and 83-88%
+    // from 44 to 46 (tools/whatmisses.ts), the largest spread of any feature recorded.
+    //
+    // So this is not the table's limit, it is where the shot becomes worth taking.
+    const floor_in = this.spec.shot?.minRange_in ?? 0;
     const inTable = this.table.rows.length === 0
-      || (rangeHere >= this.table.rows[0].range_in && rangeHere <= this.table.rows[this.table.rows.length - 1].range_in);
+      || (rangeHere >= Math.max(this.table.rows[0].range_in, floor_in)
+        && rangeHere <= this.table.rows[this.table.rows.length - 1].range_in);
     const ticksPerDeg = this.spec.turret.motor.ticksPerDeg ?? 8;
     const hoodDeg = this.spec.hood.enabled
       ? this.spec.hood.angleRange_deg[0] + row.hoodPos * (this.spec.hood.angleRange_deg[1] - this.spec.hood.angleRange_deg[0])

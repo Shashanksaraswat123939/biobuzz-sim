@@ -37,7 +37,7 @@ import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 
 interface Res { secs: number; shots: number; landed: number; speed: number; why: Record<string, number>; frames: number; open: number;
-  cam: { tipping: number; range: number; incidence: number; lens: number; ok: number }; loaded: number; held: number; meanInc: number; tips: number; afterTip: number }
+  cam: { tipping: number; range: number; incidence: number; lens: number; ok: number }; loaded: number; held: number; meanInc: number; tips: number; afterTip: number; longs: number[]; lats: number[] }
 
 async function run(speed: number, standoff_in: number, secs: number, seed: number): Promise<Res | null> {
   await initPhysics();
@@ -52,6 +52,8 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
   const incArg = process.argv.indexOf('--incidence');
   if (incArg >= 0) spec.sensors.tag.maxIncidence_deg = Number(process.argv[incArg + 1]);
   if (process.argv.includes('--freshonly')) spec.sensors.tag.target.fireOnOdometry = false;
+  const mrArg = process.argv.indexOf('--minrange');
+  if (mrArg >= 0) spec.shot = { minRange_in: Number(process.argv[mrArg + 1]) };
   const fovArg = process.argv.indexOf('--fov');
   if (fovArg >= 0) spec.sensors.tag.fov_deg = Number(process.argv[fovArg + 1]);
   const pool = Array.from({ length: 400 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
@@ -64,6 +66,7 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
   const nrm: [number, number] = [n0[0] / hn, n0[2] / hn];
   const side: [number, number] = [-nrm[1], nrm[0]];
   const y = spec.chassis.height_m / 2 + spec.chassis.clearance_m;
+  // Kept for the lateral bookkeeping below.
   const at = (lat_in: number): Vec3 => [
     mouth[0] + nrm[0] * inches(standoff_in) + side[0] * inches(lat_in), y,
     mouth[2] + nrm[1] * inches(standoff_in) + side[1] * inches(lat_in),
@@ -75,11 +78,33 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
   // stale tag. Clamp the line to what the field actually holds.
   const hw = w.geom.halfWidth_m - inches(14);   // half a robot in from the boards
   const onField = (p: Vec3) => Math.abs(p[0]) <= hw && Math.abs(p[2]) <= hw;
-  if (!onField(at(0))) return null;
-  let reach = standoff_in * 0.8;
-  while (reach > 6 && (!onField(at(reach)) || !onField(at(-reach)))) reach -= 2;
-  if (reach <= 6) return null;
-  const start = at(-reach);
+  // THE PATH IS AN ARC, SO TEST THE ARC. The radial correction below drives toward a constant
+  // RANGE to the mouth, not a constant perpendicular offset, so the robot sweeps a circle.
+  // Checking the straight-line end points instead rejected every stand-off past 40 in as "off
+  // the field" when the arc through them fits perfectly well.
+  const onArc = (bearDeg: number): Vec3 => {
+    const a = Math.atan2(nrm[0], nrm[1]) + bearDeg * (Math.PI / 180);
+    return [mouth[0] + Math.sin(a) * inches(standoff_in), y, mouth[2] + Math.cos(a) * inches(standoff_in)];
+  };
+  // FIND THE ARC SEGMENT THAT FITS, rather than demanding the whole arc. Straight out from
+  // the mouth the field ends at about 55 in, so a 46 in circle does not fit dead ahead -- but
+  // its flanks do, which is exactly where the 7 green squares at 60 in or more live (49-60
+  // deg off the opening). Scan the bearings, keep the longest run that is on the field and
+  // still inside the fire cap, and patrol that.
+  const capDeg = spec.turret.fireOpenCap_deg ?? 60;
+  let bestLo = 0, bestHi = 0, curLo: number | null = null;
+  for (let b = -capDeg; b <= capDeg; b += 2) {
+    if (onField(onArc(b))) {
+      if (curLo === null) curLo = b;
+      if (b - curLo > bestHi - bestLo) { bestLo = curLo; bestHi = b; }
+    } else curLo = null;
+  }
+  if (bestHi - bestLo < 16) return null;
+  const midDeg = (bestLo + bestHi) / 2;
+  const sweepDeg = (bestHi - bestLo) / 2;
+  const reach = standoff_in * Math.sin(sweepDeg * Math.PI / 180);
+  const start = onArc(bestLo);
+  void midDeg; void at;
   w.robot.place(start, Math.atan2(mouth[0] - start[0], mouth[2] - start[2]) * RAD);
   if (process.argv.includes('--where')) {
     const hw = w.geom.halfWidth_m * M_TO_IN;
@@ -129,8 +154,13 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     // The "up to speed" filter cannot apply to a standing robot: at speed 0 the test
     // sp > 0 is false on every frame, no frames are counted, and s per ball comes out as
     // 0.07 -- 147 balls in ten seconds, through a mechanism that can fire one every 0.6.
-    const upToSpeed = speed < 0.05 || sp > speed * 0.75;
-    if (off <= 45 && upToSpeed) {
+    // EVERY FRAME OF THE PATROL COUNTS, and so does every shot. Filtering the frames but
+    // not the shots gave time and shots two different denominators, and the answer came out
+    // at 0.42 s per ball -- faster than the 0.60 s the feed physically takes. Any result that
+    // beats the mechanism is a broken measurement, not a fast robot. What a driver actually
+    // gets is balls per second of DRIVING, lining-up time included, so that is what this is.
+    void off; void sp;
+    {
       if (shots0 < 0) { shots0 = w.robot.shots; landed0 = w.landedInUpCell("red"); }
 
       frames++; sumV += sp;
@@ -164,6 +194,11 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     }
   }
   for (let k = 0; k < 60 * 3; k++) w.step(brain.update(w.sensors(), emptyGamepad(), w.seq, 1 / 60));
+  // HOW THEY MISS. A systematic bias is free to correct with a trim; random scatter is not,
+  // and the two need completely different answers, so never quote one land rate without them.
+  const log = w.snapshot().shots.filter((x) => Number.isFinite(x.long_in) && Number.isFinite(x.lat_in));
+  const longs = log.map((x) => x.long_in * 2.54);
+  const lats = log.map((x) => x.lat_in * 2.54);
   // WHERE DID THEY GO? States of every ball that was fed in.
   if (process.argv.includes('--where')) {
     const by: Record<string, number> = {};
@@ -175,7 +210,7 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     secs: Math.max(1e-6, frames / 60),   // time INSIDE the sector, not wall clock
     shots: shots0 < 0 ? 0 : w.robot.shots - shots0,
     landed: landed0 < 0 ? 0 : Math.max(0, w.landedInUpCell('red') - landed0),
-    speed: frames ? sumV / frames : 0, why, frames, open, cam, loaded, held: w.robot.heldBalls().length, meanInc: incN ? incSum / incN : 0, tips: w.hives.red.tips, afterTip: framesAfterTip,
+    speed: frames ? sumV / frames : 0, why, frames, open, cam, longs, lats, loaded, held: w.robot.heldBalls().length, meanInc: incN ? incSum / incN : 0, tips: w.hives.red.tips, afterTip: framesAfterTip,
   };
 }
 
@@ -192,6 +227,7 @@ export async function main(argv: string[] = []): Promise<void> {
   for (const speed of speeds) {
     for (const off of (process.argv.indexOf('--off') >= 0 ? [Number(process.argv[process.argv.indexOf('--off') + 1])] : [30, 40])) {
       let S = 0, L = 0, T = 0, V = 0, F = 0, O = 0, LD = 0, MI = 0, TIP = 0, AT = 0;
+      const LO: number[] = [], LA: number[] = [];
       const cam = { tipping: 0, range: 0, incidence: 0, lens: 0, ok: 0 };
       const why: Record<string, number> = {};
       let skipped = false;
@@ -201,7 +237,7 @@ export async function main(argv: string[] = []): Promise<void> {
         S += r.shots; L += r.landed; T += r.secs; V += r.speed; F += r.frames; O += r.open; LD += r.loaded;
         for (const [k, v] of Object.entries(r.why)) why[k] = (why[k] ?? 0) + v;
         for (const k of Object.keys(cam) as (keyof typeof cam)[]) cam[k] += r.cam[k];
-        MI += r.meanInc; TIP += r.tips; AT += r.afterTip;
+        MI += r.meanInc; TIP += r.tips; AT += r.afterTip; LO.push(...r.longs); LA.push(...r.lats);
       }
       if (skipped) { console.log(`  ${speed.toFixed(2)}   ${String(off).padStart(21)} in   -- does not fit on the field`); continue; }
       const per = L > 0 ? (T / L).toFixed(2) : '   -';
@@ -212,6 +248,9 @@ export async function main(argv: string[] = []): Promise<void> {
       // BALLS FED vs BALLS FIRED. If the robot is handed far more than it shoots, it is
       // losing them out of the bin while driving, not failing to shoot them.
       if (F) console.log(`  ${' '.repeat(52)} balls fed in: ${LD}  fired: ${S}  -> ${S ? (LD / Math.max(1, S)).toFixed(1) : '?'} fed per shot`);
+      const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN);
+      const sd = (a: number[]) => { const m = mean(a); return a.length > 1 ? Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / (a.length - 1)) : NaN; };
+      if (LO.length) console.log(`  ${' '.repeat(50)} miss: downrange ${mean(LO).toFixed(0)} +-${sd(LO).toFixed(0)} cm, sideways ${mean(LA).toFixed(0)} +-${sd(LA).toFixed(0)} cm  (n=${LO.length})`);
       if (F) console.log(`  ${' '.repeat(52)} HIVE tipped ${TIP} times; ${((AT / F) * 100).toFixed(0)}% of the counted drive was AFTER a tip`);
       if (F) console.log(`  ${' '.repeat(52)} mean panel incidence ${(MI / seeds).toFixed(0)} deg (cap ${(robotSpec as unknown as RobotSpec).sensors.tag.maxIncidence_deg})`);
       if (F) console.log(`  ${' '.repeat(52)} camera: decodable ${((cam.ok / F) * 100).toFixed(0)}%  blocked by -- incidence ${((cam.incidence / F) * 100).toFixed(0)}%, lens ${((cam.lens / F) * 100).toFixed(0)}%, range ${((cam.range / F) * 100).toFixed(0)}%, tipping ${((cam.tipping / F) * 100).toFixed(0)}%`);

@@ -106,76 +106,26 @@ npm test                                   # 125 tests
 
 ## What it currently says
 
-- **12 POLLEN or 8 NECTAR tip the HIVE**, pooling at a 9–10 in lever arm, tip taking 0.88 s.
-  The plan guessed 8–17; the community default was 8. See `docs/DECISIONS.md`.
-- **The plan's default flywheel cannot reach the HIVE.** A 5203-1620 at 1:1 with k = 0.45 tops
-  out at 3.7 m/s exit speed. `robot.json` now uses a bare 6000 RPM motor (13.6 m/s).
-- **The plan's hood range [30°, 60°] is wrong for this game.** Every solution arrives still
-  climbing and rebounds off the far wall. Extending to 85° lets the ball drop in at 85°:
-  usable ranges go 19 → 25 and the best speed margin 8.0% → 14.8%.
-- **Land rate is 38–50%** from a stationary robot, limited by launch scatter and the pocket's
-  restitution (`e_poly`, still a guess) — not by aiming.
-- **It shoots on the move, including while accelerating.** The lead solves the hood as well as
-  the azimuth and the speed, so the ball leaves with the table's whole launch vector whatever
-  the robot is doing, and the gate waits for the hood to get there. Measured through the gate
-  the app actually enforces (`tools/movingfire.ts --gate`), landed per second and the hit rate
-  of the shots taken:
+**[docs/STATUS.md](docs/STATUS.md) is the current, measured state** — what it scores, what the
+ceilings are, and what is wrong. It is kept honest by naming the tool behind every number, so
+anything in it can be re-run and checked.
 
-  Error at the mouth, in cm, with the odometry noise modelled (`tools/shoterror.ts`):
+The short version, as of 19 September 2026:
 
-  | | stopped | shuttling | closing | spinning | spinning + driving |
-  |---|---|---|---|---|---|
-  | downrange | 7 ±13 | 7 ±10 | 8 ±10 | 9 ±8 | 9 ±8 |
-  | across | 2 ±14 | 2 ±22 | 1 ±4 | −2 ±9 | −2 ±4 |
-  | wild shots | 1/79 | 1/68 | 0/21 | 0/37 | 0/50 |
+| | accuracy | time per ball |
+|---|---|---|
+| standing on a green square | **95%** | 1.41 s |
+| driving at 0.73 m/s, 40 in out | **82%** | **1.15 s** |
+| autonomous (5 runs) | 86% | 8 points, LEAVE 5/5, PARK 5/5 |
 
-  **Every moving case is now as accurate as standing still.** Spinning used to be −51 ±65 cm
-  across with 13 shots in 78 going wildly wrong; shuttling was −18 ±49 downrange with 20 in
-  108 wild. And through the gate the app enforces, 90–100% of the shots it takes now land.
+Accuracy is close to its ceiling — 88% is the physical best at that range, because a steep
+close lob bounces back out. **Throughput is not**: the robot fires 1.05 balls a second against
+a feed that allows 1.67, and the reason is that its land-probability score does not vary, so
+it cannot tell a good shot from a bad one. That is the open problem.
 
-  What it still will not do is shoot while **running away**: receding at 0.6 m/s the table's
-  target rpm rises with the range faster than the wheel follows it, the readiness gate never
-  latches, and with the gate open it manages two shots in 25 s with a 598 rpm error. That is a
-  mechanical limit, not a policy one, and the gate is right to refuse.
-- **`minLandProb` is set by what it costs, not by what it sounds like.**
-  `tools/movingfire.ts --sweep` prices it in balls per second. At 0.70: 0.45 landed/s stopped
-  with 90% of the shots taken landing, 0.55 closing at 100%, 0.35 shuttling at 100%. 0.80 and
-  above takes the stopped case to zero. Re-measure it after any change to the shooter — it was
-  0.85 against the old flywheel and a noiseless localizer, and both of those moved.
-- **The flywheel is a real one now.** A bare 105 g grip wheel loses 210 rpm to every ball it
-  throws, three and a half times the firing window, and no FTC shooter that works is built that
-  way. With a 96 × 12 mm aluminium disc behind it (3.91e-4 kg·m², 0.34 kg) the dip is 70 rpm.
-  Inertia rather than a second motor, because the robot is already at FTC's eight-motor limit.
-- **The localizer is no longer an oracle.** It reports position, heading and velocity with real
-  odometry error, and the brain filters the velocity before aiming on it — which is what a team
-  does, and what the perfect estimate had been hiding.
-- **Neither is the target.** This was the big one. `game.upCellAzimuthDeg`, `upCellRangeIn`,
-  `upCellOpenDeg` and `hiveTipping` used to come straight off the world — exact bearing, exact
-  range, and the precise instant the HIVE went over — and **both brains aimed on them**. They
-  are gone. In their place is a camera on the turret: 30 fps, 75 ms of latency, a 60° lens,
-  120 in of range, 65° of incidence, and **nothing at all while the rocker is swinging**. The
-  robot sweeps the turret to find the tag, carries the fix on odometry between detections, and
-  refuses any shot on a fix older than 0.25 s. **The tag is modelled where the CAD puts it** —
-  on the rocker, swinging with it, 14.10 in from the pivot and about 10 in from the mouth it
-  belongs to — and the robot adds the rigid panel → mouth correction, ±2.78 in with the sign
-  chosen by the tag ID. There is no static fiducial anywhere on this field. `hiveTipping` has no replacement on purpose: a
-  tip blinds the camera, the fix goes stale, the shot is held. The four truth fields still
-  exist behind `game.truth` so tools can measure the error — and a test greps the brains to
-  make sure neither reads them again.
-
-  What it cost (`tools/movingfire.ts --gate`, landed per second, oracle → camera):
-
-  | | stopped | closing | strafing | shuttling | wobbling |
-  |---|---|---|---|---|---|
-  | oracle | 0.85 | 0.95 | 0.80 | 0.85 | 0.75 |
-  | camera | 0.95 | 0.95 | 0.80 | 0.85 | 0.65 |
-
-  The rates barely move. **The lateral spread is where it shows**: ±2–3 cm becomes ±4–7 cm,
-  which is the bearing sigma arriving exactly where it should, and "clear to fire" falls from
-  95–100% of loops to 81–97%. AUTO is unchanged at 8 points, 3.2 landed of 4 fired — because
-  AUTO stands still and square onto the goal at 45 in, which is the easy case for vision.
-  Worth saying plainly rather than claiming the change was free.
-- **Top speed matches the motor curve**: 62.8 in/s measured against 62 in/s hand-computed.
+This section used to carry a page of results that had drifted out of date — a 38–50% land
+rate and an 85° hood, neither of which has been true for some time. Numbers live in STATUS.md
+now so there is one place to keep current instead of two that disagree.
 
 ## Layout
 

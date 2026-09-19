@@ -1248,6 +1248,13 @@ export class BuiltinTeleOp {
         : !hoodOk ? `hood ${hoodNow.toFixed(0)} deg, the lob wants ${flowerLead.cell.hoodDeg.toFixed(0)}`
         : !yawOk ? `turning too fast to aim: ${Math.abs(s.localizer.omega).toFixed(0)} deg/s`
         : Math.abs(st.turretAimErrDeg) >= 3 ? `turret ${st.turretAimErrDeg.toFixed(0)} deg off`
+      // THE WHEEL IS NOT ON SPEED YET, and until this branch existed nothing said so.
+      // `inWindow` gates firing through `atSpeed` but had no line in this chain, so a robot
+      // whose flywheel was chasing a moving target reported "clear" and did not shoot --
+      // 19% of a strafing pass at 50 in (tools/frontcheck.ts). FLOWER mode has always
+      // printed it, and so has AimController.java ("spinning up", in this same position in
+      // the chain); the TS mirror was the one that did not.
+      : !inWindow ? `wheel ${rpm.toFixed(0)}/${st.targetRpm.toFixed(0)} rpm - spinning up`
         : '';
       const ftp = this.spec.transfer;
       // THE BELT HAS TO RUN. This branch returns before the CELL path sets motors.transfer,
@@ -1298,6 +1305,8 @@ export class BuiltinTeleOp {
         + (this.landCal && minP > this.landCal.ceiling
           ? ` - UNREACHABLE, best measured ${(this.landCal.ceiling * 100).toFixed(0)}%`
           : '')
+      // Everything is right and has not been right for long enough yet. Also never reported.
+      : st.readyCount < f.readySteps ? `settling ${st.readyCount}/${f.readySteps}`
       : '';
 
     // ---- feed

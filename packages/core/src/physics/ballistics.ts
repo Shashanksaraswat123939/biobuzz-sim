@@ -265,6 +265,22 @@ export function bestShot(
      * because BOTH arms had already dropped the thing that made the old table tall.
      */
     objective?: 'margin' | 'pLand';
+    /**
+     * Reject solutions whose horizontal speed is below this (m/s).
+     *
+     * THE CONSTRAINT A STATIONARY SOLVER CANNOT SEE. Every other option here scores a ball
+     * leaving a robot that is standing still, and on that test the steep branch always wins:
+     * it arrives steeply, drops into the pocket and stays. But a MOVING robot has to cancel
+     * its own velocity by leading the shot, and the most it can cancel across the shot line
+     * is the ball's own horizontal speed, S*cos(elevation) -- which is exactly what the steep
+     * branch gives away. At 50 in the table's 65.3 deg at 5.3 m/s leaves 2.21 m/s across,
+     * so strafing at 1.85 m/s needs asin(1.85/2.21) = 57 deg of lead against a 45 deg cap,
+     * and the robot refuses a shot it is standing right in front of.
+     *
+     * Set this and the same solver returns the flattest arc that still threads and stays,
+     * which is the one a fast robot can actually lead.
+     */
+    minHoriz_mps?: number;
   },
 ): ShotTableRow | null {
   let best: ShotTableRow | null = null;
@@ -288,6 +304,8 @@ export function bestShot(
     const mid = (band.lo + band.hi) / 2;
     const rpm = speedToRpm(mid, opts.k, opts.rFly);
     if (rpm > opts.maxRpm) continue;
+    // Enough horizontal to be led at speed. See `minHoriz_mps`.
+    if (opts.minHoriz_mps !== undefined && mid * Math.cos(hoodDeg * DEG) < opts.minHoriz_mps) continue;
     const margin = (band.hi - band.lo) / 2 / mid;
 
     const traj = simulateShot(params, { ...base, speed: mid, spin: opts.spinPerSpeed * mid }, opts.aperture.farRange);

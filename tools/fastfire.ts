@@ -39,12 +39,12 @@ const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/sh
 interface Res { secs: number; shots: number; landed: number; speed: number; why: Record<string, number>; frames: number; open: number;
   cam: { tipping: number; range: number; incidence: number; lens: number; ok: number }; loaded: number; held: number }
 
-async function run(speed: number, standoff_in: number, secs: number, seed: number): Promise<Res> {
+async function run(speed: number, standoff_in: number, secs: number, seed: number): Promise<Res | null> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
   // Pin the speed with the cap rather than hoping a stick reaches it.
-  spec.drivetrain.maxSpeed_mps = speed;
+  if (!process.argv.includes('--nocap')) spec.drivetrain.maxSpeed_mps = speed;
   const fovArg = process.argv.indexOf('--fov');
   if (fovArg >= 0) spec.sensors.tag.fov_deg = Number(process.argv[fovArg + 1]);
   const pool = Array.from({ length: 400 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
@@ -61,10 +61,23 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     mouth[0] + nrm[0] * inches(standoff_in) + side[0] * inches(lat_in), y,
     mouth[2] + nrm[1] * inches(standoff_in) + side[1] * inches(lat_in),
   ];
-  // How far sideways the run goes. Wide enough that the turn-round is outside the sector.
-  const reach = standoff_in * 0.8;   // stays inside the 45 deg sector and the camera's range
+  // STAY ON THE FIELD. This is the whole reason the first version measured nothing: straight
+  // out from the red mouth the field runs out at about 55 in (mouth at z 16, wall at 71), so
+  // a 70 or 85 in stand-off put the robot 15-30 in THROUGH the wall. Every ball preloaded
+  // into it was instantly out of bounds and parked -- 400 fed, 3 fired, and the rig blamed a
+  // stale tag. Clamp the line to what the field actually holds.
+  const hw = w.geom.halfWidth_m - inches(14);   // half a robot in from the boards
+  const onField = (p: Vec3) => Math.abs(p[0]) <= hw && Math.abs(p[2]) <= hw;
+  if (!onField(at(0))) return null;
+  let reach = standoff_in * 0.8;
+  while (reach > 6 && (!onField(at(reach)) || !onField(at(-reach)))) reach -= 2;
+  if (reach <= 6) return null;
   const start = at(-reach);
   w.robot.place(start, Math.atan2(mouth[0] - start[0], mouth[2] - start[2]) * RAD);
+  if (process.argv.includes('--where')) {
+    const hw = w.geom.halfWidth_m * M_TO_IN;
+    console.log(`      [place] standoff ${standoff_in} in -> robot at x ${(start[0] * M_TO_IN).toFixed(0)}, z ${(start[2] * M_TO_IN).toFixed(0)} in; field is +-${hw.toFixed(0)} in; reach +-${reach.toFixed(0)} in`);
+  }
   const brain = new BuiltinTeleOp(spec, table, loadLandCal());
   brain.state.firing = true;
   let loaded = 0, dir = 1;
@@ -132,6 +145,13 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     }
   }
   for (let k = 0; k < 60 * 3; k++) w.step(brain.update(w.sensors(), emptyGamepad(), w.seq, 1 / 60));
+  // WHERE DID THEY GO? States of every ball that was fed in.
+  if (process.argv.includes('--where')) {
+    const by: Record<string, number> = {};
+    for (const b of w.balls.balls.slice(0, loaded)) by[b.state] = (by[b.state] ?? 0) + 1;
+    const heights = w.balls.balls.slice(0, loaded).map((b) => w.balls.pos(b)[1]).filter((y) => y > -1);
+    console.log(`      [where] fed ${loaded}: ${JSON.stringify(by)}  mean height ${(heights.reduce((a, x) => a + x, 0) / Math.max(1, heights.length)).toFixed(2)} m`);
+  }
   return {
     secs: Math.max(1e-6, tLast - t0),
     shots: shots0 < 0 ? 0 : w.robot.shots - shots0,
@@ -148,17 +168,20 @@ export async function main(argv: string[] = []): Promise<void> {
   console.log(`\nSHOOTING WHILE DRIVING FAST. ${secs} s x ${seeds} seeds, counted only inside the 45 deg sector.`);
   console.log(`transfer.cycleTime_s is ${(robotSpec as unknown as RobotSpec).transfer.cycleTime_s} s, so about 0.7 s per ball is the floor.\n`);
   console.log('  asked   actual    stand-off   shots   in   land%   S PER BALL IN   gate open');
-  for (const speed of [0.0001, 0.5, 1.0, 1.57]) {
-    for (const off of [70, 85]) {
+  for (const speed of [0.0001, 1.0, 1.57, 1.9]) {
+    for (const off of [30, 40, 50]) {
       let S = 0, L = 0, T = 0, V = 0, F = 0, O = 0, LD = 0;
       const cam = { tipping: 0, range: 0, incidence: 0, lens: 0, ok: 0 };
       const why: Record<string, number> = {};
+      let skipped = false;
       for (let s = 0; s < seeds; s++) {
         const r = await run(speed, off, secs, 400 + s * 7);
+        if (!r) { skipped = true; break; }
         S += r.shots; L += r.landed; T += r.secs; V += r.speed; F += r.frames; O += r.open; LD += r.loaded;
         for (const [k, v] of Object.entries(r.why)) why[k] = (why[k] ?? 0) + v;
         for (const k of Object.keys(cam) as (keyof typeof cam)[]) cam[k] += r.cam[k];
       }
+      if (skipped) { console.log(`  ${speed.toFixed(2)}   ${String(off).padStart(21)} in   -- does not fit on the field`); continue; }
       const per = L > 0 ? (T / L).toFixed(2) : '   -';
       console.log(`  ${speed.toFixed(2)}   ${(V / seeds).toFixed(2)} m/s   ${String(off).padStart(6)} in   ${String(S).padStart(5)}  ${String(L).padStart(3)}   ${S ? ((L / S) * 100).toFixed(0).padStart(4) : '   -'}%   ${per.padStart(9)} s   ${F ? ((O / F) * 100).toFixed(0).padStart(6) : '     -'}%`);
       const top = Object.entries(why).sort((a, b) => b[1] - a[1])[0];

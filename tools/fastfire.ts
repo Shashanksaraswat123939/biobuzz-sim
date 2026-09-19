@@ -37,7 +37,7 @@ import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 
 interface Res { secs: number; shots: number; landed: number; speed: number; why: Record<string, number>; frames: number; open: number;
-  cam: { tipping: number; range: number; incidence: number; lens: number; ok: number }; loaded: number; held: number }
+  cam: { tipping: number; range: number; incidence: number; lens: number; ok: number }; loaded: number; held: number; meanInc: number }
 
 async function run(speed: number, standoff_in: number, secs: number, seed: number): Promise<Res | null> {
   await initPhysics();
@@ -45,6 +45,13 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
   // Pin the speed with the cap rather than hoping a stick reaches it.
   if (!process.argv.includes('--nocap')) spec.drivetrain.maxSpeed_mps = speed;
+  const mpArg = process.argv.indexOf('--minp');
+  if (mpArg >= 0) spec.flywheel.minLandProb = Number(process.argv[mpArg + 1]);
+  const saArg = process.argv.indexOf('--stateage');
+  if (saArg >= 0) spec.sensors.tag.target.maxStateAgeS = Number(process.argv[saArg + 1]);
+  const incArg = process.argv.indexOf('--incidence');
+  if (incArg >= 0) spec.sensors.tag.maxIncidence_deg = Number(process.argv[incArg + 1]);
+  if (process.argv.includes('--freshonly')) spec.sensors.tag.target.fireOnOdometry = false;
   const fovArg = process.argv.indexOf('--fov');
   if (fovArg >= 0) spec.sensors.tag.fov_deg = Number(process.argv[fovArg + 1]);
   const pool = Array.from({ length: 400 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
@@ -79,12 +86,13 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     console.log(`      [place] standoff ${standoff_in} in -> robot at x ${(start[0] * M_TO_IN).toFixed(0)}, z ${(start[2] * M_TO_IN).toFixed(0)} in; field is +-${hw.toFixed(0)} in; reach +-${reach.toFixed(0)} in`);
   }
   const brain = new BuiltinTeleOp(spec, table, loadLandCal());
-  brain.state.firing = true;
+  brain.state.firing = !process.argv.includes('--noshoot');
   let loaded = 0, dir = 1;
   const why: Record<string, number> = {};
   let frames = 0, open = 0, sumV = 0;
   const cam = { tipping: 0, range: 0, incidence: 0, lens: 0, ok: 0 };
-  let shots0 = -1, landed0 = -1, t0 = 0, tLast = 0;
+  let incSum = 0, incN = 0;
+  let shots0 = -1, landed0 = -1;
 
   for (let i = 0; i < 60 * secs; i++) {
     while (w.robot.heldBalls().length < spec.hopper.capacity && loaded < pool.length) {
@@ -118,8 +126,8 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     const off = Math.acos(Math.max(-1, Math.min(1, -(dx * nrm[0] + dz * nrm[1]) / dd))) * RAD;
     // In the sector and up to speed: the part of the drive being asked about.
     if (off <= 45 && sp > speed * 0.75) {
-      if (shots0 < 0) { shots0 = w.robot.shots; landed0 = w.landedInUpCell('red'); t0 = w.t; }
-      tLast = w.t;
+      if (shots0 < 0) { shots0 = w.robot.shots; landed0 = w.landedInUpCell("red"); }
+
       frames++; sumV += sp;
       // WHICH CAMERA GATE REFUSES. Recomputed from truth: tipping, range, panel incidence,
       // and the lens (which is aimed by the TURRET, not the chassis).
@@ -130,6 +138,7 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
       const inc = Math.acos(Math.max(-1, Math.min(1, (-tdx * tn[0] + -tdz * tn[2]) / (td * (Math.hypot(tn[0], tn[2]) || 1))))) * RAD;
       const bear = Math.atan2(tdx, tdz) * RAD - w.robot.yaw * RAD;
       const fovOff = Math.abs(((bear - w.robot.turretAngle) % 360 + 540) % 360 - 180);
+      incSum += inc; incN++;
       if (hive.tipping) cam.tipping++;
       else if (td * M_TO_IN > spec.sensors.tag.maxRange_in) cam.range++;
       else if (inc > spec.sensors.tag.maxIncidence_deg) cam.incidence++;
@@ -153,10 +162,10 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     console.log(`      [where] fed ${loaded}: ${JSON.stringify(by)}  mean height ${(heights.reduce((a, x) => a + x, 0) / Math.max(1, heights.length)).toFixed(2)} m`);
   }
   return {
-    secs: Math.max(1e-6, tLast - t0),
+    secs: Math.max(1e-6, frames / 60),   // time INSIDE the sector, not wall clock
     shots: shots0 < 0 ? 0 : w.robot.shots - shots0,
     landed: landed0 < 0 ? 0 : Math.max(0, w.landedInUpCell('red') - landed0),
-    speed: frames ? sumV / frames : 0, why, frames, open, cam, loaded, held: w.robot.heldBalls().length,
+    speed: frames ? sumV / frames : 0, why, frames, open, cam, loaded, held: w.robot.heldBalls().length, meanInc: incN ? incSum / incN : 0,
   };
 }
 
@@ -168,9 +177,11 @@ export async function main(argv: string[] = []): Promise<void> {
   console.log(`\nSHOOTING WHILE DRIVING FAST. ${secs} s x ${seeds} seeds, counted only inside the 45 deg sector.`);
   console.log(`transfer.cycleTime_s is ${(robotSpec as unknown as RobotSpec).transfer.cycleTime_s} s, so about 0.7 s per ball is the floor.\n`);
   console.log('  asked   actual    stand-off   shots   in   land%   S PER BALL IN   gate open');
-  for (const speed of [0.0001, 1.0, 1.57, 1.9]) {
-    for (const off of [30, 40, 50]) {
-      let S = 0, L = 0, T = 0, V = 0, F = 0, O = 0, LD = 0;
+  const sp = process.argv.indexOf('--speed');
+  const speeds = sp >= 0 ? [Number(process.argv[sp + 1])] : [0.0001, 1.0, 1.57];
+  for (const speed of speeds) {
+    for (const off of [30, 40]) {
+      let S = 0, L = 0, T = 0, V = 0, F = 0, O = 0, LD = 0, MI = 0;
       const cam = { tipping: 0, range: 0, incidence: 0, lens: 0, ok: 0 };
       const why: Record<string, number> = {};
       let skipped = false;
@@ -180,15 +191,18 @@ export async function main(argv: string[] = []): Promise<void> {
         S += r.shots; L += r.landed; T += r.secs; V += r.speed; F += r.frames; O += r.open; LD += r.loaded;
         for (const [k, v] of Object.entries(r.why)) why[k] = (why[k] ?? 0) + v;
         for (const k of Object.keys(cam) as (keyof typeof cam)[]) cam[k] += r.cam[k];
+        MI += r.meanInc;
       }
       if (skipped) { console.log(`  ${speed.toFixed(2)}   ${String(off).padStart(21)} in   -- does not fit on the field`); continue; }
       const per = L > 0 ? (T / L).toFixed(2) : '   -';
       console.log(`  ${speed.toFixed(2)}   ${(V / seeds).toFixed(2)} m/s   ${String(off).padStart(6)} in   ${String(S).padStart(5)}  ${String(L).padStart(3)}   ${S ? ((L / S) * 100).toFixed(0).padStart(4) : '   -'}%   ${per.padStart(9)} s   ${F ? ((O / F) * 100).toFixed(0).padStart(6) : '     -'}%`);
-      const top = Object.entries(why).sort((a, b) => b[1] - a[1])[0];
-      if (top && F) console.log(`  ${' '.repeat(52)} top hold: ${((top[1] / F) * 100).toFixed(0)}% ${top[0]}`);
+      for (const [k, v] of Object.entries(why).sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+        if (F && v / F > 0.01) console.log(`  ${' '.repeat(50)} ${((v / F) * 100).toFixed(0).padStart(3)}%  ${k}`);
+      }
       // BALLS FED vs BALLS FIRED. If the robot is handed far more than it shoots, it is
       // losing them out of the bin while driving, not failing to shoot them.
       if (F) console.log(`  ${' '.repeat(52)} balls fed in: ${LD}  fired: ${S}  -> ${S ? (LD / Math.max(1, S)).toFixed(1) : '?'} fed per shot`);
+      if (F) console.log(`  ${' '.repeat(52)} mean panel incidence ${(MI / seeds).toFixed(0)} deg (cap ${(robotSpec as unknown as RobotSpec).sensors.tag.maxIncidence_deg})`);
       if (F) console.log(`  ${' '.repeat(52)} camera: decodable ${((cam.ok / F) * 100).toFixed(0)}%  blocked by -- incidence ${((cam.incidence / F) * 100).toFixed(0)}%, lens ${((cam.lens / F) * 100).toFixed(0)}%, range ${((cam.range / F) * 100).toFixed(0)}%, tipping ${((cam.tipping / F) * 100).toFixed(0)}%`);
     }
   }

@@ -157,13 +157,24 @@ public class SelfCheck {
         that("P(land) is a probability", pOn >= 0 && pOn <= 1);
         that("pointing 12 degrees off is worse than pointing at it", pOff < pOn);
 
-        // AND THE MOUTH NARROWS OFF-AXIS. The slot's usable width falls as cos(off-axis), so
-        // the same shot taken from 60 deg round the side has half the target to fit through.
-        // tools/shotzone.ts has always modelled this and the robot did not, which is how the
-        // painted zone and the robot's own gate could disagree about one square.
+        // AND THE MOUTH NARROWS OFF-AXIS: its usable width falls as cos(off-axis), so from
+        // 60 deg round the side there is half the target to fit through.
+        //
+        // MEASURED WITH THE TURRET OFF BY 3 DEG, not square on, and that is not a detail.
+        // Dead centre both cases are near-certain, the calibration curve is FLAT above 0.966
+        // (CAL_OBSERVED tops out at 0.937), and two near-certain shots calibrate to exactly
+        // the same number -- so a strict < cannot hold there however wrong the geometry is.
+        // The first version of this assertion did compare them square on. It passed only
+        // because the aperture was ALSO subtracting the pocket's depth, which drove the
+        // 60 deg case to a zero-width mouth; when that term was measured and removed
+        // (tools/lostzone.ts) the assertion failed, having been testing the bug. With a few
+        // degrees of turret error the aim term is on the steep part of the curve and the
+        // narrowing is visible for the right reason.
+        double pOnErr = LandProbability.pLand(table, mid, cfg.exitSpeedFor(table.rpmFor(mid)),
+                mid * 0.0254, 3, cfg.flywheelYawScatterDeg, 0);
         double pSide = LandProbability.pLand(table, mid, cfg.exitSpeedFor(table.rpmFor(mid)),
-                mid * 0.0254, 0, cfg.flywheelYawScatterDeg, 60);
-        that("a mouth seen from the side is a narrower mouth", pSide < pOn);
+                mid * 0.0254, 3, cfg.flywheelYawScatterDeg, 60);
+        that("a mouth seen from the side is a narrower mouth", pSide < pOnErr);
 
         System.out.println("teamcode self-check: " + checks + " assertions passed");
     }

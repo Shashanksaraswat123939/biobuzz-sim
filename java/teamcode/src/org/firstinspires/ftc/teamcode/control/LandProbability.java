@@ -1,6 +1,5 @@
 package org.firstinspires.ftc.teamcode.control;
 
-import org.firstinspires.ftc.teamcode.config.RobotConstants;
 import org.firstinspires.ftc.teamcode.config.ShotTableData;
 
 /**
@@ -87,20 +86,18 @@ public final class LandProbability {
         // flatters the shot and this factor is the one that refuses bad ones; add it by
         // scaling speedLo/speedHi about their centre if the zone map and the gate ever need
         // to agree to better than a few percent.
-        // A SLOT, NOT A HOLE IN A PLANE. Scaling the half-width by cos(off-axis) alone is
-        // half the geometry: the CELL is CELL_DEPTH_M deep as well as wide, and off the
-        // normal the pocket's own depth cuts ACROSS the opening. The usable width is
-        //
-        //     width*cos(beta) - depth*sin(beta)
-        //
-        // which does not taper to zero, it CROSSES it -- 4.6 in of room for a POLLEN at
-        // 40 deg, 0.7 at 50, none at all from 55 (tools/obliquity.ts). The cosine alone
-        // claims 9.7 in of half-width at 50 deg where the truth is 1.75, so the gate scored
-        // impossible shots as merely difficult.
+        // THE MOUTH'S EXTENT PERPENDICULAR TO THE SHOT. The pocket's depth was subtracted
+        // here for one commit (84525e6) -- width*cos(beta) - depth*sin(beta) -- on the
+        // argument that a slot seen off its normal has its own depth cutting across the
+        // opening. That is the clear straight line THROUGH a slot, which is what a ball
+        // would need if it had to reach the back wall untouched, and a ball does not: it
+        // crosses the mouth and stays in the pocket, and the depth is behind the mouth.
+        // MEASURED, tools/lostzone.ts: the 20 shot-zone squares the term deleted land 156
+        // of 160 with the gate forced open, 98%, against 89% from the ones it kept, and the
+        // worst sits 61 deg off -- past the 55 deg where the term says there is no hole.
         double beta = Math.toRadians(openAngleDeg);
         double halfLat = Math.max(0,
-                table.lerpAt(ShotTableData.HALF_LAT_M, rangeIn) * Math.cos(beta)
-                        - 0.5 * RobotConstants.CELL_DEPTH_M * Math.abs(Math.sin(beta)));
+                table.lerpAt(ShotTableData.HALF_LAT_M, rangeIn) * Math.cos(beta));
         if (!(hi > lo) || !(sigma > 0)) return -1;
 
         double speed = pThread(lo, hi, exitSpeed, sigma);

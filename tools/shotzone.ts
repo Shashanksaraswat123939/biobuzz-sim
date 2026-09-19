@@ -235,13 +235,12 @@ export function buildZone(
       const sigma = solved.sigmaSpeed * (required / Math.max(commanded, 1e-6));
       const speed = pThread(solved.speedLo, solved.speedHi, commanded, sigma);
       // Across the shot line, the opening is the mouth's width foreshortened by the approach.
-      // A SLOT, NOT A HOLE IN A PLANE. cos(off-axis) alone is the width term; the pocket's
-      // own depth cuts ACROSS the opening as depth*sin, and the two together CROSS zero at
-      // about 55 deg rather than tapering (tools/obliquity.ts). The brain scores its shots
-      // this way now, and a map that does not would promise squares the gate refuses --
-      // measured, 5 of 24 green squares holding on P(land).
-      const sinOff = Math.sqrt(Math.max(0, 1 - cosOff * cosOff));
-      const halfLat = Math.max(0, halfLat0 * cosOff - (g.cells[0].halfInterior[1]) * sinOff);
+      // THE MOUTH'S EXTENT PERPENDICULAR TO THE SHOT, and nothing else. The pocket's own
+      // depth was subtracted here for one commit (84525e6) and it deleted 20 of the 52 green
+      // squares; measured with the gate forced open those same squares land 98% against the
+      // survivors' 89% (tools/lostzone.ts). Depth sits BEHIND the mouth: a ball has to cross
+      // the opening and stay in, not reach the back wall untouched.
+      const halfLat = Math.max(0, halfLat0 * cosOff);
       const aim = pThread(-halfLat, halfLat, 0, dist * Math.tan(f.scatter.yaw_deg * DEG));
       const raw = speed * aim * solved.pStay;
       cells.push({

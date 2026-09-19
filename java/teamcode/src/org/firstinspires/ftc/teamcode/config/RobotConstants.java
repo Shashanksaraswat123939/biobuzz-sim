@@ -116,8 +116,6 @@ public final class RobotConstants {
     public static final boolean FIRE_ON_ODOMETRY = true;
     /** the opposing HIVE pivot, FTC X */
     public static final double OBSTACLE_X_IN = 0;
-    /** CELL pocket depth, metres (CAD cellDepth_in) */
-    public static final double CELL_DEPTH_M = 0.305816;
     /** the opposing HIVE pivot, FTC Y */
     public static final double OBSTACLE_Y_IN = 12.76;
     /** how far their CELL mouths reach from that pivot */

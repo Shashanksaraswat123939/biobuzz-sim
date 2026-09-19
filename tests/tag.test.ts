@@ -480,12 +480,18 @@ describe('the configuration has to be self-consistent or the robot is blind', ()
       new URL('../java/teamcode/src/org/firstinspires/ftc/teamcode/control/LandProbability.java', import.meta.url),
       'utf8',
     );
-    // BOTH TERMS, both sides. The width shrinks with the cosine AND the pocket's depth cuts
-    // across with the sine; a mirror carrying only the cosine is optimistic in exactly the
-    // place the zone map is not, which is the disagreement this test exists to catch.
-    expect(src).toMatch(/HALF_LAT_M[\s\S]{0,120}Math\.cos\(beta\)[\s\S]{0,160}CELL_DEPTH_M[\s\S]{0,60}Math\.sin\(beta\)/);
+    // THE COSINE, AND NOT THE POCKET'S DEPTH. This test briefly demanded the opposite --
+    // width*cos(beta) - depth*sin(beta) on both sides -- and locked in a bug: that formula is
+    // the clear straight line THROUGH a slot, which is what a ball would need if it had to
+    // reach the back wall untouched, and a ball only has to cross the mouth and stay in.
+    // It cost 20 of the shot zone's 52 green squares, and tools/lostzone.ts fired 160 balls
+    // from those squares with the gate forced open: 156 in, 98%, against 89% from the ones
+    // it kept. So the depth term must NOT come back, and this is the side that says so.
+    expect(src).toMatch(/HALF_LAT_M[\s\S]{0,120}Math\.cos\(beta\)/);
+    expect(src).not.toMatch(/CELL_DEPTH_M/);
     const mirror = readFileSync(new URL('../packages/core/src/robot/builtinTeleOp.ts', import.meta.url), 'utf8');
-    expect(mirror).toMatch(/row\.halfLat_m \* cosB - this\.cellDepth_m \* 0\.5 \* sinB/);
+    expect(mirror).toMatch(/row\.halfLat_m \* cosB/);
+    expect(mirror).not.toMatch(/cellDepth_m/);
 
     // And the arithmetic it stands on: square on is full width, 60 deg round is half of it,
     // past 90 there is nothing left to aim at.

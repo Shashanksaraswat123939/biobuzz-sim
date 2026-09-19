@@ -24,7 +24,7 @@ const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/sh
 
 interface Cell { x_in: number; z_in: number; p: number; why?: string; range_in: number; offAxisDeg: number }
 
-async function standAndShoot(c: Cell, shots: number, seed: number): Promise<{ shots: number; landed: number; hold: string }> {
+async function standAndShoot(c: Cell, shots: number, seed: number): Promise<{ shots: number; landed: number; hold: string; secs: number }> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
@@ -49,12 +49,22 @@ async function standAndShoot(c: Cell, shots: number, seed: number): Promise<{ sh
     const k = h ? h.replace(/-?[\d.]+/g, 'N') : 'clear';
     why[k] = (why[k] ?? 0) + 1;
   };
+  // TIME, NOT JUST THE RATE. A gate that only fires when it is nearly certain reads as a
+  // high percentage while scoring less, because every refused cycle is time spent not
+  // scoring. Seconds per ball IN is the number a match is won on, so it travels with the
+  // percentage everywhere.
   let f = 0;
-  while (w.robot.shots < shots && f++ < 60 * 8) step(emptyGamepad());
+  const t0 = w.t;
+  let lastShotT = w.t;
+  let seen = 0;
+  while (w.robot.shots < shots && f++ < 60 * 8) {
+    step(emptyGamepad());
+    if (w.robot.shots > seen) { seen = w.robot.shots; lastShotT = w.t; }
+  }
   brain.state.firing = false;
   for (let k = 0; k < 60 * 4; k++) step(emptyGamepad());
   const top = Object.entries(why).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
-  return { shots: w.robot.shots, landed: w.landedInUpCell('red'), hold: top };
+  return { shots: w.robot.shots, landed: w.landedInUpCell('red'), hold: top, secs: lastShotT - t0 };
 }
 
 export async function main(argv: string[] = []): Promise<void> {
@@ -69,15 +79,17 @@ export async function main(argv: string[] = []): Promise<void> {
   const grey = pick(z.cells.filter((c) => c.p === 0 && c.why !== 'noRoom' && c.why !== 'behind'), Math.ceil(nCells / 3));
   console.log(`\nSTANDING ON THE MAP AND SHOOTING. ${shots} balls a square, real gate, real scatter, real rocker.\n`);
   for (const [name, cells] of [['GREEN (map says land)', green], ['AMBER (below the gate)', amber], ['GREY (too far / no shot)', grey]] as [string, Cell[]][]) {
-    let S = 0, L = 0, fired = 0;
+    let S = 0, L = 0, fired = 0, T = 0;
     const holds: Record<string, number> = {};
     for (const [i, c] of cells.entries()) {
       const r = await standAndShoot(c, shots, 100 + i);
-      S += r.shots; L += r.landed; if (r.shots > 0) fired++;
+      S += r.shots; L += r.landed; if (r.shots > 0) fired++; T += r.secs;
       holds[r.hold] = (holds[r.hold] ?? 0) + 1;
     }
     const top = Object.entries(holds).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => `${v}x ${k}`).join(', ');
-    console.log(`  ${name.padEnd(26)} ${String(cells.length).padStart(3)} squares   fired from ${String(fired).padStart(3)}   shots ${String(S).padStart(4)}   landed ${String(L).padStart(4)}   ${S ? ((L / S) * 100).toFixed(0).padStart(3) : '  -'}%   held: ${top}`);
+    const perBall = L > 0 ? (T / L).toFixed(2) : '  -';
+    console.log(`  ${name.padEnd(26)} ${String(cells.length).padStart(3)} squares   fired from ${String(fired).padStart(3)}   shots ${String(S).padStart(4)}   landed ${String(L).padStart(4)}   ${S ? ((L / S) * 100).toFixed(0).padStart(3) : '  -'}%   ${perBall.padStart(5)} s per ball IN`);
+    console.log(`  ${' '.repeat(26)} held: ${top}`);
   }
   console.log('');
 }

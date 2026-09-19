@@ -46,7 +46,7 @@ export async function landRate(
   over: Partial<Params['ball']> = {},
   seed = 11,
   table: ShotTable = diskTable,
-): Promise<{ fired: number; landed: number; tips: number; placed: boolean; log: ShotRecord[] }> {
+): Promise<{ fired: number; landed: number; tips: number; placed: boolean; secs: number; log: ShotRecord[] }> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   Object.assign(p.ball, over);
@@ -54,7 +54,7 @@ export async function landRate(
   const staging = Array.from({ length: shots + 2 }, () => ({ kind: 'pollen' as const, pos: [0, -5, 0] as Vec3 }));
   const world = new World({ params: p, robot: spec, staging, alliance: 'red', seed });
   for (const b of world.balls.balls) world.balls.park(b);
-  if (!placeAt(world, spec, range_in)) return { fired: 0, landed: 0, tips: 0, placed: false, log: [] };
+  if (!placeAt(world, spec, range_in)) return { fired: 0, landed: 0, tips: 0, placed: false, secs: 0, log: [] };
 
   const brain = new BuiltinTeleOp(spec, table, loadLandCal());
   const step = (g = emptyGamepad()) => {
@@ -99,12 +99,17 @@ export async function landRate(
   // `World.landedInUpCell` is the one definition: balls in OUR up CELL now, plus whatever was
   // in it at the instant of each TIP, since a tip is the CELL emptying itself.
   const staged0 = world.landedInUpCell('red');
+  // SECONDS PER BALL IN travels with the rate. A refused cycle costs time and a land rate
+  // cannot see it, so the percentage on its own flatters a gate that rarely fires.
+  const t0 = world.t;
+  let lastShotT = world.t, seen = 0;
   for (let f = 0; f < 60 * (shots * 3 + 10) && world.robot.shots < shots; f++) {
     while (world.robot.hopper.length < 4 && loaded < shots) {
       if (!world.robot.preload(world.balls, world.balls.balls[loaded])) break;
       loaded++;
     }
     step(fire);
+    if (world.robot.shots > seen) { seen = world.robot.shots; lastShotT = world.t; }
   }
   for (let f = 0; f < 60 * 5; f++) step();
   // Less whatever was already in the up CELL before this robot fired a shot -- the manual
@@ -116,7 +121,7 @@ export async function landRate(
   // spot, same aim. `staged0` is now sampled off the same census before firing starts.
   const staged = staged0;
   const landed = Math.max(0, Math.min(world.robot.shots, world.landedInUpCell('red') - staged));
-  return { fired: world.robot.shots, landed, tips: world.hives.red.tips, placed: true, log: world.snapshot().shots };
+  return { fired: world.robot.shots, landed, tips: world.hives.red.tips, placed: true, secs: lastShotT - t0, log: world.snapshot().shots };
 }
 
 export async function main(argv: string[] = []): Promise<void> {
@@ -131,7 +136,7 @@ export async function main(argv: string[] = []): Promise<void> {
   const gate = num('gate', 0);
   const epoly = argv.includes('--epoly') ? num('epoly', 0.45) : undefined;
   console.log(`${shots} shots per range${epoly !== undefined ? `, e_poly=${epoly}` : ''}`);
-  console.log('range_in  fired  landed  rate   tips');
+  console.log('range_in  fired  landed  rate   s/ball IN   tips');
   const only = argv.indexOf('--range');
   const ranges = only >= 0 ? [Number(argv[only + 1])] : [40, 55, 70, 85, 100, 115];
   for (const r of ranges) {
@@ -151,6 +156,7 @@ export async function main(argv: string[] = []): Promise<void> {
       console.log(`${String(r).padStart(7)}   (placed, but the gate declined every shot)`);
       continue;
     }
-    console.log(`${String(r).padStart(7)}  ${String(res.fired).padStart(5)}  ${String(res.landed).padStart(6)}  ${((res.landed / res.fired) * 100).toFixed(0).padStart(4)}%  ${String(res.tips).padStart(4)}`);
+    const per = res.landed > 0 ? (res.secs / res.landed).toFixed(2) : '   -';
+    console.log(`${String(r).padStart(7)}  ${String(res.fired).padStart(5)}  ${String(res.landed).padStart(6)}  ${((res.landed / res.fired) * 100).toFixed(0).padStart(4)}%  ${per.padStart(9)}   ${String(res.tips).padStart(4)}`);
   }
 }

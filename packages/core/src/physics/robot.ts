@@ -1181,7 +1181,21 @@ export class Robot {
         return Math.hypot(q[0] - at[0], q[1] - at[1], q[2] - at[2]) < b.radius * 2;
       });
       if (clash) continue;
-      balls.release(b, at, [0, 0, 0], [0, 0, 0], 'hopper');
+      // AT THE BIN'S VELOCITY, NOT AT REST. A ball dropped in stationary while the chassis
+      // is moving is instantly a ball travelling backwards relative to the bin: it slams into
+      // the wall and the contact solver throws it out. Standing still nothing notices, which
+      // is why every stationary rig has been fine -- but a harness reloading a robot at
+      // 1.5 m/s fed it 800 balls to fire 4 (tools/fastfire.ts), because each one left as fast
+      // as it arrived. Same term as launch(): v_cg + omega x r at the slot.
+      const cv = this.body.linvel();
+      const av = this.body.angvel();
+      const rx = at[0] - p[0], ry = at[1] - p[1], rz = at[2] - p[2];
+      const bv: Vec3 = [
+        cv.x + (av.y * rz - av.z * ry),
+        cv.y + (av.z * rx - av.x * rz),
+        cv.z + (av.x * ry - av.y * rx),
+      ];
+      balls.release(b, at, bv, [0, 0, 0], 'hopper');
       this.hopper.push(b);
       return true;
     }

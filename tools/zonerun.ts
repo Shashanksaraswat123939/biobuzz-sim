@@ -25,7 +25,7 @@ import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src
 
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 
-interface Run { speed: number; shots: number; credited: number; secs: number; why: Record<string, number>; long: number[]; lat: number[] }
+interface Run { speed: number; shots: number; credited: number; secs: number; why: Record<string, number>; long: number[]; lat: number[]; fedCount: number }
 
 async function run(stick: number, secs: number, seed: number, leadCap?: number): Promise<Run> {
   await initPhysics();
@@ -51,7 +51,12 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   // ACROSS the mouth between +-30 deg of its axis.
   const nrm: Vec3 = [0, 0, 1];
   // An arc needs room inside the table's 32 in floor for the radial correction to swing in.
-  const R = inches(process.argv.includes('--arc') ? 42 : 38);
+  // STAND-OFF, and at speed it is the whole game. Circling at 42 in the robot cannot hold
+  // more than about 1.05 m/s however hard the stick is pushed -- the arc is too tight -- and
+  // the ball's own horizontal speed that close is only about 2 m/s, so the lead runs out of
+  // authority too. Further out the arc is longer AND the shot is flatter. --radius sweeps it.
+  const rArg = process.argv.indexOf('--radius');
+  const R = inches(rArg >= 0 ? Number(process.argv[rArg + 1]) : (process.argv.includes('--arc') ? 42 : 38));
   // A pass starts at the sector's far edge so the whole crossing is at speed.
   // -75 deg: outside the opening, so the first 0.5 s is a run-up and the robot enters the
   // sector at its full 1.56 m/s instead of accelerating through it.
@@ -75,6 +80,7 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   const brain = new BuiltinTeleOp(spec, table, loadLandCal(), hood);
   brain.state.firing = true;
   let loaded = 0;
+  let fedCount = 0;
   let dir = 1;
   const why: Record<string, number> = {};
   let dist = 0;
@@ -93,6 +99,7 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
     // how fast four balls run out, and 'HOPPER EMPTY' was 28% of the full-stick loops.
     while (w.robot.heldBalls().length < spec.hopper.capacity && loaded < pool.length) {
       if (!w.robot.preload(w.balls, w.balls.balls[loaded])) break;
+      fedCount++;
       loaded++;
     }
     // Field-frame patrol: hold the stand-off, move across the mouth, turn round at the
@@ -158,7 +165,7 @@ async function run(stick: number, secs: number, seed: number, leadCap?: number):
   for (let k = 0; k < 60 * 5; k++) { w.setGamepads(emptyGamepad(), emptyGamepad()); w.step(brain.update(w.sensors(), emptyGamepad(), w.seq, dt)); }
   const log = w.snapshot().shots;
   return {
-    speed: dist / Math.max(1e-6, (process.argv.includes('--pass') ? inSector : ran) / 60), shots: w.robot.shots, credited: w.landedInUpCell('red'), secs: ran / 60, why,
+    speed: dist / Math.max(1e-6, (process.argv.includes('--pass') ? inSector : ran) / 60), shots: w.robot.shots, credited: w.landedInUpCell('red'), secs: ran / 60, why, fedCount,
     long: log.map((s) => s.long_in * 2.54).filter(Number.isFinite),
     lat: log.map((s) => s.lat_in * 2.54).filter(Number.isFinite),
   };
@@ -185,7 +192,7 @@ export async function main(argv: string[] = []): Promise<void> {
     const shots = rs.reduce((a, r) => a + r.shots, 0), cred = rs.reduce((a, r) => a + r.credited, 0);
     const long = rs.flatMap((r) => r.long), lat = rs.flatMap((r) => r.lat);
     const ranSecs = rs.reduce((a, r) => a + r.secs, 0);
-    console.log(`  ${stick.toFixed(1).padStart(5)} ${cap === undefined ? '' : String(cap).padStart(4) + ' '}  ${mean(rs.map((r) => r.speed)).toFixed(2).padStart(10)}   ${String(shots).padStart(5)}   ${String(cred).padStart(8)}   ${((cred / Math.max(1, shots)) * 100).toFixed(0).padStart(4)}%   ${(cred / Math.max(1, ranSecs)).toFixed(2).padStart(7)}   ${mean(long).toFixed(0).padStart(4)} +-${sd(long).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(4)} +-${sd(lat).toFixed(0).padStart(3)}`);
+    console.log(`  ${stick.toFixed(1).padStart(5)} ${cap === undefined ? '' : String(cap).padStart(4) + ' '}  ${mean(rs.map((r) => r.speed)).toFixed(2).padStart(10)}   ${String(shots).padStart(5)}   ${String(cred).padStart(8)}   ${((cred / Math.max(1, shots)) * 100).toFixed(0).padStart(4)}%   ${(cred / Math.max(1, ranSecs)).toFixed(2).padStart(7)}   ${mean(long).toFixed(0).padStart(4)} +-${sd(long).toFixed(0).padStart(3)}   ${mean(lat).toFixed(0).padStart(4)} +-${sd(lat).toFixed(0).padStart(3)}   fed/shot ${(rs.reduce((a, r) => a + r.fedCount, 0) / Math.max(1, shots)).toFixed(1)}   ${(ranSecs / Math.max(1, cred)).toFixed(2)} s per ball IN`);
     const agg: Record<string, number> = {};
     let tot = 0;
     for (const r of rs) for (const [k, v] of Object.entries(r.why)) { agg[k] = (agg[k] ?? 0) + v; tot += v; }

@@ -37,7 +37,7 @@ import type { GamepadState, Params, RobotSpec, Vec3 } from '../packages/core/src
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 
 interface Res { secs: number; shots: number; landed: number; speed: number; why: Record<string, number>; frames: number; open: number;
-  cam: { tipping: number; range: number; incidence: number; lens: number; ok: number }; loaded: number; held: number; meanInc: number }
+  cam: { tipping: number; range: number; incidence: number; lens: number; ok: number }; loaded: number; held: number; meanInc: number; tips: number; afterTip: number }
 
 async function run(speed: number, standoff_in: number, secs: number, seed: number): Promise<Res | null> {
   await initPhysics();
@@ -92,6 +92,7 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
   let frames = 0, open = 0, sumV = 0;
   const cam = { tipping: 0, range: 0, incidence: 0, lens: 0, ok: 0 };
   let incSum = 0, incN = 0;
+  let tips0 = 0, framesAfterTip = 0;
   let shots0 = -1, landed0 = -1;
 
   for (let i = 0; i < 60 * secs; i++) {
@@ -125,7 +126,11 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     const dd = Math.hypot(dx, dz) || 1;
     const off = Math.acos(Math.max(-1, Math.min(1, -(dx * nrm[0] + dz * nrm[1]) / dd))) * RAD;
     // In the sector and up to speed: the part of the drive being asked about.
-    if (off <= 45 && sp > speed * 0.75) {
+    // The "up to speed" filter cannot apply to a standing robot: at speed 0 the test
+    // sp > 0 is false on every frame, no frames are counted, and s per ball comes out as
+    // 0.07 -- 147 balls in ten seconds, through a mechanism that can fire one every 0.6.
+    const upToSpeed = speed < 0.05 || sp > speed * 0.75;
+    if (off <= 45 && upToSpeed) {
       if (shots0 < 0) { shots0 = w.robot.shots; landed0 = w.landedInUpCell("red"); }
 
       frames++; sumV += sp;
@@ -139,6 +144,11 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
       const bear = Math.atan2(tdx, tdz) * RAD - w.robot.yaw * RAD;
       const fovOff = Math.abs(((bear - w.robot.turretAngle) % 360 + 540) % 360 - 180);
       incSum += inc; incN++;
+      if (hive.tips > tips0) framesAfterTip++;
+      // A TIP turns the goal away: from this side the up CELL now opens the other way and
+      // there is no shot, which a driver answers by repositioning. Counting that time as
+      // "the robot refused to shoot" measures the wrong thing -- 61-74% of a 60 s run.
+      if (process.argv.includes('--untiltip') && hive.tips > tips0) break;
       if (hive.tipping) cam.tipping++;
       else if (td * M_TO_IN > spec.sensors.tag.maxRange_in) cam.range++;
       else if (inc > spec.sensors.tag.maxIncidence_deg) cam.incidence++;
@@ -165,7 +175,7 @@ async function run(speed: number, standoff_in: number, secs: number, seed: numbe
     secs: Math.max(1e-6, frames / 60),   // time INSIDE the sector, not wall clock
     shots: shots0 < 0 ? 0 : w.robot.shots - shots0,
     landed: landed0 < 0 ? 0 : Math.max(0, w.landedInUpCell('red') - landed0),
-    speed: frames ? sumV / frames : 0, why, frames, open, cam, loaded, held: w.robot.heldBalls().length, meanInc: incN ? incSum / incN : 0,
+    speed: frames ? sumV / frames : 0, why, frames, open, cam, loaded, held: w.robot.heldBalls().length, meanInc: incN ? incSum / incN : 0, tips: w.hives.red.tips, afterTip: framesAfterTip,
   };
 }
 
@@ -181,7 +191,7 @@ export async function main(argv: string[] = []): Promise<void> {
   const speeds = sp >= 0 ? [Number(process.argv[sp + 1])] : [0.0001, 1.0, 1.57];
   for (const speed of speeds) {
     for (const off of [30, 40]) {
-      let S = 0, L = 0, T = 0, V = 0, F = 0, O = 0, LD = 0, MI = 0;
+      let S = 0, L = 0, T = 0, V = 0, F = 0, O = 0, LD = 0, MI = 0, TIP = 0, AT = 0;
       const cam = { tipping: 0, range: 0, incidence: 0, lens: 0, ok: 0 };
       const why: Record<string, number> = {};
       let skipped = false;
@@ -191,7 +201,7 @@ export async function main(argv: string[] = []): Promise<void> {
         S += r.shots; L += r.landed; T += r.secs; V += r.speed; F += r.frames; O += r.open; LD += r.loaded;
         for (const [k, v] of Object.entries(r.why)) why[k] = (why[k] ?? 0) + v;
         for (const k of Object.keys(cam) as (keyof typeof cam)[]) cam[k] += r.cam[k];
-        MI += r.meanInc;
+        MI += r.meanInc; TIP += r.tips; AT += r.afterTip;
       }
       if (skipped) { console.log(`  ${speed.toFixed(2)}   ${String(off).padStart(21)} in   -- does not fit on the field`); continue; }
       const per = L > 0 ? (T / L).toFixed(2) : '   -';
@@ -202,6 +212,7 @@ export async function main(argv: string[] = []): Promise<void> {
       // BALLS FED vs BALLS FIRED. If the robot is handed far more than it shoots, it is
       // losing them out of the bin while driving, not failing to shoot them.
       if (F) console.log(`  ${' '.repeat(52)} balls fed in: ${LD}  fired: ${S}  -> ${S ? (LD / Math.max(1, S)).toFixed(1) : '?'} fed per shot`);
+      if (F) console.log(`  ${' '.repeat(52)} HIVE tipped ${TIP} times; ${((AT / F) * 100).toFixed(0)}% of the counted drive was AFTER a tip`);
       if (F) console.log(`  ${' '.repeat(52)} mean panel incidence ${(MI / seeds).toFixed(0)} deg (cap ${(robotSpec as unknown as RobotSpec).sensors.tag.maxIncidence_deg})`);
       if (F) console.log(`  ${' '.repeat(52)} camera: decodable ${((cam.ok / F) * 100).toFixed(0)}%  blocked by -- incidence ${((cam.incidence / F) * 100).toFixed(0)}%, lens ${((cam.lens / F) * 100).toFixed(0)}%, range ${((cam.range / F) * 100).toFixed(0)}%, tipping ${((cam.tipping / F) * 100).toFixed(0)}%`);
     }

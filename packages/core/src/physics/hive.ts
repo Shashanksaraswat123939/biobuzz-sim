@@ -232,6 +232,25 @@ export class Hive {
     return [d[0] - o[0], d[1] - o[1], d[2] - o[2]];
   }
 
+  /**
+   * The DOWN CELL's panel, the same two ways. Both panels are bolted to the same rocker at
+   * different angles, so when the rocker leans and one turns edge-on the other turns TOWARD
+   * whoever is looking. Nothing could read the second one before: World.tagTruthFor only
+   * ever offered the up cell's, so a robot that had rocked the HIVE by scoring into it went
+   * blind with a perfectly good panel in view.
+   */
+  downCellTagWorld(): Vec3 {
+    return this.toWorld(this.downCell.tagBody_m);
+  }
+
+  downCellTagNormalWorld(): Vec3 {
+    const t = this.downCell.tagBody_m;
+    const n = Math.hypot(t[1], t[2]) || 1;
+    const d = this.toWorld([0, t[1] / n, t[2] / n]);
+    const o = this.toWorld([0, 0, 0]);
+    return [d[0] - o[0], d[1] - o[1], d[2] - o[2]];
+  }
+
   upCellMouthNormalWorld(): Vec3 {
     const cell = this.upCell;
     const a = this.toWorld(cellMouthCentre(cell));

@@ -28,7 +28,9 @@ import type { GamepadState, Params, RobotSpec, ShotRecord, Vec3 } from '../packa
 
 const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/shottable.csv', import.meta.url), 'utf8'));
 
-async function gather(speed: number, standoff_in: number, seed: number): Promise<ShotRecord[]> {
+type Shot = ShotRecord & { occ: number };
+
+async function gather(speed: number, standoff_in: number, seed: number): Promise<Shot[]> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotSpec) as unknown as RobotSpec;
@@ -52,6 +54,10 @@ async function gather(speed: number, standoff_in: number, seed: number): Promise
   brain.state.firing = true;
   let loaded = 0, dir = 1;
   const tips0 = hive.tips;
+  // HOW FULL THE POCKET WAS WHEN EACH SHOT LEFT. Not in ShotRecord, and the one thing
+  // tools/landcal.ts can never see: it fires ten shots into an empty CELL and stops.
+  const occAt = new Map<number, number>();
+  let seenShots = 0;
   for (let i = 0; i < 60 * 60; i++) {
     while (w.robot.heldBalls().length < spec.hopper.capacity && loaded < pool.length) {
       if (!w.robot.preload(w.balls, w.balls.balls[loaded])) break;
@@ -68,14 +74,15 @@ async function gather(speed: number, standoff_in: number, seed: number): Promise
     g.left_stick_y = -Math.max(-0.4, Math.min(0.4, (rangeNow - standoff_in) / 20));
     w.setGamepads(g, emptyGamepad());
     w.step(brain.update(w.sensors(), g, w.seq, 1 / 60));
+    if (w.robot.shots > seenShots) { occAt.set(w.robot.shots, w.landedInUpCell('red')); seenShots = w.robot.shots; }
     if (hive.tips > tips0) break;   // after a tip the goal faces away; different question
   }
   for (let k = 0; k < 60 * 3; k++) w.step(brain.update(w.sensors(), emptyGamepad(), w.seq, 1 / 60));
-  return w.snapshot().shots.filter((x) => x.result !== 'flight');
+  return w.snapshot().shots.filter((x) => x.result !== 'flight').map((x) => ({ ...x, occ: occAt.get(x.n) ?? 0 }));
 }
 
 /** Land rate per quartile of `f`. A flat row means the feature predicts nothing. */
-function split(name: string, rows: ShotRecord[], f: (r: ShotRecord) => number, unit = ''): void {
+function split(name: string, rows: Shot[], f: (r: Shot) => number, unit = ''): void {
   const ok = rows.filter((r) => Number.isFinite(f(r)));
   if (ok.length < 20) { console.log(`  ${name.padEnd(22)} too few samples`); return; }
   const sorted = [...ok].sort((a, b) => f(a) - f(b));
@@ -90,13 +97,14 @@ function split(name: string, rows: ShotRecord[], f: (r: ShotRecord) => number, u
 export async function main(argv: string[] = []): Promise<void> {
   const i = argv.indexOf('--seeds');
   const seeds = i >= 0 ? Number(argv[i + 1]) : 14;
-  const all: ShotRecord[] = [];
+  const all: Shot[] = [];
   for (const speed of [0.6, 0.93, 1.25]) {
     for (let s = 0; s < seeds; s++) all.push(...await gather(speed, 40, 700 + s * 13));
   }
   const landed = all.filter((r) => r.result === 'cell').length;
   console.log(`\n${all.length} settled shots, ${landed} in (${((landed / all.length) * 100).toFixed(0)}%), 40 in stand-off, three speeds.\n`);
   console.log('Land rate by quartile of each feature. Flat = the feature tells you nothing.\n');
+  split('balls already in CELL', all, (r) => r.occ, '');
   split('range', all, (r) => r.rangeIn, ' in');
   split('|aim error| at launch', all, (r) => Math.abs(r.aimErrDeg), ' deg');
   split('|rpm - target|', all, (r) => Math.abs(r.rpm - r.targetRpm), '');

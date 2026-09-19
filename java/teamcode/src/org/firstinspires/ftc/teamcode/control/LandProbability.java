@@ -41,6 +41,32 @@ public final class LandProbability {
     }
 
     /** Raw model score -> the frequency shots at that score actually landed. Piecewise linear. */
+    /**
+     * P(a ball stays in) against how many are already in the CELL. MEASURED,
+     * tools/whatmisses.ts, 385 settled shots split by the pocket's contents as each left:
+     * 0 in 95%, 3 in 88%, 5 in 85%, 8 in 60%. A 35 point spread -- twice the next strongest
+     * feature and five times either of the two this model was built on.
+     *
+     * tools/landcal.ts could not find it: it fires ten shots into an empty CELL and stops,
+     * so every calibration sample ever taken was of an empty pocket and the fitted curve
+     * came out flat. With this term the same fit spans 0.84 to 1.00 and the score finally
+     * separates a good shot from a bad one (74% low vs 89% high, against -3 points before).
+     */
+    private static final double[] FILL_N = { 0, 3, 5, 8 };
+    private static final double[] FILL_P = { 0.95, 0.88, 0.85, 0.60 };
+
+    public static double fillFactor(double fill) {
+        if (fill <= FILL_N[0]) return FILL_P[0];
+        if (fill >= FILL_N[FILL_N.length - 1]) return FILL_P[FILL_P.length - 1];
+        for (int i = 1; i < FILL_N.length; i++) {
+            if (fill <= FILL_N[i]) {
+                double t = (fill - FILL_N[i - 1]) / (FILL_N[i] - FILL_N[i - 1]);
+                return FILL_P[i - 1] + t * (FILL_P[i] - FILL_P[i - 1]);
+            }
+        }
+        return FILL_P[FILL_P.length - 1];
+    }
+
     public static double calibrate(double score) {
         double[] s = ShotTableData.CAL_SCORE;
         double[] o = ShotTableData.CAL_OBSERVED;
@@ -65,9 +91,16 @@ public final class LandProbability {
      *                     and the mouth's usable width falls away as its cosine
      * @return calibrated probability in [0, 1], or -1 when the table row carries no model
      */
+    /** An empty CELL. Kept so existing callers and the self-check read unchanged. */
     public static double pLand(ShotTable table, double rangeIn, double exitSpeed,
                                double rangeM, double turretErrDeg, double yawScatterDeg,
                                double openAngleDeg) {
+        return pLand(table, rangeIn, exitSpeed, rangeM, turretErrDeg, yawScatterDeg, openAngleDeg, 0);
+    }
+
+    public static double pLand(ShotTable table, double rangeIn, double exitSpeed,
+                               double rangeM, double turretErrDeg, double yawScatterDeg,
+                               double openAngleDeg, double cellFill) {
         double lo = table.lerpAt(ShotTableData.SPEED_LO, rangeIn);
         double hi = table.lerpAt(ShotTableData.SPEED_HI, rangeIn);
         double sigma = table.lerpAt(ShotTableData.SIGMA_SPEED, rangeIn);
@@ -114,6 +147,6 @@ public final class LandProbability {
                           rangeM * Math.tan(Math.toRadians(turretErrDeg)),
                           rangeM * Math.tan(Math.toRadians(yawScatterDeg)))
                 : 0;
-        return calibrate(speed * aim * pStay);
+        return calibrate(speed * aim * pStay * fillFactor(cellFill));
     }
 }

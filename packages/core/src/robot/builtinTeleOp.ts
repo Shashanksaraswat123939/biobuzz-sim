@@ -239,6 +239,36 @@ export function muzzleVelocity(
   return { vx: vxField - w * ry, vy: vyField + w * rx };
 }
 
+/**
+ * P(a ball stays in) against how many are already in the CELL. MEASURED, tools/whatmisses.ts,
+ * 385 settled shots split into quartiles by the pocket's contents at the moment each left:
+ *
+ *   0 in: 95%    3 in: 88%    5 in: 85%    8 in: 60%
+ *
+ * A 35 point spread -- twice the next strongest feature and five times either of the two the
+ * model was already built on. A ball arriving into a part-full pocket clips the ones already
+ * there, which docs/DECISIONS.md has described for a while without anything acting on it.
+ *
+ * It is the one thing tools/landcal.ts structurally could not find: it fires ten shots into
+ * an empty CELL and stops, so every sample it has ever taken was of an empty pocket, and the
+ * curve it fitted was flat because within that slice nothing varies.
+ */
+const FILL_CURVE: [number, number][] = [[0, 0.95], [3, 0.88], [5, 0.85], [8, 0.60]];
+
+/** Linear between the measured points, flat past either end. */
+export function fillFactor(fill: number): number {
+  const c = FILL_CURVE;
+  if (fill <= c[0][0]) return c[0][1];
+  if (fill >= c[c.length - 1][0]) return c[c.length - 1][1];
+  for (let i = 1; i < c.length; i++) {
+    if (fill <= c[i][0]) {
+      const t = (fill - c[i - 1][0]) / (c[i][0] - c[i - 1][0]);
+      return c[i - 1][1] + t * (c[i][1] - c[i - 1][1]);
+    }
+  }
+  return c[c.length - 1][1];
+}
+
 /** One detent of the drive speed gear. Five gears spans the useful range without a menu. */
 export const SPEED_STEP = 0.2;
 
@@ -284,6 +314,8 @@ export interface TeleOpState {
   speedScale: number;
   /** True while drivetrain.maxSpeed_mps is actively holding the robot back. */
   speedCapped: boolean;
+  /** Balls the robot believes are already in the up CELL. Its own, since the last TIP. */
+  cellFill: number;
   /**
    * Pre-spin latch. Firing implies it, so a driver never has to arm two things to shoot;
    * it exists on its own only so the wheel can be brought up before committing.
@@ -379,7 +411,7 @@ export interface TeleOpState {
 
 export const newTeleOpState = (): TeleOpState => ({
   autoAim: true, firing: false,
-  turretManualDeg: 0, flywheelOn: false, speedScale: 1, speedCapped: false,
+  turretManualDeg: 0, flywheelOn: false, speedScale: 1, speedCapped: false, cellFill: 0,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, turretAimErrDeg: 0, halfLatNow: -1, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
   flowerMode: false, flower: null, flowerWhy: '',
@@ -513,6 +545,15 @@ export class BuiltinTeleOp {
   private velFilt = { x: 0, y: 0 };
   /** Adaptive part of the speed cap. See the governor in update(). */
   private capGain = 1;
+  /**
+   * How full the robot believes the up CELL is: its own scored balls since the last TIP.
+   *
+   * It cannot see into the pocket, so this is a running sum of the calibrated P(land) of
+   * every ball it has fed -- which is what a team does by counting. Reset when the tag ID
+   * changes, because that IS the tip and the tip empties the CELL.
+   */
+  private cellFill = 0;
+  private lastTagId = 0;
   /**
    * WHERE THE GOAL IS, from the camera rather than from the world. The mirror of the Java
    * deliverable's TagTargetProvider, and the reason every aiming number below is now an
@@ -1154,10 +1195,20 @@ export class BuiltinTeleOp {
     const fixedP = cell && wheelOn
       ? pThread(cell.lo, cell.hi, hoodNow, cell.sigmaHood) * cell.pStay * pAim
       : -1;
+    // HOW FULL THE POCKET IS, which is the fourth factor and the strongest of the four.
+    //
+    // Reset on a change of tag ID: that IS the tip, and the tip empties the CELL. Until the
+    // camera has ever seen a tag the count stands, because odometry cannot see a tip.
+    if (tgt.id > 0 && tgt.id !== this.lastTagId) {
+      if (this.lastTagId !== 0) this.cellFill = 0;
+      this.lastTagId = tgt.id;
+    }
+    st.cellFill = this.cellFill;
+    const pFill = fillFactor(this.cellFill);
     const rawP = this.hoodTable && !this.hoodTable.isEmpty
       ? fixedP
       : haveModel && wheelOn
-        ? pThread(row.speedLo as number, row.speedHi as number, exitRel, row.sigmaSpeed as number) * (row.pStay as number) * pAim
+        ? pThread(row.speedLo as number, row.speedHi as number, exitRel, row.sigmaSpeed as number) * (row.pStay as number) * pAim * pFill
         : -1;
     // THE THREE FACTORS, KEPT SEPARATELY. The product was the only thing recorded, so when
     // tools/landcal.ts found it had no predictive power there was no way to ask WHICH of the
@@ -1417,6 +1468,10 @@ export class BuiltinTeleOp {
     if (wantFire && st.ready && canFeed) {
       st.pulsing = true;
       st.lastFeedT = s.t;
+      // COUNT IT OUT, by its own odds rather than as a whole ball: the robot cannot see
+      // whether it went in, and adding 1.0 for a shot with a 60% chance would have the
+      // pocket full long before it is.
+      this.cellFill += Math.max(0, st.pLand);
     }
     if (st.pulsing && s.t - st.lastFeedT >= tp.feedPulse_s) st.pulsing = false;
     // THE GATE STAYS OPEN ONLY WHILE THE SHOT IS STILL GOOD.

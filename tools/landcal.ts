@@ -47,6 +47,14 @@ const table = ShotTable.fromCsv(readFileSync(new URL('../java/teamcode/assets/sh
  */
 const RANGES = [30, 40, 50, 60, 70, 80];
 
+/**
+ * Off-axis angles to sample, degrees. The mouth narrows as cos(off-axis), so a shot from 50
+ * deg round the side is threading half the opening of one taken square on -- and until this
+ * existed the sampler took only the easiest angle that fitted, which is how the calibration
+ * came to be fitted entirely on shots that landed 85-94%.
+ */
+const OFF_AXIS = [0, 20, 35, 50];
+
 export interface Sample {
   predicted: number; landed: boolean; range_in: number; moving: boolean;
   /** The three factors the prediction is the product of, at the frame the ball left. */
@@ -77,7 +85,7 @@ const DRIVING: { name: string; stick: [number, number]; wobble: number }[] = [
  * The gate must be open or the sample only ever covers the high-prediction end, which is
  * exactly the region a calibration curve cannot be fitted from.
  */
-async function sampleAt(range_in: number, shots: number, seed: number, drive = DRIVING[0]): Promise<Sample[]> {
+async function sampleAt(range_in: number, shots: number, seed: number, drive = DRIVING[0], wantOffDeg = 0): Promise<Sample[]> {
   await initPhysics();
   const p = structuredClone(params) as unknown as Params;
   const spec = structuredClone(robotJson) as unknown as RobotSpec;
@@ -94,12 +102,28 @@ async function sampleAt(range_in: number, shots: number, seed: number, drive = D
   // opening is one the gate will refuse from every time -- so the long ranges were sampled
   // from places the robot could stand and not shoot, which is where "ran out of firing
   // window" came from. Past the cap there is no sample to take.
+  // SWEEP THE ANGLE, DO NOT SETTLE FOR THE EASIEST ONE.
+  //
+  // This walked deg up from 0 and took the FIRST spot that fitted on the field, so every
+  // sample came from the best geometry available at that range. Every shot was therefore a
+  // good shot -- the six ranges landed 85-94% -- and a calibration fitted on nothing but
+  // good shots cannot learn to recognise a bad one. That is why the curve came out flat
+  // (0.911 for five bins of six) and why flywheel.minLandProb at 0.5 and at 0.9 fired the
+  // identical shots: the model's own P(land) had no discriminating power because it had
+  // never been shown the other end of its range.
+  //
+  // Now the wanted angle is an input and the search starts there, so the fit sees the whole
+  // envelope the robot actually shoots in, difficult geometry included.
   const cap = spec.turret.fireOpenCap_deg ?? 90;
-  for (let deg = 0; deg <= cap && !spot; deg += 2) {
-    for (const sign of [1, -1]) {
-      const a = (deg * Math.PI) / 180;
-      const c: Vec3 = [mouth[0] + sign * d * Math.sin(a), spec.chassis.height_m / 2 + spec.chassis.clearance_m, mouth[2] + d * Math.cos(a)];
-      if (Math.abs(c[0]) < limit && Math.abs(c[2]) < limit) { spot = c; break; }
+  for (let off = 0; off <= cap && !spot; off += 2) {
+    for (const deg of [wantOffDeg + off, wantOffDeg - off]) {
+      if (deg < 0 || deg > cap) continue;
+      for (const sign of [1, -1]) {
+        const a = (deg * Math.PI) / 180;
+        const c: Vec3 = [mouth[0] + sign * d * Math.sin(a), spec.chassis.height_m / 2 + spec.chassis.clearance_m, mouth[2] + d * Math.cos(a)];
+        if (Math.abs(c[0]) < limit && Math.abs(c[2]) < limit) { spot = c; break; }
+      }
+      if (spot) break;
     }
   }
   if (!spot) return [];
@@ -172,13 +196,13 @@ export async function main(argv: string[] = []): Promise<void> {
   const seeds = Array.from({ length: num('seeds', 4) }, (_, i) => 11 + i * 18);
 
   console.log('LAND-PROBABILITY CALIBRATION');
-  console.log(`  ${seeds.length} seeds x ${RANGES.length} ranges x up to ${shots} shots, gate open so the whole range of`);
+  console.log(`  ${seeds.length} seeds x ${RANGES.length} ranges x ${OFF_AXIS.length} off-axis angles x up to ${shots} shots, gate open`);
   console.log('  predictions gets sampled and not just the confident end.');
   console.log('');
 
   const all: Sample[] = [];
   for (const seed of seeds) {
-    for (const r of RANGES) for (const d of DRIVING) all.push(...await sampleAt(r, shots, seed, d));
+    for (const r of RANGES) for (const d of DRIVING) for (const off of OFF_AXIS) all.push(...await sampleAt(r, shots, seed, d, off));
   }
   const flightless = all.length;
   console.log(`  ${flightless} shots with a settled outcome`);

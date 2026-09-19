@@ -122,36 +122,58 @@ That is the headroom worth chasing, not the accuracy.
 
 ## 4. What is wrong, in order of how much it costs
 
-### The probability gate does nothing
+### The probability gate — FIXED, and what it cost to find
 
-`flywheel.minLandProb` at 0.5, 0.7, 0.8 and 0.9 fires the **identical** shots. At 0.92 it
-fires none. It is a cliff, not a dial.
+**Was:** `minLandProb` at 0.5, 0.7, 0.8 and 0.9 fired the identical shots; 0.92 fired none.
+A cliff, not a dial, because the calibrated P(land) only ever took two values.
 
-The cause is `config/landcal.json`: its observed rates are 0.911 for five of six bins and
-0.937 for the sixth, so the calibrated P(land) only ever takes two values and no threshold can
-separate two shots. **The robot computes a probability that does not vary, so it cannot tell a
-good shot from a bad one.** This is the single biggest thing standing between the current
-1.15 s per ball and the 0.68 s the mechanism allows.
+**Why:** two separate faults, both in the sampling rather than the fitting.
 
-### And the model is built on the wrong things
+1. `tools/landcal.ts` positioned the robot by walking the off-axis angle up from 0 and taking
+   the FIRST spot that fitted on the field — so every one of its 708 samples came from the
+   easiest geometry at that range, all landing 85–94%. A curve fitted on nothing but good
+   shots cannot learn to spot a bad one. It now sweeps 0°, 20°, 35° and 50°.
+2. It fires ten shots per configuration, into an **empty pocket** — so it structurally could
+   never see the strongest effect there is.
 
-`tools/whatmisses.ts` — 385 settled shots, land rate by quartile of each feature:
+**The missing term: how full the CELL already is.** `tools/whatmisses.ts`, 385 settled shots
+split by the pocket's contents at the moment each left:
 
-| feature | worst → best | spread |
+| balls already in | 0 | 3 | 5 | 8 |
+|---|---|---|---|---|
+| land rate | 95% | 88% | 85% | **60%** |
+
+A **35-point spread** — twice the next strongest feature, and five times either of the two the
+model was actually built on. A ball arriving into a part-full pocket clips the ones already
+there, which `docs/DECISIONS.md` had described for a while with nothing acting on it.
+
+`fillFactor()` is now the fourth factor in P(land), in both languages. The robot cannot see
+into the pocket, so it counts its own scored balls — a running sum of each shot's own odds,
+reset when the tag ID changes, because that is the tip and the tip empties the CELL.
+
+**Result.** The fit now spans **0.84 to 1.00** instead of two values, and the score finally
+separates a good shot from a bad one:
+
+| | before | after |
 |---|---|---|
-| **range** | 38 in 71% → 46 in 88% | **17 pts** |
-| exit speed | 91% → 81% | 15 pts |
-| aim error at launch | 79% → 86% | 6 pts |
-| rpm error | 84% → 80% | 4 pts |
+| pLand, low half vs high half | 91% vs 94% (**−3 pts**) | 74% vs 89% (**+15 pts**) |
+| predictions span | 0.61–0.97 | 0.12–0.85 |
 
-Aim error and rpm error are the two factors P(land) is **made of**, and they barely move the
-outcome. Range, which it does not gate on at all, moves it most. The miss itself is unbiased
-(2–3 cm downrange, 0 sideways, ±17–23 cm scatter), so there is no trim to find — only
-selection can help, and the thing it selects on is the wrong thing.
+And the threshold is a real dial (40 in, 0.73 m/s):
 
-`shot.minRange_in` exists for this (refuse shots closer than X). A 42 in floor measures **96%
-landed** — and ships **off**, because at every stand-off the field allows the robot spends too
-much time inside the floor and the cost is ruinous (14.9 s per ball).
+| minLandProb | accuracy | time per ball | gate open |
+|---|---|---|---|
+| 0.7 (shipping) | 82% | 1.15 s | 84% |
+| 0.85 | 97% | 14.1 s | 11% |
+| 0.90 | 100% | 16.6 s | 10% |
+
+**The default is unchanged at 0.7, which is below the curve's 0.84 floor and so still passes
+everything.** That is deliberate: the dial now works, and what it reveals is that buying
+accuracy costs an order of magnitude in time, because a robot that refuses a filling pocket
+just waits. The right answer to a full CELL is to tip it and move, not to stand there being
+choosy — but that is a behaviour nobody has built yet, so the knob ships open and documented.
+
+One caution: the 1.00 ceiling comes from 75–81 samples. Treat anything above 0.95 as unproven.
 
 ### The HIVE tips, and then the goal faces away
 

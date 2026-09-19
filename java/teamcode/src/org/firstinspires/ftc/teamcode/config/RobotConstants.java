@@ -25,7 +25,7 @@ public final class RobotConstants {
 
     // ---- drivetrain ----
     public static final double WHEEL_RADIUS_M = 0.048;
-    public static final double DRIVE_TICKS_PER_REV = 537.7;
+    public static final double DRIVE_TICKS_PER_REV = 384.5;
     public static final boolean FL_REVERSED = true;
     public static final boolean FR_REVERSED = false;
     public static final boolean BL_REVERSED = true;
@@ -33,7 +33,7 @@ public final class RobotConstants {
 
     // ---- mechanisms ----
     /** The knob this whole project exists to explore. */
-    public static final double CYCLE_TIME_S = 1;
+    public static final double CYCLE_TIME_S = 0.6;
     public static final double FEED_PULSE_S = 0.25;
     public static final boolean GATE_ENABLED = true;
     public static final double GATE_OPEN = 1;
@@ -111,6 +111,8 @@ public final class RobotConstants {
     public static final boolean FIRE_ON_ODOMETRY = true;
     /** the opposing HIVE pivot, FTC X */
     public static final double OBSTACLE_X_IN = 0;
+    /** CELL pocket depth, metres (CAD cellDepth_in) */
+    public static final double CELL_DEPTH_M = 0.305816;
     /** the opposing HIVE pivot, FTC Y */
     public static final double OBSTACLE_Y_IN = 12.76;
     /** how far their CELL mouths reach from that pivot */

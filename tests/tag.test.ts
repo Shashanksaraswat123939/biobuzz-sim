@@ -480,9 +480,12 @@ describe('the configuration has to be self-consistent or the robot is blind', ()
       new URL('../java/teamcode/src/org/firstinspires/ftc/teamcode/control/LandProbability.java', import.meta.url),
       'utf8',
     );
-    expect(src).toMatch(/HALF_LAT_M[\s\S]{0,200}Math\.cos\(Math\.toRadians\(openAngleDeg\)\)/);
+    // BOTH TERMS, both sides. The width shrinks with the cosine AND the pocket's depth cuts
+    // across with the sine; a mirror carrying only the cosine is optimistic in exactly the
+    // place the zone map is not, which is the disagreement this test exists to catch.
+    expect(src).toMatch(/HALF_LAT_M[\s\S]{0,120}Math\.cos\(beta\)[\s\S]{0,160}CELL_DEPTH_M[\s\S]{0,60}Math\.sin\(beta\)/);
     const mirror = readFileSync(new URL('../packages/core/src/robot/builtinTeleOp.ts', import.meta.url), 'utf8');
-    expect(mirror).toMatch(/halfLat_m \* Math\.max\(0, Math\.cos\(tgt\.openDeg \* DEG\)\)/);
+    expect(mirror).toMatch(/row\.halfLat_m \* cosB - this\.cellDepth_m \* 0\.5 \* sinB/);
 
     // And the arithmetic it stands on: square on is full width, 60 deg round is half of it,
     // past 90 there is nothing left to aim at.

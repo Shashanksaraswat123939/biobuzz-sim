@@ -438,6 +438,8 @@ export class BuiltinTeleOp {
     const tagOf = (st: { mouthFromAnchor_in: { x: number }; groundOffset_in: number }) =>
       ({ x: anchor.x + st.mouthFromAnchor_in.x - st.groundOffset_in, y: anchor.y });
     this.tagField = { 1: tagOf(tagOffsets.states.A), 2: tagOf(tagOffsets.states.B) };
+    // 12.04 in of pocket, from the same CAD the geometry is built from.
+    this.cellDepth_m = 12.04 * 0.0254;
     const ob = tagOffsets.obstacle_in;
     this.obstacle = {
       x: ob[alliance].x,
@@ -469,6 +471,8 @@ export class BuiltinTeleOp {
   private accel = { x: 0, y: 0 };
   /** The gimbal's held bearing: filtered and deadbanded, so the axis locks instead of hunting. */
   /** FLOWER mode's own settle counter; the CELL path owns st.readyCount. */
+  /** The CELL pocket's depth, metres: the term that closes the opening off-axis. */
+  private readonly cellDepth_m: number;
   private flowerSettled = 0;
   private aimHold = 0;
   /**
@@ -1036,9 +1040,22 @@ export class BuiltinTeleOp {
     // tools/shotzone.ts has always rebuilt the whole aperture per square, which is why the
     // map and the robot disagreed about the same spot. This is the brain's cheap version of
     // the same geometry: one cosine, no solver call per loop.
+    // A SLOT, NOT A HOLE IN A PLANE. The first version of this scaled the half-width by
+    // cos(off-axis), which is only half the geometry: the CELL is 11.8 in DEEP as well as
+    // 19.5 wide, and off the normal the pocket's own depth cuts ACROSS the opening. The
+    // usable width is
+    //
+    //     width*cos(beta) - depth*sin(beta)
+    //
+    // which does not taper to zero, it CROSSES it -- 4.6 in of room for a POLLEN at 40 deg,
+    // 0.7 at 50, and none at all from 55 (tools/obliquity.ts). The cosine alone claimed
+    // 9.7 in of half-width at 50 deg where the truth is 1.75, so the gate was scoring
+    // impossible shots as merely difficult.
+    const cosB = Math.cos(tgt.openDeg * DEG);
+    const sinB = Math.abs(Math.sin(tgt.openDeg * DEG));
     const halfLatNow = row.halfLat_m === undefined
       ? undefined
-      : row.halfLat_m * Math.max(0, Math.cos(tgt.openDeg * DEG));
+      : Math.max(0, row.halfLat_m * cosB - this.cellDepth_m * 0.5 * sinB);
     st.halfLatNow = halfLatNow ?? -1;
     const pAim = halfLatNow === undefined
       ? 1

@@ -162,6 +162,9 @@ K('boolean', 'FIRE_ON_ODOMETRY', String(tag.fireOnOdometry !== false),
 // their rocker is on, which is why none of this needs to know the opponent's state.
 const obst = JSON.parse(readFileSync(here('../config/tagoffsets.json'), 'utf8')).obstacle_in;
 K('double', 'OBSTACLE_X_IN', d(obst[ally].x), 'the opposing HIVE pivot, FTC X');
+// The pocket's depth: the term that closes the CELL's opening as you go off its normal.
+// LandProbability needs it to score an oblique shot honestly (tools/obliquity.ts).
+K('double', 'CELL_DEPTH_M', d(12.04 * 0.0254), 'CELL pocket depth, metres (CAD cellDepth_in)');
 K('double', 'OBSTACLE_Y_IN', d(obst[ally].y), 'the opposing HIVE pivot, FTC Y');
 K('double', 'OBSTACLE_RADIUS_IN', d(obst.radius_in), 'how far their CELL mouths reach from that pivot');
 K('double', 'OBSTACLE_HALF_WIDTH_IN', d(obst.halfWidth_in), 'half a CELL width, along the pivot axis');

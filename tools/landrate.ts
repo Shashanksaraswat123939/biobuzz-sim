@@ -98,6 +98,7 @@ export async function landRate(
   //
   // `World.landedInUpCell` is the one definition: balls in OUR up CELL now, plus whatever was
   // in it at the instant of each TIP, since a tip is the CELL emptying itself.
+  const staged0 = world.landedInUpCell('red');
   for (let f = 0; f < 60 * (shots * 3 + 10) && world.robot.shots < shots; f++) {
     while (world.robot.hopper.length < 4 && loaded < shots) {
       if (!world.robot.preload(world.balls, world.balls.balls[loaded])) break;
@@ -106,9 +107,14 @@ export async function landRate(
     step(fire);
   }
   for (let f = 0; f < 60 * 5; f++) step();
-  // Less the three NECTAR the manual stages in the up CELL before the match (10.3.1 B.i):
-  // they are in the census and they are not something this robot landed.
-  const staged = 3;
+  // Less whatever was already in the up CELL before this robot fired a shot -- the manual
+  // stages NECTAR there (10.3.1 B.i) and the census counts them.
+  //
+  // READ, NOT ASSUMED. This was `const staged = 3`, and when a rig stages a different number
+  // the error is a CONSTANT three shots, which reads as a plausible-looking rate that moves
+  // with the sample size: 4 shots scored 1 (25%), 12 shots scored 8 (73%), same robot, same
+  // spot, same aim. `staged0` is now sampled off the same census before firing starts.
+  const staged = staged0;
   const landed = Math.max(0, Math.min(world.robot.shots, world.landedInUpCell('red') - staged));
   return { fired: world.robot.shots, landed, tips: world.hives.red.tips, placed: true, log: world.snapshot().shots };
 }

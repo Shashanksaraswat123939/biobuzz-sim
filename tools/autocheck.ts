@@ -42,9 +42,15 @@ async function one(seed: number): Promise<Run> {
     band_in: [Math.min(...ranges), Math.max(...ranges)],
   });
 
-  // Three staged NECTAR are already in the CELL at the buzzer (manual 10.3.1 B.i) and the
-  // routine did not put them there.
-  const staged = 3;
+  // Whatever is already in the CELL at the buzzer -- the manual stages NECTAR there
+  // (10.3.1 B.i) and the routine did not put it there.
+  //
+  // READ, NOT ASSUMED. tools/landrate.ts hardcoded this as 3 against a rig that staged none,
+  // and the constant three-shot error read as a believable rate that drifted with the sample
+  // size: 4 shots scored 1 (25%), 12 scored 8 (73%), same robot and same spot. Here the
+  // field IS staged, so 3 is probably right -- but a number that is probably right is worth
+  // one line to make certainly right.
+  const staged = world.landedInUpCell('red');
   world.clock.start();
   const dt = p.sim.dt * p.sim.substepsPerFrame;
   while (world.clock.period === 'AUTO') {

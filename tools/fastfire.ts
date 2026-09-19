@@ -190,7 +190,7 @@ export async function main(argv: string[] = []): Promise<void> {
   const sp = process.argv.indexOf('--speed');
   const speeds = sp >= 0 ? [Number(process.argv[sp + 1])] : [0.0001, 1.0, 1.57];
   for (const speed of speeds) {
-    for (const off of [30, 40]) {
+    for (const off of (process.argv.indexOf('--off') >= 0 ? [Number(process.argv[process.argv.indexOf('--off') + 1])] : [30, 40])) {
       let S = 0, L = 0, T = 0, V = 0, F = 0, O = 0, LD = 0, MI = 0, TIP = 0, AT = 0;
       const cam = { tipping: 0, range: 0, incidence: 0, lens: 0, ok: 0 };
       const why: Record<string, number> = {};

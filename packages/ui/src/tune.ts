@@ -143,6 +143,14 @@ export const TUNABLES: Tunable[] = [
     hint: 'Gearbox and chain losses between the motor and the wheel.',
     min: 0.50, max: 1.00, step: 0.01,
     get: (_p, r) => r.drivetrain.eta, set: (_p, r, v) => (r.drivetrain.eta = v) },
+  { group: 'Chassis', label: 'Speed cap (m/s)', fmt: (v) => (v <= 0 ? 'off' : f2(v)),
+    // LEFT END IS OFF, not "very slow". A cap of 0.05 m/s is a robot that cannot drive, and
+    // the shipping default is no cap at all, so the slider has to be able to SAY no cap --
+    // otherwise the only way back from having dragged it is to edit the JSON.
+    hint: 'Limits ground speed in m/s, which is the unit a refused shot is refused in: charging the mouth faster than the ball’s own horizontal speed leaves no launch under the hood’s stop, so at 1.7 m/s the robot cannot shoot inside 50 in. The drive gear (Y/A) is a POWER fraction and is not this. Off at the left end.',
+    min: 0, max: 2.2, step: 0.05,
+    get: (_p, r) => r.drivetrain.maxSpeed_mps ?? 0,
+    set: (_p, r, v) => (r.drivetrain.maxSpeed_mps = v) },
   { group: 'Chassis', label: 'Battery internal R (Ω)', fmt: f3,
     hint: 'Sets the voltage sag under load, and so the top speed late in a match.',
     min: 0.01, max: 0.30, step: 0.005,

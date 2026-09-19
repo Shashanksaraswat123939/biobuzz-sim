@@ -60,7 +60,7 @@ out.push('');
 out.push('## Robot');
 out.push('');
 out.push(section('Chassis', rows(robot.chassis, ['length_m', 'width_m', 'height_m', 'mass_kg', 'Izz_kgm2', 'cgOffset_m', 'clearance_m'], 'chassis'), inches));
-out.push(section('Drivetrain', rows(robot.drivetrain, ['type', 'wheelRadius_m', 'wheelbase_m', 'track_m', 'rollerAngle_deg', 'mu', 'eta', 'rollingRes_N'], 'drivetrain'), inches));
+out.push(section('Drivetrain', rows(robot.drivetrain, ['type', 'wheelRadius_m', 'wheelbase_m', 'track_m', 'rollerAngle_deg', 'mu', 'eta', 'rollingRes_N', 'maxSpeed_mps', 'freeSpeed_mps'], 'drivetrain'), inches));
 
 const wheelRows = Object.entries(robot.drivetrain.motors).map(([k, v]) => ({
   path: `drivetrain.motors.${k}`,

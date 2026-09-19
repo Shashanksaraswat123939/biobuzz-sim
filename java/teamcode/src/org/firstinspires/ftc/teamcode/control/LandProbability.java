@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.control;
 
+import org.firstinspires.ftc.teamcode.config.RobotConstants;
 import org.firstinspires.ftc.teamcode.config.ShotTableData;
 
 /**
@@ -105,11 +106,17 @@ public final class LandProbability {
         double speed = pThread(lo, hi, exitSpeed, sigma);
         // Bearing error at the target is range * tan(error), and the launch adds its own
         // scatter, so the arrival across the shot line is normal about where it is pointing.
+        // NO OPENING IS NO CHANCE, not a certainty. This fell through to 1 -- a mouth with
+        // zero usable width scored as a PERFECT aim -- which was unreachable while the width
+        // was cos(beta) alone, because a cosine only vanishes at 90 deg and nothing shoots
+        // from there. Adding the depth term made it reachable at 55, where the slot really
+        // does close, and the fallback then scored every impossible shot as a sure thing.
+        // BuiltinTeleOp never had this: pThread(-0, 0, ..) integrates a zero-width band to 0.
         double aim = halfLat > 0
                 ? pThread(-halfLat, halfLat,
                           rangeM * Math.tan(Math.toRadians(turretErrDeg)),
                           rangeM * Math.tan(Math.toRadians(yawScatterDeg)))
-                : 1;
+                : 0;
         return calibrate(speed * aim * pStay);
     }
 }

@@ -45,6 +45,22 @@ export interface RobotSpec {
   drivetrain: {
     type: string; wheelRadius_m: number; wheelbase_m: number; track_m: number;
     rollerAngle_deg: number; mu: number; eta: number; rollingRes_N: number;
+    /**
+     * Governor on commanded ground speed, m/s. Undefined or <= 0 means no cap.
+     *
+     * NOT the drive gear. The gear (Y/A) is a POWER fraction and power is not speed: half
+     * power against rolling resistance is not half the ground speed, and it changes with the
+     * battery. This is the limit in the units a driver and a shot table both think in.
+     */
+    maxSpeed_mps?: number;
+    /**
+     * What the drivetrain does at full stick with nothing in the way, m/s. MEASURED.
+     *
+     * Only the feed-forward half of the cap needs it: without it the governor can only react
+     * to a robot that is ALREADY too fast, and a limiter that works by hauling the robot back
+     * overshot its 0.8 m/s setting by 0.49 (tools/topspeed.ts).
+     */
+    freeSpeed_mps?: number;
     motors: Record<'fl' | 'fr' | 'bl' | 'br', MotorSpec>;
   };
   intake: {

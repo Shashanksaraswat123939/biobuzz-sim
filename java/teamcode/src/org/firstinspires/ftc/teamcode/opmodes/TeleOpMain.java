@@ -3,7 +3,9 @@ package org.firstinspires.ftc.teamcode.opmodes;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import org.firstinspires.ftc.teamcode.control.AimController;
+import org.firstinspires.ftc.teamcode.config.RobotConstants;
 import org.firstinspires.ftc.teamcode.control.DriveToRange;
+import org.firstinspires.ftc.teamcode.control.Localizer;
 import org.firstinspires.ftc.teamcode.subsystems.Robot;
 
 /** Driver practice: field-centric drive, intake on the triggers, auto-aim on X. */
@@ -36,6 +38,23 @@ public class TeleOpMain extends LinearOpMode {
             double forward = -gamepad1.left_stick_y * slow;
             double left = -gamepad1.left_stick_x * slow;
             double turn = -gamepad1.right_stick_x * slow;
+
+            // THE SPEED CAP, m/s. Mirrors BuiltinTeleOp: a feed-forward fraction so the robot
+            // never gets up to an illegal speed, plus a feedback trim because power is not
+            // speed and the open-loop fraction is only close. Translation only -- rotation is
+            // not what outruns the ball. 0 means no cap, which is the shipping default.
+            if (RobotConstants.MAX_SPEED_MPS > 0) {
+                double cap = RobotConstants.MAX_SPEED_MPS;
+                double k = RobotConstants.FREE_SPEED_MPS > 0
+                        ? Math.min(1.0, cap / RobotConstants.FREE_SPEED_MPS) : 1.0;
+                Localizer loc = robot.localizer();
+                double vx = loc == null ? 0 : loc.getVx() * 0.0254;
+                double vy = loc == null ? 0 : loc.getVy() * 0.0254;
+                double now = Math.hypot(vx, vy);
+                if (now > cap) k *= cap / now;
+                forward *= k;
+                left *= k;
+            }
 
             boolean canShoot = aim.update(spinUp);
 

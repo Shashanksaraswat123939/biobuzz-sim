@@ -22,10 +22,15 @@ public final class RobotConstants {
     public static final String HW_HOOD = "servo0";
     public static final String HW_GATE = "servo1";
     public static final String HW_IMU = "imu";
+    public static final String HW_TAGCAM = "Webcam 1";
 
     // ---- drivetrain ----
     public static final double WHEEL_RADIUS_M = 0.048;
     public static final double DRIVE_TICKS_PER_REV = 384.5;
+    /** Speed cap, m/s. 0 is no cap. A shot is refused in m/s, not in stick percent. */
+    public static final double MAX_SPEED_MPS = 0;
+    /** What the drivetrain does at full stick. Feeds the open-loop half of the cap. */
+    public static final double FREE_SPEED_MPS = 2.19;
     public static final boolean FL_REVERSED = true;
     public static final boolean FR_REVERSED = false;
     public static final boolean BL_REVERSED = true;

@@ -237,12 +237,17 @@ function rampDigital(s: GamepadState, analogSticks = false): GamepadState {
 }
 
 /**
- * Free-running top speed of the drivetrain, m/s: the drive motor's free speed through its
- * gearing, times the wheel radius. This is the ceiling the gear bar is a fraction OF. The
- * robot never quite reaches it under load, which is the honest thing for a speed LIMIT to
- * show -- it is the limit being set, not the speed being achieved.
+ * Free-running top speed of the drivetrain, m/s. This is the ceiling the gear bar is a
+ * fraction OF. The robot never quite reaches it under load, which is the honest thing for a
+ * speed LIMIT to show -- it is the limit being set, not the speed being achieved.
+ *
+ * config/robot.json's measured value first, and the motor's free speed through its gearing
+ * times the wheel radius only as a fallback. The two agreed at 2.19 m/s, which is the whole
+ * reason to prefer the measured one: the derivation is right until someone fits a wheel with
+ * a different rolling resistance, and then it is silently wrong while the measurement is not.
  */
-const topSpeed_ms = buildMotor(robotSpec.drivetrain.motors.fl).freeOmega * robotSpec.drivetrain.wheelRadius_m;
+const topSpeed_ms = robotSpec.drivetrain.freeSpeed_mps
+  || buildMotor(robotSpec.drivetrain.motors.fl).freeOmega * robotSpec.drivetrain.wheelRadius_m;
 
 /** The physical right stick, which the brain never sees: it drives the camera. */
 let viewStick = { x: 0, y: 0 };
@@ -543,7 +548,13 @@ function paint(s: Snapshot): void {
   // m/s, derived from the drive motor's free speed and the wheel radius rather than written
   // down, so changing either in config/robot.json moves the readout with it.
   const gearFrac = brain.state.speedScale;
-  set('#st-speed', `${(gearFrac * topSpeed_ms).toFixed(2)} m/s`, gearFrac < 1 ? 'off' : 'on');
+  // The m/s CAP, when one is set, is the tighter of the two limits and the one the driver
+  // needs to see: it is the number a refused shot is refused in.
+  const capMps = robotSpec.drivetrain.maxSpeed_mps ?? 0;
+  const gearMps = gearFrac * topSpeed_ms;
+  const shown = capMps > 0 ? Math.min(gearMps, capMps) : gearMps;
+  set('#st-speed', `${shown.toFixed(2)} m/s${brain.state.speedCapped ? ' CAP' : ''}`,
+    brain.state.speedCapped ? 'off' : gearFrac < 1 ? 'off' : 'on');
   $<HTMLElement>('#st-speedbar').style.width = `${gearFrac * 100}%`;
 
   // THE SHOT-ZONE LEGEND, with live counts. Four colours went onto the field with nothing to

@@ -58,6 +58,10 @@ lines.push('');
 lines.push('    // ---- drivetrain ----');
 K('double', 'WHEEL_RADIUS_M', d(robot.drivetrain.wheelRadius_m));
 K('double', 'DRIVE_TICKS_PER_REV', d(ticksPerRev(robot.drivetrain.motors.fl)));
+K('double', 'MAX_SPEED_MPS', d(robot.drivetrain.maxSpeed_mps ?? 0),
+  'Speed cap, m/s. 0 is no cap. A shot is refused in m/s, not in stick percent.');
+K('double', 'FREE_SPEED_MPS', d(robot.drivetrain.freeSpeed_mps ?? 0),
+  'What the drivetrain does at full stick. Feeds the open-loop half of the cap.');
 for (const w of ['fl', 'fr', 'bl', 'br']) {
   K('boolean', `${w.toUpperCase()}_REVERSED`, String(!!robot.drivetrain.motors[w].reversed));
 }

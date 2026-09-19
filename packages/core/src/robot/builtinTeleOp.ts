@@ -241,6 +241,28 @@ export function muzzleVelocity(
 
 /** One detent of the drive speed gear. Five gears spans the useful range without a menu. */
 export const SPEED_STEP = 0.2;
+
+/**
+ * How fast the speed cap's feedback trim moves, per (m/s of error) per second. Slow enough
+ * not to fight the velocity filter's 50 ms of lag, quick enough to arrive inside a launch.
+ */
+const CAP_TRIM = 0.8;
+
+/**
+ * How far above the open-loop fraction the cap's trim may reach.
+ *
+ * MEASURED, and it is the whole anti-lunge. An integrator against a 50 ms lagged velocity
+ * winds up while the robot is still accelerating and then coasts past, so the bound -- not
+ * the gain -- is what holds the peak down: at 1.25 every cap went 10% over. The floor alone
+ * peaks at 0.92 of the cap (tools/topspeed.ts), so anything up to 1/0.92 = 1.087 still lands
+ * under it, and that is also enough to close the ~9% rolling-resistance shortfall the trim
+ * exists for. Swept at 1.08/1.14/1.18/1.22: the peak stays under the cap only at 1.08, and
+ * the whole range delivers 91-95% of the speed asked for.
+ *
+ * RE-MEASURE with topspeed.ts after any drivetrain change: if the floor-only peak moves,
+ * this moves with it.
+ */
+const CAP_TRIM_MAX = 1.08;
 const gear = (v: number) => Math.round(clamp(v, SPEED_STEP, 1) / SPEED_STEP) * SPEED_STEP;
 
 export interface TeleOpState {
@@ -260,6 +282,8 @@ export interface TeleOpState {
    * nobody can return to a known value.
    */
   speedScale: number;
+  /** True while drivetrain.maxSpeed_mps is actively holding the robot back. */
+  speedCapped: boolean;
   /**
    * Pre-spin latch. Firing implies it, so a driver never has to arm two things to shoot;
    * it exists on its own only so the wheel can be brought up before committing.
@@ -355,7 +379,7 @@ export interface TeleOpState {
 
 export const newTeleOpState = (): TeleOpState => ({
   autoAim: true, firing: false,
-  turretManualDeg: 0, flywheelOn: false, speedScale: 1,
+  turretManualDeg: 0, flywheelOn: false, speedScale: 1, speedCapped: false,
   ready: false, readyCount: 0, targetRpm: 0, turretErrDeg: 0, turretAimErrDeg: 0, halfLatNow: -1, hoodErrDeg: 0, leadDeg: 0, leadAzDeg: 0, turretPastStopDeg: 0,
   pLand: -1, pLandRaw: -1, calibrated: false, hold: '', note: '',
   flowerMode: false, flower: null, flowerWhy: '',
@@ -491,6 +515,8 @@ export class BuiltinTeleOp {
   private aimEst = 0;
   /** One-pole filtered localizer velocity. The lead is only ever as good as this. */
   private velFilt = { x: 0, y: 0 };
+  /** Adaptive part of the speed cap. See the governor in update(). */
+  private capGain = 1;
   /**
    * WHERE THE GOAL IS, from the camera rather than from the world. The mirror of the Java
    * deliverable's TagTargetProvider, and the reason every aiming number below is now an
@@ -582,8 +608,56 @@ export class BuiltinTeleOp {
 
     const fieldCentric = g.right_stick_button;   // hold R3 for field-centric; robot-centric otherwise
     const h = (s.imu.yaw - st.headingZero) * DEG;
-    const vx = fieldCentric ? sx * Math.cos(h) + sy * Math.sin(h) : sx;   // robot forward
-    const vy = fieldCentric ? -sx * Math.sin(h) + sy * Math.cos(h) : sy;  // robot left
+    let vx = fieldCentric ? sx * Math.cos(h) + sy * Math.sin(h) : sx;   // robot forward
+    let vy = fieldCentric ? -sx * Math.sin(h) + sy * Math.cos(h) : sy;  // robot left
+
+    // THE SPEED CAP, in m/s, governed against the MEASURED speed rather than computed from
+    // power. The drive gear above is a power fraction and power is not speed -- it changes
+    // with the battery, the floor and which way a mecanum is pointed (this robot does
+    // 2.19 m/s forward and 1.62 strafing on the same stick, tools/topspeed.ts). A shot,
+    // meanwhile, is refused in m/s: charging the mouth faster than the ball's own horizontal
+    // speed leaves no launch under the hood's stop, so inside 50 in at 1.7 m/s the robot
+    // cannot shoot at all (tools/frontcheck.ts). A driver who wants to stay shootable needs
+    // to ask for a SPEED, and that is this.
+    //
+    // Translation only: rotation is not what outruns the ball, and scaling it here would
+    // make the robot turn slower whenever it happened to be moving fast.
+    //
+    // Governed off the previous frame's filtered velocity -- velFilt is updated further down
+    // -- which is 16 ms stale and entirely good enough for a limiter.
+    const cap = this.spec.drivetrain.maxSpeed_mps ?? 0;
+    const free = this.spec.drivetrain.freeSpeed_mps ?? 0;
+    st.speedCapped = false;
+    if (cap > 0) {
+      // OPEN LOOP SETS THE FLOOR, so the robot never launches past the cap. Feedback alone
+      // cannot do this: it only sees an overshoot once the velocity filter has caught up,
+      // and measured that way a 0.80 m/s cap peaked at 1.29 (tools/topspeed.ts).
+      const floor = free > 0 ? Math.min(1, cap / free) : 1;
+      const now = Math.hypot(this.velFilt.x, this.velFilt.y);
+      // AND THE TRIM WALKS IT BACK UP, because power is not speed. cap/free assumes they are
+      // proportional; rolling resistance means reaching `cap` costs more than cap/free of
+      // full power, so the floor alone always UNDER-delivers -- asking for 1.70 got 1.56.
+      // The trim closes that, and on a real robot it is also what absorbs a flat battery and
+      // a full hopper. Bounded to [floor, 1]: a limiter may take power away and must never
+      // add any the driver did not ask for.
+      //
+      // Held at the floor below half the cap, which is the anti-windup. Left integrating
+      // while parked the gain reaches its ceiling and the next launch starts unlimited --
+      // the exact lunge the floor exists to prevent. The threshold is half rather than
+      // something tighter because a HIGH one is its own trap: at 0.85 the trim engaged,
+      // pushed the robot up, dropped back under the threshold, snapped to the floor and
+      // parked in a limit cycle at 0.87 of the cap, which read as the bound being too tight
+      // when the bound was not involved at all.
+      const ceil = Math.min(1, floor * CAP_TRIM_MAX);
+      this.capGain = now > cap * 0.5
+        ? clamp(this.capGain + (cap - now) * CAP_TRIM * dt, floor, ceil)
+        : floor;
+      if (this.capGain < 1) {
+        vx *= this.capGain;
+        vy *= this.capGain;
+        st.speedCapped = true;
+      }
+    }
 
     // The wire carries what the motor is actually told, so a reversed motor is negated
     // here exactly as the Java does with setDirection(REVERSE). The world then applies the

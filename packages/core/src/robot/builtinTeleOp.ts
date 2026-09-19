@@ -1293,7 +1293,12 @@ export class BuiltinTeleOp {
     const accelOk = dSpeedByRelease <= halfBand;
     st.accelBudget = Number.isFinite(halfBand) && halfBand > 0 ? dSpeedByRelease / halfBand : 0;
     const atSpeed = wheelOn && st.targetRpm > 0 && inWindow && probOk && hoodThere && haveShot;
-    st.readyCount = atSpeed ? st.readyCount + 1 : 0;
+    // LEAKY, NOT A HARD RESET. One bad loop used to throw away the whole settle and start
+    // again from zero, so a tachometer that dips out of its window for a single frame cost
+    // three more -- and at speed the target rpm is moving, so it dips often. Decrementing
+    // instead means a flicker costs one loop and a genuine loss of readiness still walks the
+    // counter down to zero in three.
+    st.readyCount = atSpeed ? st.readyCount + 1 : Math.max(0, st.readyCount - 1);
     // A FLOWER LOB IS A DIFFERENT SHOT AND A DIFFERENT GATE. None of the CELL's conditions
     // apply to it -- there is no mouth to be square to, no tipping rocker, no motion lead
     // worth the name at 1.1 m/s of exit speed -- and two of its own do: the stand-off has to

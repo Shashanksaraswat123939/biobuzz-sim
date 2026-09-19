@@ -79,7 +79,14 @@ public class FlywheelGate {
             return 0;
         }
         boolean ok = Math.abs(rpmMeasured - targetRpm) < tolRpm && rpmMeasured > targetRpm * minRpmFrac;
-        inBand = ok ? inBand + 1 : 0;
+        // LEAKY, NOT A HARD RESET. Mirrors BuiltinTeleOp. One loop outside the window used to
+        // throw the whole settle away and start from zero, so a single dipped reading cost
+        // three more loops -- and while the robot is moving the target rpm is moving too, so
+        // it dips often. MEASURED by tools/zonerun.ts, patrolling at 1.05 m/s, 6 runs of 40 s:
+        // "settling" went from 24.4% of the drive to 1.8%, the land rate from 70% to 75%, and
+        // the time per ball IN from 1.64 s to 1.37 s. A real loss of readiness still walks the
+        // counter to zero in three loops, which is what the settle was for.
+        inBand = ok ? inBand + 1 : Math.max(0, inBand - 1);
 
         double v = volts < 6 ? 12 : volts;
         double ff = (kS + kV * targetRpm) * (12.0 / v);
